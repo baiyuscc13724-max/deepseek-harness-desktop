@@ -1,6 +1,7 @@
 'use strict'
 
 const assert = require('node:assert/strict')
+const { createHash } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const test = require('node:test')
@@ -8,6 +9,7 @@ const test = require('node:test')
 const ROOT = path.resolve(__dirname, '..')
 const CONVERSATION_FILE = path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
 const CHAT_FILE = path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'client.js')
+const SUBAGENT_UI_FILE = path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js')
 
 const OWNER_PAIRS = Object.freeze({
   seat: [
@@ -254,19 +256,70 @@ test('raw-list session forwarding is not accepted as the cache work-tree interme
   assert.throws(() => patchToolResultOwnerSource(malicious), /owner patch is incomplete/u)
 })
 
-test('alpha.4 native conversation, attachment, turn-outline, reconnect, and schedule owners are hash-pinned and never repatched', async () => {
-  const { assertInstalledAlpha4NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
+test('alpha.5 lifecycle seam composes with the existing continuation repair without duplicate markers', async () => {
+  const { patchAlpha5SubagentLifecycleSource, patchSubagentContinuationSource } = await import('../scripts/patch-official-runtime.mjs')
+  const installed = fs.readFileSync(path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js'), 'utf8')
+  const continuationFirst = patchSubagentContinuationSource(installed).source
+  const lifecycleAfterContinuation = patchAlpha5SubagentLifecycleSource(continuationFirst)
+  const lifecycleFirst = patchAlpha5SubagentLifecycleSource(installed)
+  assert.equal(lifecycleAfterContinuation.source, lifecycleFirst.source)
+  assert.equal(patchSubagentContinuationSource(lifecycleFirst.source).changed, false)
+  assert.equal(patchAlpha5SubagentLifecycleSource(lifecycleFirst.source).changed, false)
+  for (const marker of [
+    'function boundedSubagentTerminalDiagnostic(',
+    'const queueSubagentPromptWithActivation = Symbol.for(',
+    '[queueSubagentPromptWithActivation](parent, childId, content, source, signal) {',
+    'emit("subagent/accepted", {'
+  ]) assert.equal(lifecycleFirst.source.split(marker).length - 1, 1, `${marker} must occur exactly once`)
+})
+
+test('alpha.5 scroll, lifecycle, and whole-chip disclosure seams keep independent exact artifacts and remain jointly idempotent', async () => {
+  const {
+    patchAlpha5ChatScrollSource,
+    patchAlpha5ChatSentTimeSnapshotSource,
+    patchAlpha5SubagentLifecycleSource,
+    patchSubagentSource,
+    restoreAlpha5ChatScrollSource,
+    restoreAlpha5ChatSentTimeSnapshotSource
+  } = await import('../scripts/patch-official-runtime.mjs')
+  const chatInstalled = fs.readFileSync(CHAT_FILE, 'utf8')
+  const chatOfficial = restoreAlpha5ChatSentTimeSnapshotSource(restoreAlpha5ChatScrollSource(chatInstalled))
+  const chatPatched = patchAlpha5ChatSentTimeSnapshotSource(patchAlpha5ChatScrollSource(chatOfficial).source).source
+  const lifecycleInstalled = fs.readFileSync(path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js'), 'utf8')
+  const lifecyclePatched = patchAlpha5SubagentLifecycleSource(lifecycleInstalled).source
+  const subagentUiPatched = patchSubagentSource(fs.readFileSync(SUBAGENT_UI_FILE, 'utf8')).source
+  assert.equal(createHash('sha256').update(chatPatched).digest('hex').toUpperCase(), '27439B98CFB2A8DA1C4CD3E1CEF17088CFF3DEF636676BDF93939C8E7753D018')
+  assert.equal(createHash('sha256').update(lifecyclePatched).digest('hex').toUpperCase(), '875D76C0F97E32F7D5CE8EA2A025CCDA7DDC1E80DAF903AD4D7C090CBCB4C837')
+  assert.equal(createHash('sha256').update(subagentUiPatched).digest('hex').toUpperCase(), '035C0B528D341F031886BEF5B4910E83BF502748CE6D0633126590A7DB68372D')
+  assert.equal(patchAlpha5ChatScrollSource(chatPatched).changed, false)
+  assert.equal(patchAlpha5ChatSentTimeSnapshotSource(chatPatched).changed, false)
+  assert.equal(patchAlpha5SubagentLifecycleSource(lifecyclePatched).changed, false)
+  assert.equal(patchSubagentSource(subagentUiPatched).changed, false)
+  assert.match(chatPatched, /message\.sentTimeSnapshot/u)
+  assert.match(lifecyclePatched, /category = "provider_transient"/u)
+  assert.match(lifecyclePatched, /stage = "provider_dispatch"/u)
+  assert.match(subagentUiPatched, /onClick: \(\) => \{\s*cancelHoverOpen\(\);\s*changeOpen\(!open\);\s*\},/u)
+  assert.doesNotMatch(subagentUiPatched, /openTitle\(\);/u)
+  assert.match(subagentUiPatched, /"aria-controls": menuId/u)
+  const runtime = fs.readFileSync(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
+  assert.match(runtime, /const alpha5ChatScrollChanged = targetsAlpha5 \? await patchInstalledAlpha5ChatScroll\(\) : false/u)
+  assert.match(runtime, /const subagentChanged = await patchInstalledSubagent\(\)/u)
+  assert.match(runtime, /const subagentContinuationChanged = await patchInstalledSubagentContinuation\(\)/u)
+})
+
+test('alpha.5 native conversation, attachment, turn-outline, reconnect, schedule, and storage-upgrade owners stay pinned around the intentional chat patch', async () => {
+  const { assertInstalledAlpha5NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
   const before = new Map([
     ['conversation', fs.readFileSync(CONVERSATION_FILE, 'utf8')],
     ['chat', fs.readFileSync(CHAT_FILE, 'utf8')]
   ])
-  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false)
-  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false, 'official native verification must be idempotent')
+  assert.equal(await assertInstalledAlpha5NativeCapabilities(), false)
+  assert.equal(await assertInstalledAlpha5NativeCapabilities(), false, 'official native verification must be idempotent')
   assert.equal(fs.readFileSync(CONVERSATION_FILE, 'utf8'), before.get('conversation'))
   assert.equal(fs.readFileSync(CHAT_FILE, 'utf8'), before.get('chat'))
   const runtime = fs.readFileSync(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
   for (const installer of ['patchInstalledConversation', 'patchInstalledAttachmentInput', 'patchInstalledModelSelection', 'patchInstalledModelSettings', 'patchInstalledWorkspaceUi']) {
-    assert.match(runtime, new RegExp(`targetsAlpha4 \\? false :[^;]*${installer}`, 'u'), `${installer} must not override an alpha.4 native owner`)
+    assert.match(runtime, new RegExp(`targetsAlpha5 \\? false :[^;]*${installer}`, 'u'), `${installer} must not override an alpha.5 native owner`)
   }
 })
 

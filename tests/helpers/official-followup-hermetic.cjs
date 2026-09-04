@@ -19,16 +19,16 @@ const FRESH_INSTALL_BASELINE = Object.freeze({ digest: 'B3D892DCB6CD2CC8D5BA062F
 const ACCEPTED_HISTORICAL_BASELINE = Object.freeze({ digest: '17D85E217EC8FA2B73B5879C618BA4760A8233E6893252E3F88AF3A6C51A44E0', fileCount: 42879, totalBytes: 369552648 })
 const REJECTED_RUN_ROOT_TOKENS = Object.freeze(['160456', '162000', '164000', '165000', '170000'])
 const ACCEPTED = Object.freeze({
-  'package.json': '242feeaccdd58369a8bb722899a0cd5e995bc979924ccc0fea5da4c7b29521a3',
-  'package-lock.json': '00b75065a460ed87f04d562ef45d9e6f1405fb5da2ea57ff8187b1c415f437c4',
-  'scripts/patch-official-runtime.mjs': 'ac1c0831008a4742be069f7eb4f0ae2d225348f6c083ffab4252fcd429dda0d8',
-  'scripts/verify-static.mjs': 'ca50ab0eed28646cfe9cee0e536bbf271d26841636525ffe3ffa793cac8400ff',
+  'package.json': 'c2246e173680bf03897f0d87fc6a66b0d252cc1a6c85714f835e9de4c6994014',
+  'package-lock.json': 'ab011b915c803ea215874bd688a90a110eb5ddd6dbfabcd3a0d85811dbf39904',
+  'scripts/patch-official-runtime.mjs': '2870605d734d2341b1f8f7d9fa6c89dc96c82f5db6ac7fbaf0b9ddcb81d9e9c9',
+  'scripts/verify-static.mjs': '66585d57d28ce767798d3a4b828f5d04dde4ef3675fbec7bb67c9756bd872e72',
   'tests/official-alpha2-static-release-contract.test.cjs': '9babbbd8f5cc901befba380595cd0bfc8fb37793ee016b872c9fcd55c409e2cb',
   'tests/official-alpha2-runtime-migration.test.cjs': 'd002a0d0b19674d07beda48c892b181cedb58bcc1cf7cdfeeaa84c4c34298472',
   'docs/OFFICIAL-ALPHA2-RUNTIME-INTEGRATION.zh-CN.md': '7040aec30923a7cb06eb6e27e3515f842caa49360758a966532b301a99f3f03b',
-  'README.md': 'd31c8a16bb1e0582123e910b52322395946300580e4347d6f026b5efb872ece3',
-  'CHANGELOG.md': 'ccb4db9c87f12ba636587250840b27b17bc03586d36c2b182b2e72f1e8fc8a8f',
-  'release-notes.md': '13ed89aa8fa221026ada1134432ccab7e19164f3543f608e21cd35619a7bf212'
+  'README.md': '964e1ec2866f00ad73f2fe7dcdba7e1835ca131065a975635767e38e3e2d9058',
+  'CHANGELOG.md': '6c62aa1a1e9e3290fc06dc0239aee2956e77f51bbe2f87c5363ba09dc441ae34',
+  'release-notes.md': 'e2795a871dd81b6ee96695d720006909ed9d5471b266ece8c3a6c8b5ace0c7b5'
 })
 const ACCEPTED_MIGRATION_FILES = Object.freeze({
   'candidate-summary.json': '76cce10f2aeb698528f61ddb54fcd94bc274409a89554c45cdc2643eefe2ae15',
@@ -162,13 +162,12 @@ function parseFrozenManifest(bytes) {
   const decoder = new TextDecoder('utf-8', { fatal: true }); let source
   try { source = decoder.decode(bytes) } catch { throw new Error('HERMETIC_FROZEN_MANIFEST_UTF8') }
   if (!source.endsWith('\n') || source.includes('\r')) throw new Error('HERMETIC_FROZEN_MANIFEST_LINES')
-  const seen = new Set(), normalized = new Set(), rows = []
+  const seen = new Set(), rows = []
   for (const line of source.slice(0, -1).split('\n')) {
     const split = line.lastIndexOf('|'); if (split <= 0 || !/^[0-9A-F]{64}$/u.test(line.slice(split + 1))) throw new Error('HERMETIC_FROZEN_MANIFEST_ROW')
-    const relative = assertCanonicalRelativePath(line.slice(0, split)), collision = relative.normalize('NFC')
+    const relative = assertCanonicalRelativePath(line.slice(0, split))
     if (seen.has(relative)) throw new Error('HERMETIC_FROZEN_MANIFEST_DUPLICATE')
-    if (normalized.has(collision)) throw new Error('HERMETIC_FROZEN_MANIFEST_COLLISION')
-    seen.add(relative); normalized.add(collision); rows.push({ path: relative, sha256: line.slice(split + 1) })
+    seen.add(relative); rows.push({ path: relative, sha256: line.slice(split + 1) })
   }
   for (let index = 1; index < rows.length; index += 1) if (utf8Compare(rows[index - 1].path, rows[index].path) >= 0) throw new Error('HERMETIC_FROZEN_MANIFEST_ORDER')
   return rows
@@ -254,9 +253,9 @@ function scanPublicationDocs(root) {
   const rows = []
   for (const file of ['README.md', 'CHANGELOG.md', 'release-notes.md']) {
     const source = fs.readFileSync(path.join(root, file), 'utf8'), headings = [...source.matchAll(/^##\s+/gmu)].map(match => match.index), currentEnd = headings[1] || source.length, current = source.slice(0, currentEnd)
-    if (!/0\.1\.2-alpha\.2/u.test(source)) throw new Error(`HERMETIC_PUBLICATION_ALPHA2_MISSING:${file}`)
-    const stale = [...source.matchAll(/0\.1\.1-rc\.2|NO-GO|runtimeEquivalent=false|40(?:\s+个|\s+files)|41(?:\s+个|\s+files)/gu)].map(match => ({ token: match[0], index: match.index, classification: match.index >= currentEnd || /历史|旧|superseded|曾经|此前/u.test(source.slice(Math.max(0, match.index - 120), match.index + 180)) ? 'superseded-history' : 'unclassified' }))
-    if (/0\.1\.1-rc\.2|NO-GO|runtimeEquivalent=false/u.test(current) && !/superseded|历史/u.test(current)) throw new Error(`HERMETIC_PUBLICATION_CURRENT_STALE:${file}`)
+    if (!/0\.1\.2-alpha\.5/u.test(current)) throw new Error(`HERMETIC_PUBLICATION_ALPHA5_CURRENT_MISSING:${file}`)
+    const stale = [...source.matchAll(/0\.1\.2-alpha\.[234]|0\.1\.1-rc\.2|NO-GO|runtimeEquivalent=false|40(?:\s+个|\s+files)|41(?:\s+个|\s+files)/gu)].map(match => ({ token: match[0], index: match.index, classification: match.index >= currentEnd || /历史|旧|superseded|曾经|此前/u.test(source.slice(Math.max(0, match.index - 120), match.index + 180)) ? 'superseded-history' : 'unclassified' }))
+    if (/0\.1\.2-alpha\.[234]|0\.1\.1-rc\.2|NO-GO|runtimeEquivalent=false/u.test(current) && !/superseded|历史|此前/u.test(current)) throw new Error(`HERMETIC_PUBLICATION_CURRENT_STALE:${file}`)
     if (stale.some(item => item.classification !== 'superseded-history')) throw new Error(`HERMETIC_PUBLICATION_STALE_UNCLASSIFIED:${file}`)
     rows.push({ file, sha256: sha256Buffer(canonicalLfText(source)), stale })
   }

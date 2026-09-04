@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.0.59
+
+### 官方 Harness alpha.5 与会话可靠性
+
+- 官方 Harness Runtime 及完整 required/optional DSH 依赖图由官方 npm 注册表精确固定为 `0.1.2-alpha.5`；根依赖、lockfile、Desktop 自有插件 peer 图、精确哈希/语义锚点与幂等补丁门禁同步更新。官方 Schedule 与 Desktop `dsh-desktop-schedules` 同时注册、互不冒充或覆盖，既有 session append-only events 不改写；历史 alpha.2–alpha.4 分支继续只作审计基线。
+- 官方 subagent lifecycle 补充受限、脱敏的终态类别与精确 activation/run identity；`PI_AI_ERROR` / `Not Found` 只映射为当前 generation/run 的脱敏诊断类别、阶段与可操作恢复提示，原始 provider 文本、stack、路径、prompt、output、session/token 不进入公开诊断。Agent Teams admission 以 generation/child/run 绑定 reservation、accepted、started、end 与 drain，旧 run 不能释放新 lease。
+- recovery retry/replace 在真正进入可能产生外部效果的 dispatch 之前保持确定性的 `not_started`；admission 超时、队列容量、Stop 与晚到生命周期按精确阶段收敛，graceful retirement 可由同一 run 的晚到完成回执安全结束，未知现场仍不自动重放。
+- 发送后 Stop、排队、继续与相关官方会话控件会随当前状态及时出现，不再要求切页或等待额外轮询；长会话切换时“跟随最新/保留阅读位置”意图不再丢失，滚到底部会立即提交 follow 状态，reader 锚点仍有界采样并在旧 DOM 卸载前刷新。
+- 官方“回到底部”控件恢复可见，提供至少 44×44 命中区、键盘语义与清晰焦点状态，不用无条件滚底破坏主动阅读；整枚“子代理会话：可继续”芯片的任一点都是同一个切换目标，单次指针操作只开合一次，Enter/Space 与至少 44×44 命中语义保持一致。
+
+### Agent Teams 编排、状态与路径边界
+
+- “自动接力”全局默认由版本化 Desktop Host 设置证明持久化；直接用户建队、计划提交与两阶段 Resume 只在 root、canonical project、Goal、team、pause epoch、plan/settings hash 与 authorization epoch 全部匹配时派生或重绑权限，Stop、撤销、跨项目、未知能力或副作用继续 fail closed。
+- 修复安全计划重提交被误当作权限丢失而反复停住的问题；普通 Goal round 不会静默重授，缺失或撤销的 grant 只显示明确恢复路径。等待态用语义 fingerprint 在 `store.mutate` 之前判重，重复 reconcile 零写入、零发布、零空转唤醒；没有新 durable transition 或 eligibility 变化的空 automatic round 会直接 park，不消耗 Goal 追加预算。
+- 成员遇到至少两个可持续且文件/资源不重叠的工作流时可提交持久扩员提案；提案不产生嵌套团队或隐藏成员，只有 Root 通过后才会持久化任务并创建用户可见的平级成员，Root 仍按容量、冲突、成本与安全门禁决定。受 admission backpressure 的可见成员按持久 FIFO 与精确 generation/task fence 接力，重复提案和旧释放事件不消耗 Goal round。
+- 团队、成员、任务、后台计数与诊断卡通过单一权威状态流实时更新；已发送聊天 prose 明确保持“发送时快照”，乱序旧事件、断线重连与 HMR 不覆盖较新 revision。relay `queued` 只表示本机持久排队、接收方尚未确认，不再误报 delivered。
+- 工作区、资源与文件边界改为逐码点保真：只规范真实分隔符、`.`、重复/尾斜杠及 Windows 实际大小写比较；NFC/NFD、全角/ASCII 等兼容等价但不同的路径不会被 NFKC 合并。Host adopted-root 恢复同时绑定 exact actor/project/board/slot/operation，错误身份全部拒绝。
+- Agent Teams 权威存储新增版本化 hot/cold COW：关闭团队进入 content-hashed immutable shard，迁移只复制并保留 legacy 原件与可回滚 generation；写前校验、OCC、claim/lease/submission/acceptance、wake/routing、handoff/recovery、authorization、quality/evidence 与 external-effect/idempotency 历史均不删减。
+- Root 投影/SSE 编码提供不超过 32 MiB 的有界缓存，但默认关闭，并保留可立即回滚的 `disabled | shadow | enabled` 三态：`disabled` 走原权威投影，`shadow` 只比较候选且仍返回权威结果，`enabled` 仅在 store generation、root/project/ACL、选择、revision、owner/pause/auth epoch 全部匹配时命中；fresh ACL 始终先于缓存，任何身份或线性前驱不明立即重算。SSE 在断线、Stop、HMR/重载时清理 listener、abort/backpressure 队列与关联引用；65-root 已测热命中 p95 低于 1 ms，但不作为默认启用承诺。
+
+### 无损性能、同步与存储
+
+- 自动缓存维护改用 cache-only 窄扫描，在递归前剪除 runtime、sessions、attachments、memories 与未请求的 temp/workspace；shadow oracle 候选不逐项等价时仅预览并 fail closed，手动 scan/preview/apply 与回滚开关保留。
+- Desktop 活动预览改为内存中的有界 latest frame，Android 面板直接消费每设备一个 2 fps persistent stream；连续预览不再写盘、回读或 base64 往返，只有用户明确截图才进入带源尺寸与坐标空间的 durable evidence store。Stop、撤销、旋转、离线恢复和旧轮询回滚语义保持不变。
+- preview、evidence 与 legacy namespace 物理/逻辑分域；安全 GC 只处理没有 attachment/tool-card/history 引用且 token 过期并经过安全裕量的 preview，先 quarantine、延迟删除并支持晚到引用恢复。既有 Android 混存内容仍按 conditional-authoritative 只读保留，不盲目清理。
+- Mobile Sync v6 以单一 canonical snapshot、严格不超过 512 KiB 的 bounded delta journal 和小型 heartbeat/preferred-port 原子记录替代每个事件携带全量快照；保留 v5 只读备份、精确 reverse exporter、cursor/tombstone/offline replace、operation/idempotency 与 crash recovery，shadow 阶段不双发同步。
+- Schedule 继续以 session append-only events 为唯一权威源，内存 fold 仅维护 seq/generation/checksum；15 秒刷新支持 ETag、`If-None-Match`、since delta 与无 body 的 304，任何 gap/rewind/generation 分叉立即 fail closed 为一次权威 full replay，304 不重复 JSON 解析或渲染。
+
+### 手机工作台
+
+- 修复在已打开的会话详情中点击底部“代理团队”会被旧导航保护逻辑吞掉的问题；只要底部标签可见且可用，现在就会进入官方 Agent Teams 画布，不再静默停留在对话页。
+- 手机输入适配当前官方 `data-composer-input` contenteditable 合同；长文本、键盘抬升、附件、语音与文件 `@` 引用都跟随当前官方编辑器，旧 textarea 只保留隔离兼容路径。
+- 发送、停止、排队与恢复状态继续完全由官方主按钮和编辑器状态机拥有；手机层不再把 contenteditable 的 Stop 改名或拦截为合成 Enter，避免排队后按钮状态被平行逻辑卡灰。
+- 修复刚进入会话、历史仍在加载时，官方新增 body 包装层使手机滚动区与输入框锚定规则失效的问题；任务栏和输入框现在保持在视口底部，加载完成前后不再漂到页面上半部或明显跳位。
+
+### 版本与发布边界
+
+- Desktop 根包、lockfile 与 15 个自有插件统一为 `1.0.59`；Android 为 `versionName=1.0.59` / `versionCode=1005900`，iOS/iPadOS 为 `MARKETING_VERSION=1.0.59` / build `10059`，Desktop Mobile Sync、移动更新示例、Web Search User-Agent 与组件签名验证 workflow identity 同步更新。
+- 独立官方集成 `@zseven-w/dsh-android` 继续保持自身 `0.1.0-rc.4`，不伪装成 Desktop 产品版本。
+- `v1.0.58` 是上一不可变稳定版；其 Tag、Release 资产、签名 APK、组件、`release-manifest.json`、镜像和 stable feeds 均不移动、不覆盖。本节只描述 `v1.0.59` 候选源码，尚不代表已经发布或可被更新客户端发现。
+- 正式发布仍只能由仓库唯一 resumable publisher 在干净、已提交的精确 revision 上完成安全审查、静态/全量/移动门禁、云构建与签名、双云核对后创建新的不可变 `v1.0.59`；不得手工提交资产、移动旧 Tag 或盲目基线化失败。
+
 ## 1.0.58
 
 ### 官方 Harness alpha.4 兼容升级

@@ -3,6 +3,8 @@
 const DESKTOP_TARGET_ID = 'desktop'
 const COORDINATE_SPACE = 'desktop-device-frame-pixels'
 const DEFAULT_MAX_FPS = 2
+const DEFAULT_MAX_FRAME_BYTES = 12 * 1024 * 1024
+const FRAME_DELIVERIES = new Set(['metadata', 'buffer', 'preview-file', 'evidence-file'])
 
 function finiteNumber(value, fallback = 0) {
   const number = Number(value)
@@ -68,7 +70,11 @@ class DesktopDeviceProvider {
     this.enableControl = typeof options.enableControl === 'function' ? options.enableControl : null
     this.stopControl = typeof options.stopControl === 'function' ? options.stopControl : null
     this.frameEncoder = typeof options.frameEncoder === 'function' ? options.frameEncoder : null
-    this.frameStore = options.frameStore || null
+    // Preview and evidence must never share storage. The default preview path is
+    // memory-only; frameStore remains a compatibility alias for explicit tests.
+    this.previewStore = options.previewStore || options.frameStore || null
+    this.evidenceStore = options.evidenceStore || options.frameStore || null
+    this.maxFrameBytes = positiveInteger(options.maxFrameBytes, DEFAULT_MAX_FRAME_BYTES, 1, DEFAULT_MAX_FRAME_BYTES)
     this.now = typeof options.now === 'function' ? options.now : () => Date.now()
     this.minimumFrameIntervalMs = Math.ceil(1000 / positiveInteger(options.maxFps, DEFAULT_MAX_FPS, 1, 5))
     this.selectedTargetId = DESKTOP_TARGET_ID
@@ -101,6 +107,13 @@ class DesktopDeviceProvider {
       streaming: !this.stopped && state.enabled,
       selectedTargetId: this.selectedTargetId,
       frameRateLimit: Math.round(1000 / this.minimumFrameIntervalMs),
+      previewBuffer: {
+        retainedFrames: this.lastFrame ? 1 : 0,
+        retainedBytes: this.lastFrame?.png?.length || 0,
+        maxFrames: 1,
+        maxBytes: this.maxFrameBytes,
+        transport: 'latest-frame-buffer'
+      },
       capability,
       control: state
     }
@@ -177,12 +190,28 @@ class DesktopDeviceProvider {
     return target
   }
 
+  async #deliverFrame(entry, options, reused) {
+    const delivery = FRAME_DELIVERIES.has(options.delivery) ? options.delivery : 'metadata'
+    const result = { ...entry.public, reused }
+    if (delivery === 'buffer') return { ...result, bytes: entry.png }
+    if (delivery === 'preview-file' || delivery === 'evidence-file') {
+      const namespace = delivery === 'preview-file' ? 'preview' : 'evidence'
+      const store = namespace === 'preview' ? this.previewStore : this.evidenceStore
+      if (!store?.save) throw Object.assign(new Error(`桌面设备 ${namespace} 截图存储不可用。`), { code: 'desktop-frame-store-unavailable' })
+      entry.files[namespace] ||= Promise.resolve(store.save(entry.png, { now: entry.capturedAtMs }))
+      let file
+      try { file = await entry.files[namespace] } catch (error) { entry.files[namespace] = null; throw error }
+      return { ...result, file, namespace }
+    }
+    return result
+  }
+
   async captureFrame(options = {}) {
     const state = this.#assertControl()
     const target = await this.#selectedTarget()
     const now = this.now()
     if (options.force !== true && this.lastFrame && this.lastFrame.target.id === target.id && this.lastFrame.controlGeneration === state.generation && now - this.lastFrame.capturedAtMs < this.minimumFrameIntervalMs) {
-      return { ...this.lastFrame.public, reused: true }
+      return this.#deliverFrame(this.lastFrame, options, true)
     }
     const shot = target.kind === 'desktop'
       ? await this.computerUse.desktopScreenshot()
@@ -193,8 +222,15 @@ class DesktopDeviceProvider {
     const encoded = this.frameEncoder ? await this.frameEncoder(shot, target) : null
     const width = positiveInteger(encoded?.width, sourceWidth)
     const height = positiveInteger(encoded?.height, sourceHeight)
-    let file = encoded?.file || null
-    if (!file && encoded?.png && this.frameStore?.save) file = await this.frameStore.save(encoded.png)
+    let png
+    try { png = Buffer.isBuffer(encoded?.png) ? encoded.png : Buffer.from(encoded?.png || []) } catch {}
+    if (!png?.length || png.length > this.maxFrameBytes) {
+      throw Object.assign(new Error('桌面设备预览帧为空或超过安全上限。'), { code: 'desktop-frame-too-large' })
+    }
+    const currentState = this.controlState()
+    if (!currentState.ready || !currentState.enabled || currentState.authorization.scope === 'none' || currentState.generation !== state.generation) {
+      throw authorizationError(currentState)
+    }
     const publicFrame = {
       sequence: ++this.sequence,
       capturedAt: new Date(now).toISOString(),
@@ -206,13 +242,10 @@ class DesktopDeviceProvider {
       originX: target.kind === 'desktop' ? finiteNumber(shot.x, target.bounds?.x || 0) : 0,
       originY: target.kind === 'desktop' ? finiteNumber(shot.y, target.bounds?.y || 0) : 0,
       coordinateSpace: COORDINATE_SPACE,
-      inputBounds: { xMin: 0, yMin: 0, xMaxExclusive: width, yMaxExclusive: height },
-      file,
-      ...(encoded?.data ? { data: encoded.data } : {}),
-      reused: false
+      inputBounds: { xMin: 0, yMin: 0, xMaxExclusive: width, yMaxExclusive: height }
     }
-    this.lastFrame = { public: publicFrame, target, capturedAtMs: now, controlGeneration: state.generation }
-    return publicFrame
+    this.lastFrame = { public: publicFrame, png, files: { preview: null, evidence: null }, target, capturedAtMs: now, controlGeneration: state.generation }
+    return this.#deliverFrame(this.lastFrame, options, false)
   }
 
   #mapPoint(parameters, target) {
@@ -254,9 +287,13 @@ class DesktopDeviceProvider {
     return { completed: true, action: 'type', targetId: target.id, characters: Array.from(value).length }
   }
 
+  clearFrame() {
+    this.lastFrame = null
+  }
+
   async stop() {
     this.stopped = true
-    this.lastFrame = null
+    this.clearFrame()
     if (this.stopControl) await this.stopControl()
     else if (this.enableControl) await this.enableControl(false)
     return this.status()
@@ -266,6 +303,7 @@ class DesktopDeviceProvider {
 module.exports = {
   COORDINATE_SPACE,
   DEFAULT_MAX_FPS,
+  DEFAULT_MAX_FRAME_BYTES,
   DESKTOP_TARGET_ID,
   DesktopDeviceProvider,
   authorizationError,

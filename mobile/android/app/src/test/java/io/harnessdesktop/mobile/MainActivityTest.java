@@ -95,6 +95,84 @@ public final class MainActivityTest {
             script.contains("if(window.__harnessMobileInputEntryInstalled)return;"));
     }
 
+    @Test public void mobileUiInjectionPolicyCoalescesNavigationCallbacksAfterReady() {
+        MainActivity.MobileUiInjectionPolicy policy = new MainActivity.MobileUiInjectionPolicy();
+        int generation = policy.beginDocument();
+
+        assertTrue(policy.startInjectionBatch(generation, 100L));
+        assertEquals(1, policy.batchCount());
+        assertEquals(MainActivity.MOBILE_UI_INJECTION_SETTLE_MS,
+            policy.reserveReadyProbe(generation, 100L));
+        assertEquals("commit and finish share one marker probe", -1L,
+            policy.reserveReadyProbe(generation, 200L));
+        assertTrue(policy.finishReadyProbe(generation, true));
+        assertTrue(policy.isReady());
+        assertFalse(policy.startInjectionBatch(generation, 1_200L));
+        assertEquals(-1L, policy.reserveReadyProbe(generation, 1_200L));
+        assertTrue(MainActivity.mobileUiRuntimeReady("true"));
+        assertFalse(MainActivity.mobileUiRuntimeReady("false"));
+        assertFalse(MainActivity.mobileUiRuntimeReady(null));
+    }
+
+    @Test public void mobileUiInjectionPolicyRetriesFailuresWithinAThreeBatchBound() {
+        MainActivity.MobileUiInjectionPolicy policy = new MainActivity.MobileUiInjectionPolicy();
+        int generation = policy.beginDocument();
+        long now = 0L;
+        assertTrue(policy.startInjectionBatch(generation, now));
+
+        for (int batch = 1; batch < MainActivity.MAX_MOBILE_UI_INJECTION_BATCHES_PER_DOCUMENT; batch++) {
+            long delay = policy.reserveReadyProbe(generation, now);
+            assertTrue(delay >= 0L);
+            now += delay;
+            assertTrue(policy.finishReadyProbe(generation, false));
+            assertTrue(policy.startInjectionBatch(generation, now));
+        }
+        now += policy.reserveReadyProbe(generation, now);
+        assertTrue(policy.finishReadyProbe(generation, false));
+        assertFalse("a broken document must not create unbounded full-runtime parses",
+            policy.startInjectionBatch(generation, now));
+        assertEquals(MainActivity.MAX_MOBILE_UI_INJECTION_BATCHES_PER_DOCUMENT, policy.batchCount());
+    }
+
+    @Test public void staleMobileUiProbeCannotMarkANewerDocumentReady() {
+        MainActivity.MobileUiInjectionPolicy policy = new MainActivity.MobileUiInjectionPolicy();
+        int oldGeneration = policy.beginDocument();
+        assertTrue(policy.startInjectionBatch(oldGeneration, 0L));
+        assertEquals(MainActivity.MOBILE_UI_INJECTION_SETTLE_MS,
+            policy.reserveReadyProbe(oldGeneration, 0L));
+
+        int currentGeneration = policy.beginDocument();
+        assertTrue(policy.startInjectionBatch(currentGeneration, 50L));
+        assertFalse(policy.finishReadyProbe(oldGeneration, true));
+        assertFalse(policy.isReady());
+        assertEquals(1, policy.batchCount());
+    }
+
+    @Test public void repeatedObserverReceiptsPersistOnlyRealSessionTransitions() {
+        String stored = "";
+        int writes = 0;
+        String first = "session-12345678";
+        for (int callback = 0; callback < 1_000; callback++) {
+            if (MainActivity.shouldPersistSessionReference(stored, first)) {
+                stored = first;
+                writes++;
+            }
+        }
+        assertEquals("1,000 observer callbacks for one session need one preference write", 1, writes);
+
+        String second = "session-87654321";
+        if (MainActivity.shouldPersistSessionReference(stored, second)) {
+            stored = second;
+            writes++;
+        }
+        if (MainActivity.shouldPersistSessionReference(stored, "")) {
+            stored = "";
+            writes++;
+        }
+        assertFalse(MainActivity.shouldPersistSessionReference(stored, ""));
+        assertEquals("open, switch and clear are the only persisted transitions", 3, writes);
+    }
+
     @Test public void acceptsOnlyPrivateLanPairingLinks() {
         assertTrue(PairingLinkValidator.isSafeHarnessUrl("http://192.168.1.8:3081/__harness_mobile__/pair/abc", true));
         assertTrue(PairingLinkValidator.isSafeHarnessUrl("http://10.0.0.3:4000/", false));

@@ -135,6 +135,7 @@
     margin-inline: auto !important;
   }
 
+  [data-composer-input][data-phase],
   textarea[data-phase] {
     font-size: 16px !important;
   }
@@ -539,9 +540,9 @@
     flex-direction: column !important;
   }
 
-  /* During generation, a non-empty draft changes the official Stop control's
-     presentation and accessible name to send intent. The runtime guards the
-     real Stop action and routes the tap through the official textarea Enter policy. */
+  /* Legacy textarea builds may present Stop as guarded send intent and route the
+     tap through their Enter policy. The official contenteditable keeps its
+     primary button and queue state machine as the sole owner. */
   [data-composer-card] button[data-harness-mobile-stop-as-send="true"] {
     position: relative !important;
     color: #fff !important;
@@ -1559,7 +1560,7 @@
     font-size: 12px !important;
   }
 
-  [data-harness-mobile-conversation="true"] > [data-conversation-scroll] {
+  [data-harness-mobile-conversation="true"] [data-conversation-scroll] {
     box-sizing: border-box !important;
     display: flex !important;
     flex-direction: column !important;
@@ -1594,7 +1595,7 @@
     gap: 10px !important;
   }
 
-  [data-harness-mobile-conversation="true"] > [data-conversation-scroll] > [data-composer-seat] {
+  [data-harness-mobile-conversation="true"] [data-conversation-scroll] > [data-composer-seat] {
     box-sizing: border-box !important;
     position: sticky !important;
     bottom: 0 !important;
@@ -1791,6 +1792,7 @@
     box-shadow: 0 8px 24px rgba(23, 33, 51, .10) !important;
   }
 
+  [data-composer-card] [data-composer-input][data-phase],
   [data-composer-card] textarea[data-phase] {
     min-height: 48px !important;
     max-height: 148px !important;
@@ -1800,8 +1802,8 @@
   }
 
   /* Orbit active composer: the writing surface, not the toolbar, owns most of
-     the card. Growing the scroll container as well as the textarea is required
-     because the official auto-grow mirror otherwise stays one line. */
+     the card. Grow the shared scroll container and whichever official editor
+     contract is present; legacy mirrors remain measurement-only. */
   [data-phase="active"] [data-harness-mobile-composer="orbit"] {
     min-height: 92px !important;
     padding: 6px 8px !important;
@@ -1827,7 +1829,7 @@
 
   [data-phase="active"] [data-harness-mobile-composer-input="true"] [data-input-backdrop],
   [data-phase="active"] [data-harness-mobile-composer-input="true"] [data-input-mirror],
-  [data-phase="active"] textarea[data-harness-mobile-composer-textarea="true"] {
+  [data-phase="active"] [data-harness-mobile-composer-editor="true"] {
     box-sizing: border-box !important;
     min-height: 42px !important;
     max-height: min(126px, 22dvh) !important;
@@ -1836,7 +1838,7 @@
     line-height: 22px !important;
   }
 
-  [data-phase="active"] textarea[data-harness-mobile-composer-textarea="true"] {
+  [data-phase="active"] [data-harness-mobile-composer-editor="true"] {
     width: 100% !important;
   }
 
@@ -1970,11 +1972,11 @@
     box-shadow: 0 16px 44px rgba(14, 35, 45, .15) !important;
   }
 
-  [data-phase="hero"] > [data-conversation-scroll] {
+  [data-phase="hero"] [data-conversation-scroll] {
     overflow: hidden !important;
   }
 
-  [data-phase="hero"] > [data-conversation-scroll] > [data-composer-seat] {
+  [data-phase="hero"] [data-conversation-scroll] > [data-composer-seat] {
     position: relative !important;
     bottom: auto !important;
     flex: 1 1 auto !important;
@@ -2899,7 +2901,7 @@
   html[data-harness-mobile="true"][data-hd-theme]:root body,
   html[data-harness-mobile="true"][data-hd-theme]:root #root,
   html[data-harness-mobile="true"][data-hd-theme]:root [data-harness-mobile-conversation="true"],
-  html[data-harness-mobile="true"][data-hd-theme]:root [data-harness-mobile-conversation="true"] > [data-conversation-scroll] {
+  html[data-harness-mobile="true"][data-hd-theme]:root [data-harness-mobile-conversation="true"] [data-conversation-scroll] {
     color: var(--dsw-alias-label-primary, #171719) !important;
     background: linear-gradient(var(--dsw-alias-bg-base, #f7f9fb), var(--dsw-alias-bg-base, #f7f9fb)), var(--harness-mobile-opaque-base) !important;
     text-shadow: none !important;
@@ -2935,7 +2937,7 @@
     padding-bottom: 0 !important;
   }
 
-  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-conversation="true"] > [data-conversation-scroll] {
+  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-conversation="true"] [data-conversation-scroll] {
     padding-bottom: min(226px, 34dvh) !important;
     scroll-padding-bottom: min(226px, 34dvh) !important;
   }
@@ -2957,7 +2959,7 @@
   }
 
   html[data-harness-mobile-composer-lifted="true"] [data-phase="active"] [data-harness-mobile-composer-input="true"],
-  html[data-harness-mobile-composer-lifted="true"] [data-phase="active"] textarea[data-harness-mobile-composer-textarea="true"] {
+  html[data-harness-mobile-composer-lifted="true"] [data-phase="active"] [data-harness-mobile-composer-editor="true"] {
     min-height: 52px !important;
     max-height: min(104px, 22dvh) !important;
   }
@@ -4895,12 +4897,12 @@
 }
 
 :root[data-harness-mobile-chat-detail="open"] [data-phase="active"] [data-harness-mobile-composer-input="true"],
-:root[data-harness-mobile-chat-detail="open"] [data-phase="active"] textarea[data-harness-mobile-composer-textarea="true"] {
+:root[data-harness-mobile-chat-detail="open"] [data-phase="active"] [data-harness-mobile-composer-editor="true"] {
   min-height: 60px !important;
   max-height: min(144px, 24dvh) !important;
 }
 
-:root[data-harness-mobile-chat-detail="open"] [data-phase="active"] textarea[data-harness-mobile-composer-textarea="true"] {
+:root[data-harness-mobile-chat-detail="open"] [data-phase="active"] [data-harness-mobile-composer-editor="true"] {
   padding: 6px 6px 8px !important;
 }
 
@@ -5188,13 +5190,33 @@
   font-weight: 650 !important;
 }
 
-[data-harness-mobile-model-content] {
+/* The settings sheet's generic direct-div rules carry !important declarations
+   with higher specificity. Qualify the model scrollport and its generated list
+   by their real DOM chain so touch panning wins the cascade instead of clipping. */
+[data-harness-mobile-model-sheet] > [role="dialog"] > [data-harness-mobile-model-content] {
   grid-row: 5 !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
   min-height: 0 !important;
   align-self: stretch !important;
   overflow: auto !important;
-  overscroll-behavior: contain !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain !important;
+  touch-action: pan-y !important;
+  -webkit-overflow-scrolling: touch !important;
   scrollbar-width: thin;
+}
+
+[data-harness-mobile-model-sheet] > [role="dialog"] > [data-harness-mobile-model-content] > [data-harness-mobile-model-choices] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
 }
 
 [data-harness-mobile-model-choices] {
@@ -5386,8 +5408,8 @@
 }
 
 /* Composer stability contract: one sizing owner for long text and IME lift.
-   Keep the mirror and textarea in the same scroll box; toolbar controls never
-   participate in the text area's height calculation. */
+   Keep the official editor in its scroll box; legacy mirrors stay measurement-only
+   and toolbar controls never participate in the editor height calculation. */
 @media (max-width: 700px) {
   [data-harness-mobile-composer-input="true"] {
     box-sizing: border-box !important;
@@ -5403,7 +5425,7 @@
 
   [data-harness-mobile-composer-input="true"] [data-input-backdrop],
   [data-harness-mobile-composer-input="true"] [data-input-mirror],
-  [data-harness-mobile-composer-input="true"] textarea[data-harness-mobile-composer-textarea="true"] {
+  [data-harness-mobile-composer-input="true"] [data-harness-mobile-composer-editor="true"] {
     box-sizing: border-box !important;
     width: 100% !important;
     min-width: 0 !important;
@@ -5451,12 +5473,12 @@
     max-height: min(120px, 26dvh) !important;
   }
 
-  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-composer-input="true"] textarea[data-harness-mobile-composer-textarea="true"] {
+  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-composer-input="true"] [data-harness-mobile-composer-editor="true"] {
     max-height: min(120px, 26dvh) !important;
     scroll-padding-block: 12px 24px !important;
   }
 
-  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-conversation="true"] > [data-conversation-scroll] {
+  html[data-harness-mobile-composer-lifted="true"] [data-harness-mobile-conversation="true"] [data-conversation-scroll] {
     scroll-padding-bottom: calc(196px + var(--harness-mobile-ime-overlay, 0px)) !important;
   }
 }
@@ -5589,8 +5611,8 @@ html[data-harness-mobile="true"] [data-harness-mobile-presentation-surface="true
   display: none !important;
 }
 
-/* The textarea is the sole visible text layer. Decoration layers are retained
-   only for official measurement hooks and can never paint or receive input. */
+/* The official composer editor is the sole visible text layer. Legacy decoration
+   layers are retained only for measurement hooks and never paint or receive input. */
 @media (max-width: 700px) {
   [data-harness-mobile-composer-input="true"] {
     isolation: isolate !important;
@@ -5603,7 +5625,7 @@ html[data-harness-mobile="true"] [data-harness-mobile-presentation-surface="true
     -webkit-text-fill-color: transparent !important;
     user-select: none !important;
   }
-  textarea[data-harness-mobile-composer-textarea="true"] {
+  [data-harness-mobile-composer-editor="true"] {
     z-index: 2 !important;
     visibility: visible !important;
     opacity: 1 !important;

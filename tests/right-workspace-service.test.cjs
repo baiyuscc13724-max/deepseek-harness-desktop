@@ -11,11 +11,13 @@ const { blocksDirectOpen } = require('../electron/bridge/local-target-service.cj
 
 function response(body, options = {}) {
   const bytes = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
+  const headers = new Map(Object.entries(options.headers || {}).map(([name, value]) => [name.toLowerCase(), String(value)]))
+  if (!headers.has('content-length') && options.status !== 304) headers.set('content-length', String(options.contentLength ?? bytes.length))
   return {
     ok: options.ok !== false,
     status: options.status || 200,
-    headers: { get: name => name === 'content-length' ? String(options.contentLength ?? bytes.length) : null },
-    arrayBuffer: async () => bytes
+    headers: { get: name => headers.get(String(name).toLowerCase()) ?? null },
+    arrayBuffer: options.arrayBuffer || (async () => bytes)
   }
 }
 
@@ -80,7 +82,7 @@ test('right workspace proxy performs bounded GET-only JSON requests', async () =
     runtimeUrl: 'http://127.0.0.1:8906', kind: 'schedules', sessionId: 'root-session',
     fetchImpl: async (url, options) => { request = { url: url.toString(), options }; return response({ schedules: [] }) }
   })
-  assert.deepEqual(result, { schedules: [] })
+  assert.deepEqual(result, { status: 200, notModified: false, body: { schedules: [] } })
   assert.match(request.url, /\/api\/desktop-schedules\/state\?sessionId=root-session$/u)
   assert.equal(request.options.method, 'GET')
   assert.equal(request.options.redirect, 'error')
@@ -89,6 +91,53 @@ test('right workspace proxy performs bounded GET-only JSON requests', async () =
     runtimeUrl: 'http://127.0.0.1:8906', kind: 'files', sessionId: 'root-session',
     fetchImpl: async () => response('{}', { contentLength: MAX_RESPONSE_BYTES + 1 })
   }), error => error.code === 'RIGHT_WORKSPACE_RESPONSE_TOO_LARGE')
+})
+
+test('schedule proxy forwards validators and preserves a bodyless 304 without parsing JSON', async () => {
+  let request
+  let bodyReads = 0
+  const etag = '"dds-abc123"'
+  const result = await loadRightWorkspaceResource({
+    runtimeUrl: 'http://127.0.0.1:8906',
+    kind: 'schedules',
+    sessionId: 'root-session',
+    etag,
+    since: 41,
+    generation: 'generation-1',
+    fetchImpl: async (url, options) => {
+      request = { url: new URL(url), options }
+      return response('', {
+        status: 304,
+        headers: {
+          etag,
+          'x-schedule-cursor': '43',
+          'x-schedule-generation': 'generation-1',
+          'x-schedule-checksum': 'a'.repeat(64)
+        },
+        arrayBuffer: async () => { bodyReads += 1; throw new Error('304 body must not be read') }
+      })
+    }
+  })
+  assert.equal(request.url.searchParams.get('since'), '41')
+  assert.equal(request.url.searchParams.get('generation'), 'generation-1')
+  assert.equal(request.options.headers['if-none-match'], etag)
+  assert.deepEqual(result, {
+    status: 304,
+    notModified: true,
+    etag,
+    cursor: 43,
+    generation: 'generation-1',
+    checksum: 'a'.repeat(64),
+    body: null
+  })
+  assert.equal(bodyReads, 0)
+
+  const legacy = resourceUrl('http://127.0.0.1:8906', 'schedules', {
+    sessionId: 'root-session', validator: false, since: 41, generation: 'generation-1'
+  })
+  assert.equal(legacy.searchParams.has('since'), false)
+  assert.equal(legacy.searchParams.has('generation'), false)
+  assert.throws(() => resourceUrl('http://127.0.0.1:8906', 'schedules', { sessionId: 'root-session', since: 1.5 }), error => error.code === 'RIGHT_WORKSPACE_BAD_SCHEDULE_CURSOR')
 })
 
 test('workspace file previews receive a loopback content URL and can be materialized for a system application', async () => {

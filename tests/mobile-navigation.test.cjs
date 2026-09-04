@@ -49,8 +49,13 @@ test('mobile navigation only delegates to the versioned bridge or official seman
   assert.match(runtime, /bridge\.getNavigationState/u)
   assert.match(runtime, /bridge\.subscribe\(sync\)/u)
   assert.match(runtime, /harness-mobile-navigation-change/u)
-  assert.match(runtime, /const detailComposer = visibleConversation\?\.querySelector\?\.\('\[data-composer-card\]'\)[^]*domain\.id !== 'conversations' && root\.dataset\.harnessMobileChatDetail === 'open' && detailComposer && visible\(visibleConversation\)[^]*event\.preventDefault\(\)[^]*event\.stopPropagation\(\)/u, 'a transient hidden footer must never steal touches from an open conversation detail')
-  assert.match(runtime, /root\.dataset\.harnessMobileChatDetail === 'open'/u, 'a mounted composer behind the home drawer must not block the other three domains')
+  const bottomTabStart = runtime.indexOf('    for (const domain of mobileDomains) {', runtime.indexOf('const installMobileAppShell'))
+  const bottomTabEnd = runtime.indexOf('    presentationRoot.appendChild(shell)', bottomTabStart)
+  assert.ok(bottomTabStart >= 0 && bottomTabEnd > bottomTabStart)
+  const bottomTabBinding = runtime.slice(bottomTabStart, bottomTabEnd)
+  assert.match(bottomTabBinding, /addEventListener\('click', \(\) => \{[^]*navigateMobileDomain\(domain, shell\)/u)
+  assert.doesNotMatch(bottomTabBinding, /harnessMobileChatDetail|preventDefault|stopPropagation/u, 'a visible domain tab must navigate even while conversation detail is open')
+  assert.match(runtime, /root\.dataset\.harnessMobileChatDetail === 'open'/u, 'back navigation still recognizes an open conversation detail')
   assert.match(runtime, /const mobileSlotNames = domain => \[domain\.slot, \.\.\.\(mobileSlotAliases\[domain\.id\] \|\| \[\]\)\]/u)
   assert.match(runtime, /for \(const slot of mobileSlotNames\(domain\)\)/u, 'the primary slot must be queried before DOM-ordered aliases')
   assert.match(runtime, /agents: Object\.freeze\(\['navigation\.agents'\]\)/u)
@@ -62,6 +67,46 @@ test('mobile navigation only delegates to the versioned bridge or official seman
   assert.match(runtime, /\[data-conversation-view="desktop-schedules"\]/u)
   assert.doesNotMatch(runtime, /(?:空间|任务|我的)(?:首页|页面).*createElement|data-harness-mobile-domain-placeholder/u)
 })
+
+function exerciseBottomTabFromStaleConversationDetail(domainId) {
+  const start = runtime.indexOf('    for (const domain of mobileDomains) {', runtime.indexOf('const installMobileAppShell'))
+  const end = runtime.indexOf('    presentationRoot.appendChild(shell)', start)
+  assert.ok(start >= 0 && end > start)
+  const source = runtime.slice(start, end)
+  let click = null
+  const tab = { addEventListener: (type, listener) => { if (type === 'click') click = listener } }
+  const shell = { querySelector: selector => selector === `[data-harness-mobile-domain="${domainId}"]` ? tab : null }
+  const mobileMenu = { hidden: false }
+  const domain = { id: domainId, slot: domainId === 'agents' ? 'agent-teams.view.canvas' : 'agent-teams.view.automation' }
+  const navigations = []
+  const root = { dataset: { harnessMobileChatDetail: 'open' } }
+  const composer = {}
+  const visibleConversation = { querySelector: selector => selector === '[data-composer-card]' ? composer : null }
+  const document = { querySelector: selector => selector === '[data-harness-mobile-conversation="true"]' ? visibleConversation : null }
+  const suppressions = { preventDefault: 0, stopPropagation: 0 }
+  new Function('mobileDomains', 'shell', 'mobileMenu', 'navigateMobileDomain', 'root', 'document', 'visible', source) ( // eslint-disable-line no-new-func
+    [domain], shell, mobileMenu, selected => navigations.push(selected.id), root, document, candidate => candidate === visibleConversation
+  )
+  assert.equal(typeof click, 'function')
+  click({
+    preventDefault: () => { suppressions.preventDefault += 1 },
+    stopPropagation: () => { suppressions.stopPropagation += 1 }
+  })
+  return { mobileMenu, navigations, root, suppressions }
+}
+
+for (const fixture of [
+  { id: 'agents', label: 'Agent Teams' },
+  { id: 'tasks', label: 'scheduled tasks' }
+]) {
+  test(`${fixture.label} bottom tab navigates through a stale open detail marker without suppressing the event`, () => {
+    const result = exerciseBottomTabFromStaleConversationDetail(fixture.id)
+    assert.equal(result.mobileMenu.hidden, true)
+    assert.deepEqual(result.navigations, [fixture.id])
+    assert.deepEqual(result.suppressions, { preventDefault: 0, stopPropagation: 0 })
+    assert.equal(result.root.dataset.harnessMobileChatDetail, 'open', 'domain activation owns the eventual state transition')
+  })
+}
 
 test('back derives an existing conversation detail from visible composer when state marker lags', () => {
   assert.match(runtime, /const isMobileConversationDetailOpen = \(\) => \{/u)
@@ -305,7 +350,7 @@ test('我的 opens only the authoritative full settings surface', () => {
 
 test('official settings host remains interactive during mobile presentation isolation', () => {
   const start = runtime.indexOf('  const syncMobilePresentationIsolation = (domain, shell) => {')
-  const end = runtime.indexOf('  const syncMobileComposerTextareaLayout = textarea => {', start)
+  const end = runtime.indexOf('  const syncMobileComposerInputLayout = input => {', start)
   assert.ok(start >= 0 && end > start)
   const source = runtime.slice(start, end)
   const settings = { contains: () => false }

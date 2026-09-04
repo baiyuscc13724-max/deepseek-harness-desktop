@@ -76,49 +76,58 @@ test('consumes the Desktop loopback capability once and speaks the bounded plain
 
 test('integrates the real Host private reserve-launch-redeem capability protocol', async () => {
   const mod = await import(`${moduleUrl}?host-integration=${Date.now()}`)
-  const root = await mkdtemp(path.join(os.tmpdir(), 'atsl-plugin-host-')), project = path.join(root, 'project'), token = randomBytes(32), calls = [], sessions = new Set()
-  await mkdir(project)
-  const host = createAgentTeamsSessionLaunchService({ stateFile: path.join(root, 'host.json'), token, callRuntimeRpc: async (method, payload) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'atsl-plugin-host-')), project = path.join(root, 'project，lane'), asciiSibling = path.join(root, 'project,lane'), token = randomBytes(32), calls = [], sessions = new Set(), hostFile = path.join(root, 'host.json'), pluginFile = path.join(root, 'plugin.json')
+  await Promise.all([mkdir(project), mkdir(asciiSibling)])
+  const rpc = async (method, payload) => {
     calls.push([method, structuredClone(payload)])
-    if (method === 'workspace/create') return { workspace: { workspaceId: 'workspace-real', path: project } }
+    if (method === 'workspace/create') return { workspace: { workspaceId: 'workspace-real', path: requestOf(payload).path } }
     if (method === 'session/create') { sessions.add(requestOf(payload).sessionId); return { sessionId: requestOf(payload).sessionId } }
     if (method === 'session/rename') return { title: requestOf(payload).title, seq: 1 }
     if (method === 'session/prompt') return { accepted: true }
     if (method === 'session/list') return { items: [...sessions].map(sessionId => ({ sessionId })) }
     throw new Error(method)
-  } })
-  let runtime
+  }
+  const createHost = () => createAgentTeamsSessionLaunchService({ stateFile: hostFile, token, callRuntimeRpc: rpc })
+  let host = createHost(), runtime
   try {
     await host.start()
-    const provider = mod.consumeDesktopProjectSessionLaunchCapability({ env: host.runtimeEnvironment({}) })
-    runtime = new mod.ProjectSessionLaunchRuntime({ filePath: path.join(root, 'plugin.json'), provider })
+    runtime = new mod.ProjectSessionLaunchRuntime({ filePath: pluginFile, provider: mod.consumeDesktopProjectSessionLaunchCapability({ env: host.runtimeEnvironment({}) }) })
     await runtime.init()
-    const canonicalProjectKey = projectKeyForWorkspace(project), normalizedWorkspacePath=project.trim().replace(/\\/gu,'/').replace(/\/+$/u,'').normalize('NFKC'),workspacePath=process.platform==='win32'?normalizedWorkspacePath.toLocaleLowerCase('en-US'):normalizedWorkspacePath, parentBinding = { canonicalProjectKey, workspacePath, callerRootId: 'parent-session' }, launchSlots = slots(1)
+    const canonicalProjectKey = projectKeyForWorkspace(project), workspacePath = path.resolve(project), parentBinding = { canonicalProjectKey, workspacePath, callerRootId: 'parent-session' }, launchSlots = slots(1)
+    assert.notEqual(canonicalProjectKey, projectKeyForWorkspace(asciiSibling), 'full-width comma project must not collide with its ASCII sibling')
+    await assert.rejects(runtime.preflight({}, { totalSessions: 2, projectBinding: { ...parentBinding, workspacePath: asciiSibling } }), error => error.code === 'PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH')
     const preparedBatch = await runtime.prepareStart({}, { requestId: 'real-host-reserve', totalSessions: 2, slots: launchSlots, projectBinding: parentBinding })
     assert.equal(preparedBatch.state, 'reserving'); assert.equal(preparedBatch.noHostEffects, true)
     const adoptions = await runtime.prepareAdoptions({}, { batchRef: preparedBatch.batchRef, projectBinding: parentBinding })
     const reservations = [{ slotActorRef: 'actor_reserved_real_host_0000000000000000', taskRef: 'task_reserved_real_host_00000000000000000', slotRef: adoptions.prepared[0].slotRef, operationRef: adoptions.prepared[0].operationRef }]
     const started = await runtime.activatePreparedBatch({}, { batchRef: preparedBatch.batchRef, reservations, projectBinding: parentBinding })
     const ready = await waitFor(() => runtime.status({}, { batchRef: started.batchRef, projectBinding: parentBinding }), value => value.state === 'ready')
-    const hostState = JSON.parse(await readFile(path.join(root, 'host.json'), 'utf8')), childSessionId = hostState.operations[0].sessionId
-    const redeemed = await runtime.redeemAdoption({}, { slotRef: ready.slots[0].slotRef, projectBinding: { canonicalProjectKey, workspacePath, callerRootId: childSessionId } })
+    assert.equal(requestOf(calls.find(([method]) => method === 'workspace/create')[1]).path, workspacePath)
+    const hostState = JSON.parse(await readFile(hostFile, 'utf8')), childSessionId = hostState.operations[0].sessionId, equivalentWorkspacePath = process.platform === 'win32' ? workspacePath.replace(/\\/gu, '/').toLocaleUpperCase('en-US') : `${workspacePath}${path.sep}`, childBinding = { canonicalProjectKey, workspacePath: equivalentWorkspacePath, callerRootId: childSessionId }
+    const redeemed = await runtime.redeemAdoption({}, { slotRef: ready.slots[0].slotRef, projectBinding: childBinding })
     assert.equal(redeemed.slotActorRef, reservations[0].slotActorRef)
     assert.equal(redeemed.slotCapability, adoptions.prepared[0].adoptionCapability)
     assert.notEqual(redeemed.slotCapability, adoptions.prepared[0].slotRef)
-    const indexUrl=pathToFileURL(path.resolve(__dirname,'..','plugins','dsh-agent-teams','lib','index.js')).href,indexMod=await import(`${indexUrl}?agent-error-e2e=${Date.now()}`),projectKey=randomBytes(32),hostProjectRef=hostState.bindings[0].projectRef
-    const adoptedActorRef=`actor_${createHmac('sha256',projectKey).update('dsh-agent-teams/project-root-actor/v1').update('\0').update(hostProjectRef).update('\0').update(JSON.stringify([childSessionId])).digest('base64url')}`
-    assert.deepEqual(await runtime.recordAdoption({}, { slotRef: ready.slots[0].slotRef, adoptedActorRef, projectBinding: { canonicalProjectKey, workspacePath, callerRootId: childSessionId } }), { recorded: true })
-    const failedAgent={id:childSessionId,status:'running',session:{header:{cwd:project},events:[]}},listeners=new Map(),internalExecution=Object.freeze({})
-    const ctx={agents:{get:id=>id===failedAgent.id?failedAgent:undefined,roots:()=>[failedAgent]},on:(name,listener)=>{listeners.set(name,listener)},logger:{warn:()=>{}}},projectEntry={localProjectCollaborationContext:async()=>{const context={projectRef:hostProjectRef,databasePath:path.join(root,'observer.sqlite')};Object.defineProperties(context,{execution:{value:internalExecution},actorResolver:{value:(candidate,requested)=>{if(candidate!==internalExecution||requested!==hostProjectRef)throw new Error('context mismatch');return {projectRef:requested}}},keyProvider:{value:requested=>{if(requested!==hostProjectRef)throw new Error('key mismatch');return Buffer.from(projectKey)}},dispose:{value:()=>{}}});return Object.freeze(context)}}
-    let observerPromise;const originalRecord=runtime.recordAdoptedActorFailure.bind(runtime);runtime.recordAdoptedActorFailure=(...args)=>(observerPromise=originalRecord(...args));indexMod.observeProjectRootFailures(ctx,projectEntry,runtime,Promise.resolve());listeners.get('agent/error')({agent:failedAgent,error:new Error('private lifecycle detail')});for(let i=0;i<20&&observerPromise===undefined;i+=1)await delay(5);await observerPromise
-    const failedAfterAdoption=await waitFor(()=>runtime.status({}, {batchRef:ready.batchRef,projectBinding:parentBinding}),value=>value.slots[0].state==='failed')
-    assert.equal(failedAfterAdoption.slots[0].state,'failed');const failedRevision=failedAfterAdoption.slots[0].hostRevision
-    observerPromise=undefined;listeners.get('agent/error')({agent:failedAgent,error:new Error('duplicate private detail')});for(let i=0;i<20&&observerPromise===undefined;i+=1)await delay(5);await observerPromise;assert.equal((await runtime.status({}, {batchRef:ready.batchRef,projectBinding:parentBinding})).slots[0].hostRevision,failedRevision);projectKey.fill(0)
-    const laterEvidence=await runtime.rootFailureEvidence({}, { failureRef:ready.slots[0].slotRef,projectBinding:parentBinding })
-    assert.equal(laterEvidence.failedActorRef,adoptedActorRef); assert.equal(laterEvidence.beneficiaryActorRef,adoptedActorRef); assert.equal(laterEvidence.initiatorAuthorized,true)
-    const pluginState = await readFile(path.join(root, 'plugin.json'), 'utf8'), promptPayloads = calls.filter(([method]) => method === 'session/prompt').map(([, payload]) => JSON.stringify(payload))
+    const indexUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')).href, indexMod = await import(`${indexUrl}?agent-error-e2e=${Date.now()}`), projectKey = randomBytes(32), hostProjectRef = hostState.bindings[0].projectRef
+    const adoptedActorRef = `actor_${createHmac('sha256', projectKey).update('dsh-agent-teams/project-root-actor/v1').update('\0').update(hostProjectRef).update('\0').update(JSON.stringify([childSessionId])).digest('base64url')}`
+    assert.deepEqual(await runtime.recordAdoption({}, { slotRef: ready.slots[0].slotRef, adoptedActorRef, projectBinding: childBinding }), { recorded: true })
+    await runtime.close(); runtime = undefined; await host.close(); host = createHost(); await host.start()
+    runtime = new mod.ProjectSessionLaunchRuntime({ filePath: pluginFile, provider: mod.consumeDesktopProjectSessionLaunchCapability({ env: host.runtimeEnvironment({}) }) }); await runtime.init()
+    await assert.rejects(runtime.recordAdoptedActorFailure({}, { adoptedActorRef: 'actor_wrong_root_000000000000000000000', projectBinding: { canonicalProjectKey, workspacePath, callerRootId: childSessionId } }), error => error.code === 'PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED')
+    await assert.rejects(runtime.recordAdoptedActorFailure({}, { adoptedActorRef, projectBinding: parentBinding }), error => error.code === 'PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED')
+    await assert.rejects(runtime.recordAdoptedActorFailure({}, { adoptedActorRef, projectBinding: { canonicalProjectKey: projectKeyForWorkspace(asciiSibling), workspacePath: asciiSibling, callerRootId: childSessionId } }), error => error.code === 'PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED')
+    const failedAgent = { id: childSessionId, status: 'running', session: { header: { cwd: project }, events: [] } }, listeners = new Map(), internalExecution = Object.freeze({})
+    const ctx = { agents: { get: id => id === failedAgent.id ? failedAgent : undefined, roots: () => [failedAgent] }, on: (name, listener) => { listeners.set(name, listener) }, logger: { warn: () => {} } }, projectEntry = { localProjectCollaborationContext: async () => { const context = { projectRef: hostProjectRef, databasePath: path.join(root, 'observer.sqlite') }; Object.defineProperties(context, { execution: { value: internalExecution }, actorResolver: { value: (candidate, requested) => { if (candidate !== internalExecution || requested !== hostProjectRef) throw new Error('context mismatch'); return { projectRef: requested } } }, keyProvider: { value: requested => { if (requested !== hostProjectRef) throw new Error('key mismatch'); return Buffer.from(projectKey) } }, dispose: { value: () => {} } }); return Object.freeze(context) } }
+    let observerPromise; const originalRecord = runtime.recordAdoptedActorFailure.bind(runtime); runtime.recordAdoptedActorFailure = (...args) => (observerPromise = originalRecord(...args)); indexMod.observeProjectRootFailures(ctx, projectEntry, runtime, Promise.resolve()); listeners.get('agent/error')({ agent: failedAgent, error: new Error('private lifecycle detail') }); for (let i = 0; i < 20 && observerPromise === undefined; i += 1) await delay(5); await observerPromise
+    const failedAfterAdoption = await waitFor(() => runtime.status({}, { batchRef: ready.batchRef, projectBinding: parentBinding }), value => value.slots[0].state === 'failed')
+    assert.equal(failedAfterAdoption.slots[0].state, 'failed'); const failedRevision = failedAfterAdoption.slots[0].hostRevision
+    observerPromise = undefined; listeners.get('agent/error')({ agent: failedAgent, error: new Error('duplicate private detail') }); for (let i = 0; i < 20 && observerPromise === undefined; i += 1) await delay(5); await observerPromise; assert.equal((await runtime.status({}, { batchRef: ready.batchRef, projectBinding: parentBinding })).slots[0].hostRevision, failedRevision); projectKey.fill(0)
+    const laterEvidence = await runtime.rootFailureEvidence({}, { failureRef: ready.slots[0].slotRef, projectBinding: parentBinding })
+    assert.equal(laterEvidence.failedActorRef, adoptedActorRef); assert.equal(laterEvidence.beneficiaryActorRef, adoptedActorRef); assert.equal(laterEvidence.initiatorAuthorized, true)
+    const pluginState = await readFile(pluginFile, 'utf8'), finalHostState = JSON.parse(await readFile(hostFile, 'utf8')), promptPayloads = calls.filter(([method]) => method === 'session/prompt').map(([, payload]) => JSON.stringify(payload))
     assert.equal(pluginState.includes(redeemed.slotCapability), false)
-    assert.equal(JSON.stringify(hostState).includes(redeemed.slotCapability), false)
+    assert.equal(JSON.stringify(finalHostState).includes(redeemed.slotCapability), false)
+    assert.equal(finalHostState.operations[0].adoptedActorRef, adoptedActorRef)
     assert.equal(promptPayloads.some(value => value.includes(redeemed.slotCapability)), false)
     assert.equal(promptPayloads.some(value => value.includes(adoptions.prepared[0].slotRef)), true)
     assert.equal(promptPayloads.some(value => value.includes(reservations[0].slotActorRef) || value.includes(reservations[0].taskRef)), false)

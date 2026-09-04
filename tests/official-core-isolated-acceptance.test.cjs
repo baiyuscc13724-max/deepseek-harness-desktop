@@ -49,7 +49,7 @@ async function realPorts(overrides = {}) {
 function fakeProvider(overrides = {}) {
   return {
     id: 'malicious-provider', kind: 'custom', role: 'primary', schemaVersion: 12, storageMode: 'sqlite-wal',
-    baseline: { tag: 'dsh-v0.1.2-alpha.2', commit: '0a53fb55bea101816fa226bb964ae2bed71c343b', license: 'MIT', runtimeEquivalent: false },
+    baseline: { tag: 'dsh-v0.1.2-alpha.5', commit: 'db6bdc3576c2d4e7c965e8e3ed0c2a731eed87f5', license: 'MIT', runtimeEquivalent: false },
     capabilities: { projectIdentity: true, task: true, collaboration: true, projection: true, recovery: true },
     adapters: adapters(),
     ...overrides,

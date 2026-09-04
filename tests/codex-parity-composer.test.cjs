@@ -32,7 +32,7 @@ test('browser-tools client registers a $ skills source merging static and instal
   for (const skill of SKILLS) {
     assert.match(client, new RegExp(`name: ['"]${skill}['"]`), `$ skill candidate missing ${skill}`)
   }
-  // 动态并入已安装 skills（imagegen/openai-docs/visualize 等走当前 alpha.4 remote.skills）
+  // 动态并入已安装 skills（imagegen/openai-docs/visualize 等走当前 alpha.5 remote.skills）
   assert.match(client, /ctx\.remote\.skills/u)
   assert.doesNotMatch(client, /ctx\.get\(['"]connection['"]\)\.api|const \{ result \} = await skillsApi/u)
   assert.match(client, /skillsApi\.list\(/)
@@ -66,8 +66,8 @@ test('browser-tools package declares the web client module and its client face',
   assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'))
   assert.deepEqual(pkg.peerDependencies, {
     '@deepseek-ai/cordis': '^4.0.2',
-    '@deepseek-ai/dsh-api-remotes': '^0.1.2-alpha.4',
-    '@deepseek-ai/dsh-client-ui-input-trigger': '^0.1.2-alpha.4'
+    '@deepseek-ai/dsh-api-remotes': '^0.1.2-alpha.5',
+    '@deepseek-ai/dsh-client-ui-input-trigger': '^0.1.2-alpha.5'
   })
   const client = await source('plugins/dsh-desktop-browser-tools/lib/client.js')
   assert.match(client, /module\.exports = \{ apply, inject: \[['"]inputTriggers['"], ['"]remote['"], ['"]remote\.skills['"]\] \}/u)

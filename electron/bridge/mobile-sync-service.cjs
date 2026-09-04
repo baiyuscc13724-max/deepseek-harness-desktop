@@ -23,7 +23,7 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.58'
+const CURRENT_MOBILE_VERSION = '1.0.59'
 const CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4
   ? `android-v${CURRENT_MOBILE_VERSION}`
   : `v${CURRENT_MOBILE_VERSION}`
@@ -618,7 +618,7 @@ class MobileSyncService extends EventEmitter {
         this.#fetchWorkspaceBaseline(target, controller.signal),
         this.#fetchSessionIndex(target, controller.signal)
       ])
-      const readMessages = this.store.readSyncChanges().snapshot?.readMessages || []
+      const readMessages = this.store.readSyncReadMessages?.() || this.store.readSyncChanges().snapshot?.readMessages || []
       const committed = this.store.commitSyncManifest({
         complete: true,
         workspaces,

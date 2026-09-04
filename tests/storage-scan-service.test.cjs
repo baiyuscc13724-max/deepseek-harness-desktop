@@ -1,15 +1,33 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fsPromises = require('node:fs/promises')
 
 const {
   PROTECTED_BASENAMES,
   isProtectedName,
   resolveContained,
   runtimePaths,
-  scanHarnessData
+  scanCacheOnly,
+  scanHarnessData,
+  scanTree
 } = require('../electron/bridge/storage-scan-service.cjs')
 const { addSymlinkEscape, buildHarnessData, destroyHarnessData } = require('./harness-data-fixture.cjs')
+
+function createTrackingFs(accesses) {
+  return Object.fromEntries(['lstat', 'readdir', 'realpath', 'stat'].map(operation => [
+    operation,
+    async (target, ...args) => {
+      accesses.push({ operation, target: path.resolve(String(target)) })
+      return fsPromises[operation](target, ...args)
+    }
+  ]))
+}
+
+function isWithin(target, root) {
+  const relative = path.relative(path.resolve(root), path.resolve(target))
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
 
 test('resolveContained allows inside and rejects escapes', () => {
   const root = path.resolve('HarnessData-fixture')
@@ -76,6 +94,64 @@ test('scanHarnessData can limit to a single category', async () => {
     assert.equal(report.categories['temp'].exists, true)
     assert.equal(report.categories['runtime'], undefined)
     assert.equal(report.categories['dsh-home'], undefined)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('an explicit empty category list performs no filesystem scan', async () => {
+  const fixture = await buildHarnessData()
+  const accesses = []
+  try {
+    const report = await scanHarnessData(fixture.root, { categories: [], fs: createTrackingFs(accesses) })
+    assert.deepEqual(report.categories, {})
+    assert.equal(accesses.length, 0)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('cache-only scan prunes protected/runtime/temp/workspace trees before access', async () => {
+  const fixture = await buildHarnessData()
+  const accesses = []
+  const nestedProtected = path.join(fixture.homeDir, 'marketplace', 'cache', 'sessions')
+  const memories = path.join(fixture.homeDir, 'memories')
+  try {
+    await fsPromises.mkdir(nestedProtected, { recursive: true })
+    await fsPromises.writeFile(path.join(nestedProtected, 'never-read.json'), 'protected')
+    await fsPromises.mkdir(memories, { recursive: true })
+    await fsPromises.writeFile(path.join(memories, 'memory.json'), 'protected')
+
+    const report = await scanCacheOnly(fixture.root, { fs: createTrackingFs(accesses) })
+    assert.deepEqual(Object.keys(report.categories), ['dsh-home'])
+    const cache = report.categories['dsh-home'].entries.find(entry => entry.name === 'marketplace/cache')
+    assert.ok(cache)
+    assert.equal(cache.protectedDescendant, true)
+
+    const forbiddenRoots = [
+      fixture.runDir,
+      fixture.tempDir,
+      fixture.wsDir,
+      path.join(fixture.homeDir, 'sessions'),
+      path.join(fixture.homeDir, 'attachments'),
+      memories,
+      nestedProtected
+    ]
+    const forbiddenAccesses = accesses.filter(access => forbiddenRoots.some(root => isWithin(access.target, root)))
+    assert.deepEqual(forbiddenAccesses, [])
+    assert.ok(accesses.some(access => isWithin(access.target, path.join(fixture.homeDir, 'marketplace', 'cache'))))
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('tree scan marks a budget-exhausted partial result as truncated', async () => {
+  const fixture = await buildHarnessData()
+  try {
+    const cache = path.join(fixture.homeDir, 'marketplace', 'cache')
+    const result = await scanTree(cache, fixture.root, { remaining: 1 }, { pruneProtected: true })
+    assert.equal(result.truncated, true)
+    assert.equal(result.entryCount, 0)
   } finally {
     await destroyHarnessData(fixture.root)
   }

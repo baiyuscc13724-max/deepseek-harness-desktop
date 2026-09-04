@@ -507,22 +507,24 @@ test('document upload uses the authoritative loaded session and appends returned
     Object.defineProperty(node, 'childElementCount', { get: () => node.children.length })
     return node
   }
-  class FakeTextarea {
-    constructor() { this._value = ''; this.disabled = false; this.readOnly = false }
-    get value() { return this._value }
-    set value(value) { this._value = String(value) }
-    setSelectionRange() {}
-    dispatchEvent() { return true }
+  class FakeEditor {
+    constructor() { this.tagName = 'DIV'; this.innerText = ''; this.textContent = ''; this.disabled = false }
+    getAttribute(name) {
+      if (name === 'data-phase') return 'active'
+      if (name === 'contenteditable') return 'true'
+      return null
+    }
     focus() {}
   }
   class FakeEvent {
     constructor(type, init = {}) { this.type = type; Object.assign(this, init) }
   }
-  const textarea = new FakeTextarea()
+  const editor = new FakeEditor()
   const card = makeNode('div')
   let documentRail = null
   card.querySelector = selector => {
     if (selector === '[data-harness-mobile-document-rail="true"]') return documentRail
+    if (selector === '[data-composer-input][data-phase], textarea[data-phase]') return editor
     return null
   }
   card.insertBefore = child => {
@@ -530,15 +532,22 @@ test('document upload uses the authoritative loaded session and appends returned
     card.children.unshift(child)
     if (child.dataset?.harnessMobileDocumentRail === 'true') documentRail = child
   }
-  runtime.HTMLTextAreaElement = FakeTextarea
+  runtime.HTMLTextAreaElement = class FakeTextarea {}
   runtime.Event = FakeEvent
   runtime.CSS = { escape: value => value }
   runtime.document.querySelector = selector => {
-    if (selector === '[data-composer-card] textarea[data-phase]') return textarea
     if (selector === '[data-composer-card]') return card
     return null
   }
   runtime.document.createElement = makeNode
+  runtime.document.createRange = () => ({ selectNodeContents() {} })
+  runtime.document.execCommand = (command, _showUi, value) => {
+    assert.equal(command, 'insertText')
+    editor.innerText = String(value)
+    editor.textContent = String(value)
+    return true
+  }
+  runtime.window.getSelection = () => ({ removeAllRanges() {}, addRange() {} })
 
   const states = []
   const file = { name: 'brief.pdf', type: 'application/pdf', size: 12 }
@@ -552,13 +561,13 @@ test('document upload uses the authoritative loaded session and appends returned
   assert.equal(uploads[0].init.headers['X-Harness-Mobile-Request'], 'document-upload')
   assert.equal(uploads[0].init.headers['Content-Type'], 'application/octet-stream')
   assert.equal(uploads[0].init.body, file)
-  assert.equal(textarea.value, '请查看文件：@uploads/brief.pdf\n', 'a trailing line break closes the official @ suggestion list')
+  assert.equal(editor.innerText, '请查看文件：@uploads/brief.pdf\n', 'a trailing line break closes the official @ suggestion list')
   assert.equal(documentRail?.children.length, 1)
   assert.equal(states.at(-1)?.[0], 'success')
 
   const removePreview = documentRail.children[0].children[1]
   removePreview.dispatchEvent(new FakeEvent('click'))
-  assert.equal(textarea.value, '')
+  assert.equal(editor.innerText, '')
   assert.equal(card.children.length, 0)
 })
 

@@ -8,7 +8,7 @@ const path = require('node:path')
 const { WebSocket, WebSocketServer } = require('ws')
 
 const { BROWSER_FORBIDDEN_PORTS, MOBILE_DOCUMENT_MAX_BYTES, MOBILE_DOCUMENT_UPLOAD_CONTRACT, MOBILE_SYNC_MANIFEST_CONTRACT, MOBILE_SYNC_MANIFEST_PATH, MobileSyncService, browserSafePort, lanAddresses, mobileModelRoutingDto, mobilePluginsDto, mobileProviderMetersDto, safeDeviceName, upstreamRuntimeCookieHeader, withoutRuntimeAuthCookies, withoutRuntimeAuthSetCookies } = require('../electron/bridge/mobile-sync-service.cjs')
-const { MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
+const { LEGACY_STATE_SCHEMA_VERSION, MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 const electronMainSource = readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
 async function createRuntime(label, { websocketSetCookies = [] } = {}) {
@@ -1342,4 +1342,52 @@ test('transient empty and aborted runtime indexes return incomplete recovery wit
   assert.equal(unavailable.refreshState, 'unavailable')
   assert.equal(unavailable.snapshot.sessions[0].sessionId, 'session-one')
   assert.equal(readFileSync(store.file, 'utf8'), diskBefore)
+})
+
+test('shadow refresh computes both schemas in memory without a second runtime fetch or sync commit', async t => {
+  const runtimeRequests = []
+  const runtime = http.createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    const envelope = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+    runtimeRequests.push({ url: request.url, method: envelope.method })
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+    response.end(JSON.stringify({
+      type: 'server-response',
+      rpcId: envelope.rpcId,
+      result: {
+        ok: true,
+        value: { items: [{ sessionId: 'session-one', workspaceId: 'workspace-one', title: 'Session' }] }
+      }
+    }))
+  })
+  await new Promise(resolve => runtime.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => runtime.close(resolve)))
+
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-shadow-service-'))
+  const store = new MobileSyncStore(path.join(directory, 'mobile-sync.json'), secretAdapter(), { storageMode: 'shadow' })
+  let commitCalls = 0
+  let readMetadataCalls = 0
+  const commitSyncManifest = store.commitSyncManifest.bind(store)
+  const readSyncReadMessages = store.readSyncReadMessages.bind(store)
+  store.commitSyncManifest = input => { commitCalls += 1; return commitSyncManifest(input) }
+  store.readSyncReadMessages = () => { readMetadataCalls += 1; return readSyncReadMessages() }
+  const workspaceRequests = []
+  const service = new MobileSyncService({
+    store,
+    getRuntimeTarget: () => `http://127.0.0.1:${runtime.address().port}`,
+    WebSocketImpl: workspaceStream(() => [{ workspaceId: 'workspace-one', title: 'Project' }], workspaceRequests)
+  })
+
+  const result = await service.refreshWorkspaceManifest({ operationId: 'single-shadow-refresh' })
+  assert.equal(result.applied, true)
+  assert.equal(result.refreshState, 'authoritative')
+  assert.equal(commitCalls, 1)
+  assert.equal(readMetadataCalls, 1)
+  assert.equal(runtimeRequests.length, 1)
+  assert.equal(runtimeRequests[0].method, 'session/list')
+  assert.equal(workspaceRequests.length, 1)
+  assert.equal(store.get().sync.revision, 1)
+  assert.equal(store.getShadowComparison().equal, true)
+  assert.equal(JSON.parse(readFileSync(store.file, 'utf8')).schemaVersion, LEGACY_STATE_SCHEMA_VERSION)
 })

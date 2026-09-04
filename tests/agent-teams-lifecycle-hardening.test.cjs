@@ -145,3 +145,166 @@ test('legacy closed teams with provable acceptance retain normal succeeded or ca
   assert.equal(cancelled.teams[0].closure.forced, false)
   assert.deepEqual(cancelled.teams[0].closure.cancelledTaskIds, ['cancel-me'])
 })
+
+test('persisted member terminal diagnostics accept only the bounded public contract', async () => {
+  const mod = await plugin()
+  const member = oldAcceptedDocument().teams[0].members[1]
+  const diagnostic = {
+    errorCode: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch',
+    retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task'
+  }
+  assert.doesNotThrow(() => mod.validateMember({ ...member, state: 'failed', terminalDiagnostic: diagnostic }))
+  assert.throws(
+    () => mod.validateMember({ ...member, state: 'failed', terminalDiagnostic: { ...diagnostic, provider: 'must-not-persist' } }),
+    /terminalDiagnostic contains unsupported fields: provider/u
+  )
+  assert.throws(
+    () => mod.validateMember({ ...member, state: 'failed', terminalDiagnostic: { ...diagnostic, errorCode: 'RAW_PROVIDER_SECRET' } }),
+    /terminalDiagnostic\.errorCode/u
+  )
+  assert.throws(
+    () => mod.validateMember({ ...member, state: 'failed', terminalDiagnostic: { ...diagnostic, retryable: 'yes' } }),
+    /terminalDiagnostic\.retryable must be boolean/u
+  )
+})
+
+test('subagent terminal diagnostics redact raw failure data, publish once, and yield to recovered live state', async () => {
+  const mod = await plugin()
+  const worker = {
+    id: 'terminal-member', sessionId: 'terminal-session', name: 'Worker', role: 'diagnostic worker', kind: 'worker',
+    state: 'running', runId: 'run-1', createdAt: timestamp, updatedAt: timestamp
+  }
+  const sentMessage = {
+    id: 'sent-message', fromSessionId: 'terminal-session', toSessionId: 'lead', status: 'queued',
+    body: 'Already-sent chat prose remains a sent-time snapshot.', createdAt: timestamp, queuedAt: timestamp
+  }
+  const team = {
+    id: 'terminal-team', rootLeadSessionId: 'lead', name: 'Terminal team', objective: 'Bound diagnostics', revision: 1,
+    state: 'active', pauseEpoch: 0, projectKey, createdAt: timestamp, updatedAt: timestamp,
+    members: [
+      { id: 'lead:lead', sessionId: 'lead', name: 'Lead', role: 'root lead and coordinator', kind: 'lead', state: 'ready', createdAt: timestamp, updatedAt: timestamp },
+      worker
+    ],
+    tasks: [], messages: [sentMessage]
+  }
+  const document = { teams: [team] }
+  let mutationCalls = 0
+  let durableWrites = 0
+  let publications = 0
+  const store = {
+    hasManagedMember: id => id === worker.sessionId,
+    mutate: async mutate => {
+      mutationCalls += 1
+      const before = JSON.stringify(document)
+      const result = mutate(document)
+      if (JSON.stringify(document) !== before) {
+        durableWrites += 1
+        publications += 1
+      }
+      return result
+    }
+  }
+  const warnings = []
+  const reconciler = mod.createSubagentEventReconciler({ logger: { warn: value => warnings.push(value) } }, store, Promise.resolve(), 60_000)
+  const rawDiagnostic = {
+    code: 'PI_AI_ERROR',
+    message: 'Not Found: raw-upstream-secret',
+    category: 'raw-category-secret'.repeat(1_000),
+    stage: 'C:\\raw-path-secret'.repeat(1_000),
+    retryable: true,
+    partialOutputPresent: true,
+    nextAction: 'raw-output-secret'.repeat(1_000),
+    provider: 'raw-provider-secret', sessionId: 'raw-session-secret', runId: 'raw-run-secret', claimId: 'raw-claim-secret',
+    path: 'C:\\raw-path-secret', stack: 'raw-stack-secret', output: 'raw-output-secret'
+  }
+  try {
+    const failed = reconciler.enqueue('end', {
+      id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic,
+      lastAssistantMessage: [{ type: 'text', text: 'raw-partial-output-secret' }]
+    })
+    const duplicate = reconciler.enqueue('end', {
+      id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic
+    })
+    await reconciler.flush()
+    await Promise.all([failed, duplicate])
+
+    assert.equal(mutationCalls, 1, 'the real failure burst is one batched store mutation')
+    assert.equal(durableWrites, 1)
+    assert.equal(publications, 1)
+    assert.equal(worker.state, 'failed')
+    assert.equal(worker.error, 'subagent ended with error')
+    assert.deepEqual(worker.terminalDiagnostic, {
+      errorCode: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch',
+      retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task'
+    })
+    assert.doesNotThrow(() => mod.validateMember(worker))
+    assert.equal(sentMessage.body, 'Already-sent chat prose remains a sent-time snapshot.')
+    const persisted = JSON.stringify(document)
+    for (const raw of ['raw-upstream-secret', 'raw-category-secret', 'raw-path-secret', 'raw-output-secret', 'raw-provider-secret', 'raw-session-secret', 'raw-run-secret', 'raw-claim-secret', 'raw-stack-secret', 'raw-partial-output-secret']) {
+      assert.equal(persisted.includes(raw), false, `must not persist ${raw}`)
+    }
+
+    const board = mod.createProjectTeamBoard(projectKey, [team])
+    const rootBoard = mod.decorateProjectTeamBoardRecovery(board, [team], 'lead')
+    assert.deepEqual(rootBoard.teams[0].liveStatus.diagnostic, worker.terminalDiagnostic)
+
+    const duplicateAfterCommit = reconciler.enqueue('end', { id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic })
+    await reconciler.flush()
+    await duplicateAfterCommit
+    assert.equal(durableWrites, 1, 'an identical terminal event is a zero-write semantic no-op')
+    assert.equal(publications, 1, 'an identical terminal event emits no publication')
+
+    const recovered = reconciler.enqueue('start', { id: worker.sessionId, runId: 'run-2' })
+    await reconciler.flush()
+    await recovered
+    assert.equal(worker.state, 'running')
+    assert.equal(worker.terminalDiagnostic, undefined)
+    assert.equal(worker.error, undefined)
+
+    const stale = reconciler.enqueue('end', { id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic })
+    await reconciler.flush()
+    await stale
+    assert.equal(worker.state, 'running', 'a stale terminal event cannot overwrite authoritative recovered state')
+    assert.equal(worker.runId, 'run-2')
+    assert.equal(worker.terminalDiagnostic, undefined)
+    assert.equal(durableWrites, 2)
+    assert.equal(publications, 2)
+
+    const completed = reconciler.enqueue('end', { id: worker.sessionId, runId: 'run-2', stopReason: 'completed' })
+    await reconciler.flush()
+    await completed
+    assert.equal(worker.state, 'ready')
+    assert.equal(worker.terminalDiagnostic, undefined)
+    assert.equal(durableWrites, 3)
+    assert.equal(publications, 3)
+
+    const maxTokenStart = reconciler.enqueue('start', { id: worker.sessionId, runId: 'run-3' })
+    await reconciler.flush()
+    await maxTokenStart
+    const submittedAt = new Date().toISOString()
+    const submittedTask = {
+      id: 'partial-task', state: 'submitted', assigneeSessionId: worker.sessionId, claimId: 'partial-claim', leaseEpoch: 0,
+      submission: { taskId: 'partial-task', claimId: 'partial-claim', leaseEpoch: 0, submittedAt, submittedBy: worker.sessionId, source: 'explicit_complete' }
+    }
+    team.tasks.push(submittedTask)
+    const maxTokens = reconciler.enqueue('end', {
+      id: worker.sessionId, runId: 'run-3', stopReason: 'max-tokens',
+      terminalDiagnostic: { code: 'SUBAGENT_MAX_TOKENS', category: 'resource_limit', stage: 'work_followup', retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task', output: 'raw-max-token-output-secret' },
+      lastAssistantMessage: [{ type: 'text', text: 'raw-max-token-partial-secret' }]
+    })
+    await reconciler.flush()
+    await maxTokens
+    assert.equal(worker.state, 'failed')
+    assert.deepEqual(worker.terminalDiagnostic, {
+      errorCode: 'SUBAGENT_MAX_TOKENS', category: 'resource_limit', stage: 'work_followup',
+      retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task'
+    })
+    assert.equal(submittedTask.result, undefined, 'non-completed output is never promoted into accepted task prose')
+    assert.equal(JSON.stringify(document).includes('raw-max-token'), false)
+    assert.equal(durableWrites, 5)
+    assert.equal(publications, 5)
+    assert.deepEqual(warnings, [])
+  } finally {
+    reconciler.close()
+  }
+})

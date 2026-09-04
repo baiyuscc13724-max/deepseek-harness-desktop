@@ -37,7 +37,7 @@ const { createAgentTeamsAuthorizationService, startAgentTeamsAuthorizationServic
 const { createAgentTeamsSecretService, startAgentTeamsSecretService } = require('./bridge/agent-teams-secret-service.cjs')
 const { createAgentTeamsSessionLaunchService, startAgentTeamsSessionLaunchService } = require('./bridge/agent-teams-session-launch-service.cjs')
 const { ensureSessionExperiencePlugin } = require('./bridge/session-experience-plugin-service.cjs')
-const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS } = require('./bridge/computer-use-screenshot-store.cjs')
+const { ComputerUseScreenshotStore, DEFAULT_MAX_FILES: COMPUTER_USE_SCREENSHOT_MAX_FILES, DEFAULT_MAX_BYTES: COMPUTER_USE_SCREENSHOT_MAX_BYTES, DEFAULT_MAX_AGE_MS: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS, computerUseScreenshotDirectory } = require('./bridge/computer-use-screenshot-store.cjs')
 const { SCREENSHOT_COORDINATE_SPACE, mapComputerUseScreenshotPoint } = require('./bridge/computer-use-coordinate-space.cjs')
 const { ComputerUseAppPolicy } = require('./bridge/computer-use-app-policy.cjs')
 const { ComputerUseDesktopOverlayController, ComputerUseIndicatorController, shouldShowComputerUseIndicator } = require('./bridge/computer-use-indicator.cjs')
@@ -189,6 +189,9 @@ let computerUseSystemTransition = Promise.resolve()
 let computerUseAuthorizationRequest = null // { id, requestedAt, requestedBy }
 let computerUseSessionGeneration = 0
 let computerUseScreenshotStore = null
+let computerUsePreviewScreenshotStore = null
+const DESKTOP_DEVICE_LEGACY_FILE_POLL = /^(?:1|true)$/iu.test(String(process.env.HARNESS_DESKTOP_DEVICE_LEGACY_FILE_POLL || ''))
+const DESKTOP_ANDROID_LEGACY_CAPTURE_POLL = /^(?:1|true)$/iu.test(String(process.env.HARNESS_DESKTOP_ANDROID_LEGACY_CAPTURE_POLL || ''))
 let computerUseAppPolicy = null
 let computerUseIndicator = null
 let windowsComputerUse = null
@@ -1939,10 +1942,19 @@ async function modelMemoryAction(input = {}) {
 function ensureComputerUseScreenshotStore() {
   if (!computerUseScreenshotStore) {
     computerUseScreenshotStore = new ComputerUseScreenshotStore({
-      directory: path.join(desktopRuntimePaths().root, 'computer-use', 'screenshots')
+      directory: computerUseScreenshotDirectory(desktopRuntimePaths().root, 'evidence')
     })
   }
   return computerUseScreenshotStore
+}
+
+function ensureComputerUsePreviewScreenshotStore() {
+  if (!computerUsePreviewScreenshotStore) {
+    computerUsePreviewScreenshotStore = new ComputerUseScreenshotStore({
+      directory: computerUseScreenshotDirectory(desktopRuntimePaths().root, 'preview')
+    })
+  }
+  return computerUsePreviewScreenshotStore
 }
 
 function ensureWindowsComputerUse() {
@@ -1980,7 +1992,8 @@ function ensureWindowsDesktopUi() {
       enableControl: setComputerUseEnabled,
       stopControl: () => setComputerUseEnabled(false),
       frameEncoder: encodeDesktopDeviceFrame,
-      frameStore: ensureComputerUseScreenshotStore(),
+      previewStore: ensureComputerUsePreviewScreenshotStore(),
+      evidenceStore: ensureComputerUseScreenshotStore(),
       maxFps: 2
     })
   }
@@ -2013,7 +2026,11 @@ function desktopAndroidSerial(value) {
 
 function desktopAndroidRequestBody(action, payload = {}) {
   if (action === 'devices') return {}
-  if (action === 'status' || action === 'capture') return payload.device ? { device: desktopAndroidSerial(payload.device) } : {}
+  if (action === 'status') return payload.device ? { device: desktopAndroidSerial(payload.device) } : {}
+  if (action === 'capture') return {
+    ...(payload.device ? { device: desktopAndroidSerial(payload.device) } : {}),
+    ...(payload.preview === true ? { purpose: 'preview' } : {})
+  }
   if (action === 'switchDevice') return { device: desktopAndroidSerial(payload.device) }
   if (action === 'deviceAction') {
     const name = String(payload.name || '')
@@ -2099,6 +2116,10 @@ async function desktopAndroidPanelAction(input = {}) {
   if (response.status < 200 || response.status >= 300) throw new Error(String(body?.error || `Android 右栏请求失败（${response.status}）。`))
   for (const key of ['streamUrl', 'screenshotUrl']) {
     if (typeof body[key] === 'string') body[key] = new URL(body[key], base).toString()
+  }
+  if (action === 'devices' || action === 'switchDevice') {
+    body.previewTransport = DESKTOP_ANDROID_LEGACY_CAPTURE_POLL ? 'legacy-capture-poll' : 'persistent-stream'
+    body.previewFrameRate = 2
   }
   if (action === 'capture' && typeof body.screenshotUrl === 'string') {
     const screenshotUrl = new URL(body.screenshotUrl)
@@ -2333,7 +2354,11 @@ async function revokeComputerUseAppOverride(id) {
 }
 
 async function clearComputerUseScreenshots() {
-  return ensureComputerUseScreenshotStore().clear()
+  const [evidence, preview] = await Promise.all([
+    ensureComputerUseScreenshotStore().clear(),
+    ensureComputerUsePreviewScreenshotStore().clear()
+  ])
+  return { evidence, preview }
 }
 
 function computerUseAuthorizationSnapshot() {
@@ -2449,6 +2474,7 @@ async function setComputerUseEnabled(enabled) {
   computerUseCurrentTarget = null
   computerUseDesktopSurface = null
   computerUseTargets.clear()
+  if (!computerUseEnabled) desktopDeviceProvider?.clearFrame()
   if (!computerUseEnabled) {
       await clearComputerUseScreenshots()
   }
@@ -2472,7 +2498,7 @@ function computerUseState() {
     generation: computerUseSessionGeneration,
     currentTarget: { id: COMPUTER_USE_DESKTOP_TARGET.id, app: COMPUTER_USE_DESKTOP_TARGET.label, kind: COMPUTER_USE_DESKTOP_TARGET.kind },
     crossApp: computerUseCrossAppCapability(),
-    screenshotPolicy: { sessionOnly: true, maxFiles: COMPUTER_USE_SCREENSHOT_MAX_FILES, maxBytes: COMPUTER_USE_SCREENSHOT_MAX_BYTES, maxAgeMs: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS },
+    screenshotPolicy: { sessionOnly: true, namespace: 'evidence', preview: 'latest-frame-memory', maxFiles: COMPUTER_USE_SCREENSHOT_MAX_FILES, maxBytes: COMPUTER_USE_SCREENSHOT_MAX_BYTES, maxAgeMs: COMPUTER_USE_SCREENSHOT_MAX_AGE_MS },
     pending: []
   }
 }
@@ -2524,6 +2550,9 @@ async function captureDesktopComputerUseScreenshot() {
     width: displayed.width,
     height: displayed.height,
     coordinateSpace: SCREENSHOT_COORDINATE_SPACE,
+    sourceWidth: shot.width,
+    sourceHeight: shot.height,
+    sourceOrigin: { x: shot.x, y: shot.y },
     inputBounds: { xMin: 0, yMin: 0, xMaxExclusive: displayed.width, yMaxExclusive: displayed.height },
     inputHint: 'click/scroll 的 x/y 直接使用本截图 width/height 的像素坐标；宿主会自动映射到完整桌面，禁止预先缩放。',
     scope: COMPUTER_USE_DESKTOP_TARGET.label,
@@ -2606,7 +2635,14 @@ async function modelComputerUseAction(input = {}) {
 async function desktopModelToolAction(input = {}, context = {}) {
   if (input.scope === 'computer') return modelComputerUseAction(input)
   await syncComputerUseIndicator()
-  if (input.scope === 'desktop') return ensureWindowsDesktopUi().action(input)
+  if (input.scope === 'desktop') {
+    const ui = ensureWindowsDesktopUi()
+    if (String(input.action || '') === 'screenshot') {
+      const payload = input.payload && typeof input.payload === 'object' ? input.payload : input
+      return desktopDeviceProvider.captureFrame({ force: payload.force === true, delivery: 'evidence-file' })
+    }
+    return ui.action(input)
+  }
   if (input.scope === 'memory') return modelMemoryAction(input)
   return modelBrowserAction(input, context)
 }
@@ -2714,15 +2750,17 @@ async function issueAgentTeamsAutopilotAuthorization(event, body) {
     defaultId: 1,
     cancelId: 1,
     noLink: true,
-    title: '确认代理团队自动驾驶设置',
-    message: '仅保存下面这一次设置，并更新当前明确授权的安全团队。',
+    title: '确认代理团队全局自动接力设置',
+    message: '保存一次作为全局默认；无需为每个团队重复保存。',
     detail: [
       `代理团队：${normalized.settings.enabled ? '开启' : '关闭'}`,
       `成员上限：${normalized.settings.maxMembers}`,
       `并行轮次上限：${normalized.settings.maxActiveTurns}`,
-      `自动驾驶：${normalized.settings.autopilotEnabled ? '开启' : '关闭'}`,
-      `自动追加轮次：${normalized.settings.autopilotMaxAdditionalRounds}（最多 200）`,
-      normalized.hostAuthorization === null ? '当前团队：不变更授权' : `当前团队：${normalized.hostAuthorization.teamId}`
+      `全局自动接力：${normalized.settings.autopilotEnabled ? '开启' : '关闭'}`,
+      `每个目标自动追加：${normalized.settings.autopilotMaxAdditionalRounds} 轮（最多 200）`,
+      normalized.hostAuthorization === null
+        ? '当前范围：先保存全局 Host 授权；安全团队将在下一次由你直接创建、提交计划或确认恢复时继承'
+        : `当前范围：立即同步团队 ${normalized.hostAuthorization.teamId} 所属负责人的完整安全团队组`
     ].join('\n')
   })
   if (decision.response !== 0) throw Object.assign(new Error('已取消代理团队自动驾驶设置。'), { code: 'HOST_AUTHORIZATION_DENIED' })
@@ -5997,11 +6035,31 @@ ipcMain.handle('workspace:chooseDirectory', event => {
 })
 ipcMain.handle('desktopDevice:action', async (event, input = {}) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) assertLocalRuntimeSender(event)
-  const result = await ensureWindowsDesktopUi().action(input)
-  if (String(input?.action || '') !== 'screenshot' || !result?.file) return result
-  const png = await readFile(result.file)
+  const ui = ensureWindowsDesktopUi()
+  if (String(input?.action || '') !== 'screenshot') return ui.action(input)
+  const payload = input.payload && typeof input.payload === 'object' ? input.payload : {}
+  const fallbackReason = String(payload.fallbackReason || '')
+  const legacyFilePoll = DESKTOP_DEVICE_LEGACY_FILE_POLL || fallbackReason === 'transfer-unavailable'
+  const sessionGeneration = computerUseSessionGeneration
+  const result = await desktopDeviceProvider.captureFrame({
+    force: payload.force === true,
+    delivery: legacyFilePoll ? 'preview-file' : 'buffer'
+  })
+  if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) {
+    desktopDeviceProvider.clearFrame()
+    if (legacyFilePoll) await ensureComputerUsePreviewScreenshotStore().clear()
+    throw Object.assign(new Error('Computer Use 会话已停止。'), { code: 'computer-use-disabled' })
+  }
+  if (legacyFilePoll) {
+    const png = await readFile(result.file)
+    if (!png.length || png.length > 12 * 1024 * 1024) throw Object.assign(new Error('桌面设备预览帧超过安全上限。'), { code: 'desktop-frame-too-large' })
+    return { ...result, data: `data:image/png;base64,${png.toString('base64')}`, transport: 'legacy-file-poll', fallbackReason: DESKTOP_DEVICE_LEGACY_FILE_POLL ? 'feature-flag' : fallbackReason }
+  }
+  const png = Buffer.isBuffer(result.bytes) ? result.bytes : Buffer.from(result.bytes || [])
   if (!png.length || png.length > 12 * 1024 * 1024) throw Object.assign(new Error('桌面设备预览帧超过安全上限。'), { code: 'desktop-frame-too-large' })
-  return { ...result, data: `data:image/png;base64,${png.toString('base64')}` }
+  const bytes = png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength)
+  const { bytes: _privateBytes, ...metadata } = result
+  return { ...metadata, bytes, mimeType: 'image/png', transport: 'array-buffer' }
 })
 ipcMain.handle('desktopAndroid:action', desktopShellOnly(input => desktopAndroidPanelAction(input)))
 

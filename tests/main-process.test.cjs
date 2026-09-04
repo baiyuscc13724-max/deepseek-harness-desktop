@@ -109,6 +109,10 @@ test('guest preload accepts 199 and 200 automatic rounds but rejects 201 before 
   assert.equal(Object.hasOwn(invocations.at(-1).value, 'hostAuthorization'), false, 'trusted Save may precede the first team without inventing scope')
   await assert.rejects(api.authorizeAgentTeamsAutopilotSettings({ ...base, autopilotMaxAdditionalRounds: 201 }), /代理团队自动接力设置无效/u)
   assert.equal(invocations.length, 3, '201 must be rejected before the official IPC capability request')
+  assert.match(source, /title: '确认代理团队全局自动接力设置'/u)
+  assert.match(source, /保存一次作为全局默认；无需为每个团队重复保存/u)
+  assert.match(source, /下一次由你直接创建、提交计划或确认恢复时继承/u)
+  assert.match(source, /所属负责人的完整安全团队组/u)
 })
 
 test('autopilot settings authorization is injected only for an exact managed Runtime request and revoked with Runtime', () => {

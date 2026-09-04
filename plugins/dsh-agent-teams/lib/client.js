@@ -11,6 +11,7 @@ window.__ModuleLoader__.load({
     var startTransition = typeof React.startTransition === "function" ? React.startTransition : function (work) { work(); };
     var NS = "agent-teams";
     var SUBAGENT_CATALOG_EVENT = "harness-desktop:open-subagent-catalog";
+    var TEAM_LIVE_STATUS_EVENT = "harness-desktop:agent-team-live-status";
 
     var zh = {
       title: "代理团队", loading: "正在载入团队工作区…", retry: "重试", loadError: "暂时无法更新团队信息：{error}。请重试；如果仍失败，可以返回对话继续工作。", actionError: "操作没有完成。请按页面提示处理后重试；如果仍失败，请返回负责人对话查看状态。技术详情：{error}",
@@ -19,11 +20,11 @@ window.__ModuleLoader__.load({
       research: "调研与核验", researchBody: "研究员收集资料，分析员交叉验证，负责人汇总结论。", build: "开发与审查", buildBody: "开发负责改动，审查负责风险，测试负责验证。", incident: "问题诊断", incidentBody: "诊断、修复与回归验证并行推进。", custom: "自定义团队", customBody: "只填写目标，由 AI 自动设计成员、职责、任务边界和协作方式。",
       active: "协作进行中", paused: "已由用户停止", pausedBody: "团队已停止，不会在后台继续。要恢复，请生成继续请求；页面会切换到对话供你确认发送。", continueTeam: "生成继续请求", failedNext: "有成员未能完成工作。请打开成员列表查看详情，再让负责人处理未完成任务。", closed: "团队已关闭", closedBody: "该团队不再接受成员协作；历史成员、任务和事件仍可查看。", unknown: "未知", status: "状态", objective: "团队目标", connection: "连接", live: "已更新", polling: "正在保持更新", stale: "信息可能不是最新", disconnected: "正在重新连接", workspaceIntro: "默认只展示现在需要关注的工作；完成内容和协作细节按需查看。",
       members: "成员", tasks: "任务", events: "协作事件", noMembers: "暂无成员", noTasks: "暂无任务", noEvents: "暂无协作事件", lead: "负责人", leadRole: "统筹目标和结果", openConversation: "查看实时工作", currentTask: "当前任务：{value}", model: "模型", mainModel: "主模型", subagentModel: "成员模型", inheritsMain: "与负责人相同", currentWork: "当前工作", listView: "列表", canvasView: "画布", canvasLabel: "团队实时画布", canvasHint: "选择成员可打开统一代理目录；连线表示分配、依赖、阻塞或文件冲突。", assignedRelation: "分配", dependsRelation: "依赖", blockedRelation: "阻塞", conflictRelation: "冲突", completedSummary: "已完成 {count} 项", noActiveTasks: "当前没有待处理或进行中的任务。", completedTasks: "已完成", taskHistory: "任务历史", historyHint: "完成的任务会自动移到这里，不再占用当前工作区。", openHistory: "查看历史 {count}", hideHistory: "收起历史", openMembers: "代理目录 {count}", openActivity: "动态 {count}", memberPanel: "团队成员", activityPanel: "协作动态", closePanel: "关闭侧栏", activeMembers: "当前成员", pastMembers: "过往成员", moreActions: "更多操作", fewerActions: "收起操作", workspaceSettings: "团队设置", archive: "历史", archivedTeams: "历史团队", activeTeamList: "进行中的团队", noArchivedTeams: "暂无历史团队", recentActivity: "最近动态", showMore: "再显示 {count} 条",
-      pending: "待处理", in_progress: "进行中", submitted: "待负责人验收", completed: "已验收完成", cancelled: "已取消", blocked: "受阻", ready: "等待任务", running: "工作中", idle: "本轮工作已完成", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已结束协作", failed: "失败", delivered: "已送达", closedStatus: "已关闭",
-      assignee: "执行成员", unassigned: "未分配", blockedBy: "正在等待：{value}", failedBy: "失败的前置任务：{value}", dependencySources: "还需其他团队完成：{value}", conflicts: "文件范围可能冲突：{value}", files: "文件：{value}", filesHidden: "为保护工作区信息，此页面不显示文件路径；需要时请让负责人核对。", taskFallback: "任务 {id}", lastActivity: "最后活动：{value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "任务详情", taskDetailUnavailable: "此任务已结束或当前无法读取。请返回任务板选择其他任务，或查看任务历史。", taskSelectionExpired: "任务信息刚刚更新，原详情已关闭。请从当前任务列表重新选择。", blockedTaskReason: "受阻原因", blockedTaskUnknown: "暂未提供具体阻塞原因。", blockedTaskNext: "下一步：等待列出的依赖完成；如果信息已过期，请让负责人刷新依赖或重新协调任务。", taskDependencies: "依赖任务", taskEvents: "相关实时事件", taskRef: "任务编号", taskBackToBoard: "返回任务板", taskWorkflow: "实时工作流", taskWorkflowHint: "状态和动态会随团队实时更新；没有可靠记录的环节不会猜测。", taskOverview: "任务概览", taskLiveEvents: "实时动态", taskLiveEventsHint: "这里只显示与当前任务有关的最新协作记录。", taskLiveConnected: "详情会随团队状态自动更新。", taskBlockedBranch: "当前阻塞", taskBlockedClear: "当前没有阻塞", taskBlockedBranchHint: "阻塞不是必经阶段；只有任务实时报告受阻时才会点亮。", taskStageCurrent: "当前阶段", taskStageReached: "已有记录", taskStageUpcoming: "尚未到达", taskStageUnknown: "暂无可靠记录", taskCreatedAt: "进入待处理", taskStartedAt: "开始执行", taskCompletedAt: "完成时间", taskResult: "成员成果", taskResultPreview: "已提交成果", taskResultTruncated: "成果较长，已显示安全截断版本。", taskNextStep: "当前下一步", taskNextPending: "等待负责人或成员认领；存在依赖时先完成依赖。", taskNextProgress: "执行成员正在推进；下方动态会持续更新。", taskNextCompleted: "任务已经完成，可在实时动态中回看相关协作。", taskTimelineLimited: "仅显示最新 {count} 条相关动态。",
+      pending: "待处理", in_progress: "进行中", submitted: "待负责人验收", completed: "已验收完成", cancelled: "已取消", blocked: "受阻", ready: "等待任务", running: "工作中", idle: "本轮工作已完成", provisioning: "正在启动", shutting_down: "正在停止", closing: "正在关闭", retired: "已结束协作", failed: "失败", queued: "已排队（未确认收件）", delivered: "已送达", closedStatus: "已关闭",
+      queuedHint: "队列状态只表示 Host transport 已接受；不表示正文已注入或收件模型已读取。", assignee: "执行成员", unassigned: "未分配", blockedBy: "正在等待：{value}", failedBy: "失败的前置任务：{value}", dependencySources: "还需其他团队完成：{value}", conflicts: "文件范围可能冲突：{value}", files: "文件：{value}", filesHidden: "为保护工作区信息，此页面不显示文件路径；需要时请让负责人核对。", taskFallback: "任务 {id}", lastActivity: "最后活动：{value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "任务详情", taskDetailUnavailable: "此任务已结束或当前无法读取。请返回任务板选择其他任务，或查看任务历史。", taskSelectionExpired: "任务信息刚刚更新，原详情已关闭。请从当前任务列表重新选择。", blockedTaskReason: "受阻原因", blockedTaskUnknown: "暂未提供具体阻塞原因。", blockedTaskNext: "下一步：等待列出的依赖完成；如果信息已过期，请让负责人刷新依赖或重新协调任务。", taskDependencies: "依赖任务", taskEvents: "相关实时事件", taskRef: "任务编号", taskBackToBoard: "返回任务板", taskWorkflow: "实时工作流", taskWorkflowHint: "状态和动态会随团队实时更新；没有可靠记录的环节不会猜测。", taskOverview: "任务概览", taskLiveEvents: "实时动态", taskLiveEventsHint: "这里只显示与当前任务有关的最新协作记录。", taskLiveConnected: "详情会随团队状态自动更新。", taskBlockedBranch: "当前阻塞", taskBlockedClear: "当前没有阻塞", taskBlockedBranchHint: "阻塞不是必经阶段；只有任务实时报告受阻时才会点亮。", taskStageCurrent: "当前阶段", taskStageReached: "已有记录", taskStageUpcoming: "尚未到达", taskStageUnknown: "暂无可靠记录", taskCreatedAt: "进入待处理", taskStartedAt: "开始执行", taskCompletedAt: "完成时间", taskResult: "成员成果", taskResultPreview: "已提交成果", taskResultTruncated: "成果较长，已显示安全截断版本。", taskNextStep: "当前下一步", taskNextPending: "等待负责人或成员认领；存在依赖时先完成依赖。", taskNextProgress: "执行成员正在推进；下方动态会持续更新。", taskNextCompleted: "任务已经完成，可在实时动态中回看相关协作。", taskTimelineLimited: "仅显示最新 {count} 条相关动态。",
       quickActions: "快捷提示", addMember: "添加成员", newPeerTeam: "评估是否需要新团队", createTask: "创建任务", coordinate: "协调团队", summarize: "汇总进展", closeTeam: "请求关闭", newTeam: "创建新团队", draftOnly: "操作会写入对话输入框并切回对话，不会自动发送。", draftSet: "已放入对话输入框。请切换到“对话”检查并发送；系统不会自动发送。",
       teamsOverview: "团队总览", teamCount: "共 {count} 个团队", activeTeams: "活跃 {count}", closedTeams: "已关闭 {count}", switchTeam: "切换到团队：{name}", crossTeam: "跨团队动态", noCrossTeam: "暂无跨团队动态", backgroundHint: "切换团队或页面不会停止后台成员。", teamTasks: "{active} 进行中 · {done} 已完成", lastUpdated: "更新于 {value}",
-      currentSession: "当前会话", revision: "状态版本 {value}", settingsTitle: "代理团队", settingsDescription: "启用后只需正常描述目标，AI 自动判断是否使用团队；简单任务保持单人执行。两项数值都是上限，不是要求 AI 固定凑满的人数；若希望最多 8 名成员同时启动，请将两项都设为 8。快速建队和后续扩员都会遵守这些设置。数值越高通常会使用更多模型额度并增加费用。", settingsEnabled: "启用自动团队", settingsMaxMembers: "每个团队的成员上限", settingsMaxActiveTurns: "同时工作的成员上限（所有团队合计）", settingsAutopilotEnabled: "自动接力，不用发送“继续”", settingsAutopilotMaxAdditionalRounds: "每个目标最多自动多做几轮", settingsAutopilotHint: "自动接力默认勾选。点击保存并完成一次 Desktop Host 确认后即可生效，即使还没有团队也会记住此偏好；若当前存在可安全绑定的负责人、活动 Goal 与团队，同一次保存会同步更新精确授权。正常等待成员会被停放；只有持久任务提交、成员失败或依赖变化才会唤醒，Stop、真正的安全阻塞和权限异常仍需你手动恢复。", settingsAutopilotScopeRequired: "开启自动接力需要当前负责人、活动 Goal 与安全团队的精确 Host 授权；请回到负责人会话再打开此设置。", settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "成员上限请输入 1 到 8，自动接力轮数请输入 1 到 200。", settingsCloseTeamsFirst: "请先在负责人会话中关闭所有活动团队，再关闭代理团队功能。"
+      currentSession: "当前会话", revision: "状态版本 {value}", settingsTitle: "代理团队", settingsDescription: "启用后只需正常描述目标，AI 自动判断是否使用团队；简单任务保持单人执行。两项数值都是上限，不是要求 AI 固定凑满的人数；若希望最多 8 名成员同时启动，请将两项都设为 8。快速建队和后续扩员都会遵守这些设置。数值越高通常会使用更多模型额度并增加费用。", settingsEnabled: "启用自动团队", settingsMaxMembers: "每个团队的成员上限", settingsMaxActiveTurns: "同时工作的成员上限（所有团队合计）", settingsAutopilotEnabled: "全局自动接力，不用发送“继续”", settingsAutopilotMaxAdditionalRounds: "每个目标最多自动多做几轮", settingsAutopilotHint: "这是全局默认：点击保存并完成一次 Desktop Host 确认即可，无需为每个团队重复保存。当前完整且安全的负责人团队组会立即同步；之后的新团队或尚未绑定的安全团队，会在下一次由你直接创建团队、提交计划或确认两阶段恢复时继承精确授权。正常等待成员会被稳定停放；只有持久任务提交、成员失败或依赖变化才会唤醒并按需追加一轮。普通 Goal 轮、状态读取和进度消息不能恢复缺失或已撤销的授权；Stop、真正的安全阻塞和权限异常仍需明确恢复。", settingsAutopilotScopeRequired: "开启自动接力需要当前负责人、活动 Goal 与安全团队的精确 Host 授权；请回到负责人会话再打开此设置。", settingsSave: "保存设置", settingsSaving: "正在保存…", settingsSaved: "设置已保存", settingsRange: "成员上限请输入 1 到 8，自动接力轮数请输入 1 到 200。", settingsCloseTeamsFirst: "请先在负责人会话中关闭所有活动团队，再关闭代理团队功能。"
     };
     var en = {
       title: "Agent Teams", loading: "Loading team workspace…", retry: "Retry", loadError: "Team information could not be updated: {error}. Try again; if it still fails, you can continue working in Chat.", actionError: "The action did not finish. Follow the guidance on this page, then try again. If it still fails, return to the lead conversation to review status. Technical details: {error}",
@@ -32,17 +33,23 @@ window.__ModuleLoader__.load({
       research: "Research & verify", researchBody: "A researcher gathers evidence, an analyst cross-checks it, and the lead synthesizes findings.", build: "Build & review", buildBody: "Development makes changes, Review checks risk, and Test verifies the result.", incident: "Diagnose an issue", incidentBody: "Diagnosis, remediation, and regression verification move in parallel.", custom: "Custom team", customBody: "Enter only the objective; AI designs the members, responsibilities, task boundaries, and collaboration pattern.",
       active: "Collaboration active", paused: "Stopped by user", pausedBody: "This team is stopped and will not continue in the background. To resume, prepare a continue request; the page returns to Chat for review and sending.", continueTeam: "Prepare continue request", failedNext: "A member could not finish its work. Open the member list for details, then ask the lead to handle unfinished tasks.", closed: "Team closed", closedBody: "This team no longer accepts member collaboration. Its members, tasks, and events remain available.", unknown: "Unknown", status: "Status", objective: "Team objective", connection: "Connection", live: "Up to date", polling: "Keeping up to date", stale: "Information may be out of date", disconnected: "Reconnecting", workspaceIntro: "Only work that needs attention is shown by default. Completed work and collaboration details stay available on demand.",
       members: "Members", tasks: "Tasks", events: "Collaboration events", noMembers: "No members", noTasks: "No tasks", noEvents: "No collaboration events", lead: "Lead", leadRole: "Plans the goal and owns the result", openConversation: "View live work", currentTask: "Current task: {value}", model: "Model", mainModel: "Main model", subagentModel: "Member model", inheritsMain: "Same as lead", currentWork: "Current work", listView: "List", canvasView: "Canvas", canvasLabel: "Live team canvas", canvasHint: "Select a member to open the unified agent catalog. Lines show assignment, dependency, blocking, or file conflicts.", assignedRelation: "Assigned", dependsRelation: "Depends on", blockedRelation: "Blocked by", conflictRelation: "Conflict", completedSummary: "{count} completed", noActiveTasks: "No pending or in-progress tasks.", completedTasks: "Completed", taskHistory: "Task history", historyHint: "Completed tasks move here automatically instead of filling the current workspace.", openHistory: "View history {count}", hideHistory: "Hide history", openMembers: "Agents {count}", openActivity: "Activity {count}", memberPanel: "Team members", activityPanel: "Collaboration activity", closePanel: "Close sidebar", activeMembers: "Current members", pastMembers: "Past members", moreActions: "More actions", fewerActions: "Hide actions", workspaceSettings: "Team settings", archive: "History", archivedTeams: "Team history", activeTeamList: "Active teams", noArchivedTeams: "No archived teams", recentActivity: "Recent activity", showMore: "Show {count} more",
-      pending: "Pending", in_progress: "In progress", submitted: "Awaiting lead acceptance", completed: "Accepted and completed", cancelled: "Cancelled", blocked: "Blocked", ready: "Waiting for work", running: "Working", idle: "Finished this turn", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "No longer active", failed: "Failed", delivered: "Delivered", closedStatus: "Closed",
-      assignee: "Assignee", unassigned: "Unassigned", blockedBy: "Waiting for: {value}", failedBy: "Failed prerequisites: {value}", dependencySources: "Waiting for another team: {value}", conflicts: "File boundaries may conflict: {value}", files: "Files: {value}", filesHidden: "File paths are hidden here to protect workspace information. Ask the lead to verify them when needed.", taskFallback: "Task {id}", lastActivity: "Last activity: {value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "Task detail", taskDetailUnavailable: "This task has finished or cannot be read right now. Return to the task board or review task history.", taskSelectionExpired: "Task information just changed, so the old detail was closed. Select it again from the current task list.", blockedTaskReason: "Why this task is blocked", blockedTaskUnknown: "No specific blocking reason is available yet.", blockedTaskNext: "Next: wait for the listed dependencies. If this information is stale, ask the lead to refresh dependencies or coordinate the task again.", taskDependencies: "Dependencies", taskEvents: "Related live events", taskRef: "Task ID", taskBackToBoard: "Back to task board", taskWorkflow: "Live workflow", taskWorkflowHint: "Status and activity update with the team. Stages without reliable evidence are never guessed.", taskOverview: "Task overview", taskLiveEvents: "Live activity", taskLiveEventsHint: "Only the latest collaboration records related to this task are shown here.", taskLiveConnected: "This detail updates with the team state.", taskBlockedBranch: "Current blocker", taskBlockedClear: "No current blocker", taskBlockedBranchHint: "Blocking is not a required stage. It lights up only when the task reports a live blocker.", taskStageCurrent: "Current stage", taskStageReached: "Recorded", taskStageUpcoming: "Not reached", taskStageUnknown: "No reliable record", taskCreatedAt: "Entered pending", taskStartedAt: "Work started", taskCompletedAt: "Completed at", taskResult: "Member result", taskResultPreview: "Result delivered", taskResultTruncated: "This result was long, so a safely truncated version is shown.", taskNextStep: "Current next step", taskNextPending: "Waiting for the lead or a member to claim it; prerequisites finish first.", taskNextProgress: "The assigned member is working; live activity below will keep updating.", taskNextCompleted: "The task is complete. Review related collaboration in the live activity.", taskTimelineLimited: "Showing only the latest {count} related updates.",
+      pending: "Pending", in_progress: "In progress", submitted: "Awaiting lead acceptance", completed: "Accepted and completed", cancelled: "Cancelled", blocked: "Blocked", ready: "Waiting for work", running: "Working", idle: "Finished this turn", provisioning: "Starting", shutting_down: "Stopping", closing: "Closing", retired: "No longer active", failed: "Failed", queued: "Queued (recipient delivery unconfirmed)", delivered: "Delivered", closedStatus: "Closed",
+      queuedHint: "Queued means the Host transport accepted the body; it does not prove recipient injection or that the recipient model read it.", assignee: "Assignee", unassigned: "Unassigned", blockedBy: "Waiting for: {value}", failedBy: "Failed prerequisites: {value}", dependencySources: "Waiting for another team: {value}", conflicts: "File boundaries may conflict: {value}", files: "Files: {value}", filesHidden: "File paths are hidden here to protect workspace information. Ask the lead to verify them when needed.", taskFallback: "Task {id}", lastActivity: "Last activity: {value}", deliveryEvent: "{from} → {to} · {status}", crossDelivery: "{fromTeam} → {toTeam} · {from} → {to} · {status}", taskDetail: "Task detail", taskDetailUnavailable: "This task has finished or cannot be read right now. Return to the task board or review task history.", taskSelectionExpired: "Task information just changed, so the old detail was closed. Select it again from the current task list.", blockedTaskReason: "Why this task is blocked", blockedTaskUnknown: "No specific blocking reason is available yet.", blockedTaskNext: "Next: wait for the listed dependencies. If this information is stale, ask the lead to refresh dependencies or coordinate the task again.", taskDependencies: "Dependencies", taskEvents: "Related live events", taskRef: "Task ID", taskBackToBoard: "Back to task board", taskWorkflow: "Live workflow", taskWorkflowHint: "Status and activity update with the team. Stages without reliable evidence are never guessed.", taskOverview: "Task overview", taskLiveEvents: "Live activity", taskLiveEventsHint: "Only the latest collaboration records related to this task are shown here.", taskLiveConnected: "This detail updates with the team state.", taskBlockedBranch: "Current blocker", taskBlockedClear: "No current blocker", taskBlockedBranchHint: "Blocking is not a required stage. It lights up only when the task reports a live blocker.", taskStageCurrent: "Current stage", taskStageReached: "Recorded", taskStageUpcoming: "Not reached", taskStageUnknown: "No reliable record", taskCreatedAt: "Entered pending", taskStartedAt: "Work started", taskCompletedAt: "Completed at", taskResult: "Member result", taskResultPreview: "Result delivered", taskResultTruncated: "This result was long, so a safely truncated version is shown.", taskNextStep: "Current next step", taskNextPending: "Waiting for the lead or a member to claim it; prerequisites finish first.", taskNextProgress: "The assigned member is working; live activity below will keep updating.", taskNextCompleted: "The task is complete. Review related collaboration in the live activity.", taskTimelineLimited: "Showing only the latest {count} related updates.",
       quickActions: "Prompt shortcuts", addMember: "Add member", newPeerTeam: "Check whether another team is needed", createTask: "Create task", coordinate: "Coordinate team", summarize: "Summarize progress", closeTeam: "Request shutdown", newTeam: "Create another team", draftOnly: "Actions write to the Chat composer and return to Chat without sending.", draftSet: "Added to the Chat composer. Switch to Chat to review and send; it will not be sent automatically.",
       teamsOverview: "Team overview", teamCount: "{count} teams", activeTeams: "{count} active", closedTeams: "{count} closed", switchTeam: "Switch to team: {name}", crossTeam: "Cross-team activity", noCrossTeam: "No cross-team activity", backgroundHint: "Switching teams or views never stops background members.", teamTasks: "{active} active · {done} done", lastUpdated: "Updated {value}",
-      currentSession: "Current session", revision: "Status version {value}", settingsTitle: "Agent Teams", settingsDescription: "After enabling, describe goals normally and AI decides whether to use a team; simple work stays solo. Both values are ceilings, not a target roster size. To allow up to eight members to start together, set both limits to 8. Bootstrap and later expansion follow these settings. Higher values usually use more model quota and may cost more.", settingsEnabled: "Enable automatic teams", settingsMaxMembers: "Member limit per team", settingsMaxActiveTurns: "Members working at once (all teams combined)", settingsAutopilotEnabled: "Continue automatically without asking me to send “continue”", settingsAutopilotMaxAdditionalRounds: "Maximum extra rounds per goal", settingsAutopilotHint: "Automatic continuation is selected by default. Click Save and complete one Desktop Host confirmation to use it; the preference is remembered even before a team exists. If a lead, active Goal, and team can be bound safely, the same Save also refreshes their exact authorization. Normal member waiting is parked; only a durable task submission, member failure, or dependency change wakes the lead. Stop, real safety blockers, and permission anomalies still require manual recovery.", settingsAutopilotScopeRequired: "Enabling automatic continuation requires exact Host authorization for the current lead, active Goal, and safe team. Return to the lead conversation before enabling it.", settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter 1 to 8 for member limits and 1 to 200 for automatic continuation rounds.", settingsCloseTeamsFirst: "Close every active team from its lead conversation before disabling Agent Teams."
+      currentSession: "Current session", revision: "Status version {value}", settingsTitle: "Agent Teams", settingsDescription: "After enabling, describe goals normally and AI decides whether to use a team; simple work stays solo. Both values are ceilings, not a target roster size. To allow up to eight members to start together, set both limits to 8. Bootstrap and later expansion follow these settings. Higher values usually use more model quota and may cost more.", settingsEnabled: "Enable automatic teams", settingsMaxMembers: "Member limit per team", settingsMaxActiveTurns: "Members working at once (all teams combined)", settingsAutopilotEnabled: "Global automatic continuation without asking me to send “continue”", settingsAutopilotMaxAdditionalRounds: "Maximum extra rounds per goal", settingsAutopilotHint: "This is a global default: click Save and complete one Desktop Host confirmation once, not once per team. The complete safe team group for the current lead is synchronized immediately; new or unbound safe teams inherit exact authorization the next time you directly create a team, commit its plan, or confirm two-phase Resume. Normal member waiting is parked; only a durable task submission, member failure, or dependency change wakes the lead and grants exactly the needed round. Ordinary Goal rounds, status reads, and progress messages cannot restore missing or revoked authority. Stop, real safety blockers, and permission anomalies still require explicit recovery.", settingsAutopilotScopeRequired: "Enabling automatic continuation requires exact Host authorization for the current lead, active Goal, and safe team. Return to the lead conversation before enabling it.", settingsSave: "Save settings", settingsSaving: "Saving…", settingsSaved: "Settings saved", settingsRange: "Enter 1 to 8 for member limits and 1 to 200 for automatic continuation rounds.", settingsCloseTeamsFirst: "Close every active team from its lead conversation before disabling Agent Teams."
     };
     Object.assign(zh, {
       recoveryTitle: "恢复失败成员", recoveryBody: "选择重试会继续同一成员并保留任务 claim/lease；替换会撤销旧 claim、保留 checkpoint 与失败审计，再创建一个可见同级成员。不会自动执行。", recoveryRetry: "重试成员", recoveryReplace: "替换成员", recoveryConfirmRetry: "确认重试 {name}？这会向同一成员发送一次有界恢复提示，并继续使用原任务 claim/lease。", recoveryConfirmReplace: "确认替换 {name}？这会产生一次新的成员模型启动成本，撤销旧 claim/lease，并把同一任务预绑定给可见替代成员。", recoveryConfirm: "确认并继续", recoveryCancel: "取消", recoveryWorkingRetry: "正在重试成员…", recoveryWorkingReplace: "正在替换成员…", recoverySuccessRetry: "恢复提示已送达同一成员；原任务 claim/lease 保持不变。", recoverySuccessReplace: "替代成员已创建并接手同一批任务；旧 claim/lease 已撤销并保留审计。", recoveryError: "恢复没有完成：{error}。请刷新团队状态，按页面提示处理后再明确重试；不要连续点击。", recoveryUnknownTitle: "恢复结果待核对", recoveryUnknownBody: "请求 {request} 已停在 {phase}。系统不会重复启动成员或重复发送工作提示；请核对可审计记录后明确标记结果。", recoveryMarkDelivered: "确认已送达", recoveryMarkNotDelivered: "确认未送达", recoveryReconcileConfirmDelivered: "确认这次恢复已送达？只会结算原 request，不会再次发送。", recoveryReconcileConfirmNotDelivered: "确认这次恢复未送达？系统会安全收束原 attempt，之后才允许新的明确恢复。", recoveryReconcileSuccess: "原恢复 request 已完成核对。", recoveryReconcileWorking: "正在核对…",
     });
     Object.assign(en, {
       recoveryTitle: "Recover failed member", recoveryBody: "Retry continues the exact member and preserves task claim/lease. Replace revokes the old claim, preserves checkpoint and failure audit, then creates one visible same-level member. Nothing runs automatically.", recoveryRetry: "Retry member", recoveryReplace: "Replace member", recoveryConfirmRetry: "Retry {name}? This sends one bounded recovery prompt to the same member and keeps the original task claim/lease.", recoveryConfirmReplace: "Replace {name}? This incurs one new member-model start, revokes the old claim/lease, and pre-binds the same tasks to a visible replacement.", recoveryConfirm: "Confirm and continue", recoveryCancel: "Cancel", recoveryWorkingRetry: "Retrying member…", recoveryWorkingReplace: "Replacing member…", recoverySuccessRetry: "The recovery prompt was delivered to the same member. The original task claim/lease remains unchanged.", recoverySuccessReplace: "A visible replacement was created for the same tasks. The old claim/lease was revoked and retained in audit history.", recoveryError: "Recovery did not finish: {error}. Refresh team status, follow the next step shown here, then explicitly try again. Do not click repeatedly.", recoveryUnknownTitle: "Recovery outcome needs review", recoveryUnknownBody: "Request {request} stopped at {phase}. The system will not start another member or resend work; review the audit record, then explicitly mark the outcome.", recoveryMarkDelivered: "Confirm delivered", recoveryMarkNotDelivered: "Confirm not delivered", recoveryReconcileConfirmDelivered: "Confirm that this recovery was delivered? This settles the original request and never sends it again.", recoveryReconcileConfirmNotDelivered: "Confirm that this recovery was not delivered? The original attempt is safely closed before another explicit recovery is allowed.", recoveryReconcileSuccess: "The original recovery request was reconciled.", recoveryReconcileWorking: "Reconciling…",
+    });
+    Object.assign(zh, {
+      liveStatusTitle: "实时状态", liveStatusView: "查看实时状态", liveStatusUpdated: "更新于 {value}", liveStatusRevision: "revision {value}", liveStatusSnapshotHint: "聊天中的错误文字是发送时快照；这里以 Host 权威状态为准并持续更新。", liveStatusRegistering: "注册中", liveStatusQueued: "排队中", liveStatusRunning: "执行中", liveStatusContinuable: "可续用", liveStatusSubmitted: "提交待验收", liveStatusBackpressure: "容量背压", liveStatusProviderTransient: "提供方暂时异常", liveStatusLifecycleTimeout: "生命周期超时", liveStatusOutcomeUnknown: "结果待核对", liveStatusPaused: "已停止", liveStatusClosed: "已关闭", liveStatusIdle: "空闲", liveStatusRetryable: "可重试", liveStatusNotRetryable: "不可自动重试", liveStatusPartialUntrusted: "存在部分输出（未采信）", liveStatusAdmission: "并发 {active}/{limit} · 排队 {queued}", liveStatusDetail: "{code} · {category} · {stage}", liveStatusNextView: "下一步：查看实时状态", liveStatusNextWait: "下一步：等待容量释放", liveStatusNextRetry: "下一步：核对当前任务后重试", liveStatusNextReconcile: "下一步：核对未知结果", liveStatusNextReview: "下一步：负责人验收提交", liveStatusNextResume: "下一步：由用户恢复团队", liveStatusNextNone: "当前无需操作",
+    });
+    Object.assign(en, {
+      liveStatusTitle: "Live status", liveStatusView: "View live status", liveStatusUpdated: "Updated {value}", liveStatusRevision: "revision {value}", liveStatusSnapshotHint: "Error prose in Chat is a sent-time snapshot. This card follows Host-authoritative state and keeps updating.", liveStatusRegistering: "Registering", liveStatusQueued: "Queued", liveStatusRunning: "Running", liveStatusContinuable: "Continuable", liveStatusSubmitted: "Awaiting acceptance", liveStatusBackpressure: "Backpressure", liveStatusProviderTransient: "Provider transient", liveStatusLifecycleTimeout: "Lifecycle timeout", liveStatusOutcomeUnknown: "Outcome unknown", liveStatusPaused: "Stopped", liveStatusClosed: "Closed", liveStatusIdle: "Idle", liveStatusRetryable: "Retryable", liveStatusNotRetryable: "No automatic retry", liveStatusPartialUntrusted: "Partial output present (not trusted)", liveStatusAdmission: "{active}/{limit} active · {queued} queued", liveStatusDetail: "{code} · {category} · {stage}", liveStatusNextView: "Next: view live status", liveStatusNextWait: "Next: wait for capacity", liveStatusNextRetry: "Next: review the current task, then retry", liveStatusNextReconcile: "Next: reconcile the unknown outcome", liveStatusNextReview: "Next: lead reviews the submission", liveStatusNextResume: "Next: user resumes the team", liveStatusNextNone: "No action needed",
     });
     Object.assign(zh, {
       projectEntryTitle: "多人连接（预览）", projectEntryIntro: "本机成员可以执行团队任务；其他电脑目前只能安全配对、建立加密连接并查看在线状态。", projectCreate: "创建安全连接空间", projectCreating: "正在创建…", projectName: "项目名称", projectNamePlaceholder: "例如：产品发布协作", projectOwner: "你的显示名称", projectOwnerPlaceholder: "例如：负责人", projectNotCreated: "尚未创建连接空间", projectReady: "安全连接配置已就绪", projectPreviewBadge: "仅连接预览", projectRef: "项目 ID", projectMembers: "成员 {count}", projectRevision: "权限版本 {value}", projectLocalMode: "本机智能团队", projectLocalModeHint: "AI 自动判断并组建必要的代理团队。", projectLanMode: "同一局域网", projectLanReady: "已可建立安全的局域网连接", projectLanWaiting: "尚未启动局域网连接", projectLanDiscovery: "局域网配对", projectLanPending: "不会广播扫描其他设备；一次性批准信息会安全携带固定入口和设备凭据。", projectLanEndpoint: "连接地址 {host}:{port}", projectRefresh: "刷新状态", projectRemoteMode: "不在同一网络", projectRemoteHint: "通过中转服务建立端到端加密连接；中转服务只能转发加密数据，不能读取内容。", projectInviteName: "受邀成员显示名称", projectInviteNamePlaceholder: "例如：评审", projectInviteRole: "成员角色", projectCreateInvite: "生成远程邀请", projectInviteCode: "一次性邀请信息", projectCopy: "复制", projectCopied: "已复制", projectRelayUrl: "远程连接地址", projectRelayPlaceholder: "wss://relay.example.com", projectSaveRelay: "保存连接地址", projectConnectRemote: "建立远程连接", projectDisconnectRemote: "断开远程连接", projectRemoteConnected: "远程连接已建立", projectRemoteDisconnected: "远程连接未建立", projectChannelPending: "还差一步：双方完成密钥交换后才能连接。", projectHypoMux: "本功能不会使用下载加速通道同步协作内容。", projectAdvanced: "局域网与远程连接", projectUnavailable: "暂时无法读取多人连接状态：{error}。请重试；如果仍失败，请检查连接信息。", owner: "所有者", maintainer: "维护者", contributor: "贡献者", reviewer: "评审", observer: "观察者"
@@ -807,6 +814,7 @@ window.__ModuleLoader__.load({
         "@media(max-width:760px){.dat-plan-grid,.dat-assurance-grid{grid-template-columns:1fr}.dat-assurance-section-wide{grid-column:auto}}",
         "@media(max-width:620px){.dat-workspace-nav{overflow-x:auto;border-radius:10px}.dat-btn{min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}.dat-workspace-nav button{box-sizing:border-box;min-height:44px;max-width:calc(100vw - 28px)}.dat-plan-lifecycle-head{display:block}.dat-plan-lifecycle-head>.dat-row{margin-top:8px}.dat-plan-steps,.dat-preflight-grid{grid-template-columns:1fr}.dat-project-tasks-form{grid-template-columns:1fr}.dat-workspace-view-head{display:block}.dat-workspace-view-actions{justify-content:flex-start;margin-top:9px}.dat-schedule-row,.dat-participant-row{grid-template-columns:minmax(0,1fr)}.dat-participant-state{text-align:left}.dat-team-mode-bar{align-items:flex-start;flex-direction:column}.dat-team-mode-actions{width:100%;justify-content:space-between}.dat-member-recovery-head{display:block}.dat-member-recovery-actions{display:grid;grid-template-columns:1fr}.dat-member-recovery-actions .dat-btn{width:100%}.dat-active-shell .dat-inspector{width:100%;border-radius:0}.dat-task-focus-head{align-items:flex-start}.dat-task-focus-head-copy{align-items:flex-start;flex-direction:column}.dat-task-focus-head>.dat-row{align-self:flex-start}.dat-task-focus-body{padding:12px}.dat-task-focus-hero{display:block}.dat-task-focus-hero>.dat-badge{margin-top:8px}.dat-task-stage-track{grid-template-columns:1fr;gap:6px}.dat-task-stage-arrow{transform:rotate(90deg)}.dat-task-block-row{grid-template-columns:1fr;margin-top:7px}.dat-task-block-branch{grid-column:auto}}",
       ].join("\n");
+      style.textContent += "\n.dat-live-status{box-sizing:border-box;display:grid;gap:10px;margin:0 0 14px;padding:13px 14px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#2f7cf6) 35%,var(--dsw-alias-border-l2));border-radius:12px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,var(--dsw-alias-brand-primary,#2f7cf6) 8%)}.dat-live-status[data-status=outcome_unknown],.dat-live-status[data-status=lifecycle_timeout]{border-color:var(--dsw-alias-state-warn-primary)}.dat-live-status[data-status=provider_transient]{border-color:var(--dsw-alias-state-error-secondary)}.dat-live-status-head,.dat-live-status-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.dat-live-status-title{margin:0;font-size:14px}.dat-live-status-copy{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}.dat-live-status-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dat-live-status .dat-btn{min-width:44px;min-height:44px}.dat-live-status .dat-btn:active{transform:translateY(1px)}.dat-live-status-detail{margin:0;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);font-size:12px;overflow-wrap:anywhere}.dat-live-status-detail strong{color:var(--dsw-alias-label-primary)}@media(max-width:560px){.dat-live-status-head,.dat-live-status-meta{align-items:flex-start;flex-direction:column}.dat-live-status .dat-btn{width:100%}}@media(prefers-reduced-motion:reduce){.dat-live-status,.dat-live-status *{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}}";
       document.head.appendChild(style);
     }
 
@@ -844,47 +852,109 @@ window.__ModuleLoader__.load({
         return postAction(sessionId, "settings", Object.assign({}, payload, { hostAuthorizationCapability: authorization.authorizationId }));
       });
     }
+    function safeLiveInteger(value) { return Number.isSafeInteger(value) && value >= 0 ? value : 0; }
+    function taskOrderingMarker(task) { return [taskId(task), safeLiveInteger(task.revision), safeLiveInteger(task.eventSequence), task.status || task.state || "", task.updatedAt || ""]; }
+    function teamOrderingMarker(team) {
+      return [teamId(team), safeLiveInteger(team.revision), safeLiveInteger(team.pauseEpoch), safeLiveInteger(team.eventSequence), team.status || team.state || "", team.updatedAt || "", (team.tasks || []).map(taskOrderingMarker)];
+    }
+    function teamScopedSemanticMarker(fullTeam, boardTeam) {
+      return JSON.stringify([fullTeam ?? null, boardTeam ?? null]);
+    }
     function teamSnapshotVersion(snapshot) {
       if (!snapshot || typeof snapshot !== "object") return "";
-      var config = snapshot.config || snapshot.settings || {};
-      var teams = teamsFromSnapshot(snapshot);
-      var markers = teams.map(function (team) {
-        return [teamId(team), team.revision || "", team.updatedAt || "", team.status || team.state || ""];
-      });
+      var config = snapshot.config || snapshot.settings || {}, teams = teamsFromSnapshot(snapshot), board = snapshot.projectTeamBoard || {};
+      var markers = teams.map(teamOrderingMarker), boardMarkers = (board.teams || []).map(teamOrderingMarker);
       if (teams.some(function (team) { return !team.revision && !team.updatedAt; })) return JSON.stringify(snapshot);
       var authorization = snapshot.autopilotAuthorization || null;
       var authorizationMarker = authorization && [authorization.rootSessionId, authorization.projectKey, authorization.goalId, authorization.teamId, authorization.pauseEpoch, authorization.teamScopeHash];
-      return JSON.stringify([!!snapshot.enabled, config.maxMembers || 0, config.maxActiveTurns || 0, !!config.autopilotEnabled, config.autopilotMaxAdditionalRounds || 0, authorizationMarker, markers]);
+      return JSON.stringify([snapshot.cursor || "", board.cursor || "", !!snapshot.enabled, config.maxMembers || 0, config.maxActiveTurns || 0, !!config.autopilotEnabled, config.autopilotMaxAdditionalRounds || 0, authorizationMarker, markers, boardMarkers]);
+    }
+    function teamSnapshotClock(snapshot, selectedTeamId, stream) {
+      var teams = teamsFromSnapshot(snapshot), boardTeams = snapshot && snapshot.projectTeamBoard && Array.isArray(snapshot.projectTeamBoard.teams) ? snapshot.projectTeamBoard.teams : [];
+      var wanted = selectedTeamId || teamId(snapshot && snapshot.team || {}) || "", fullTeam = teams.find(function (candidate) { return teamId(candidate) === wanted; }), boardTeam = boardTeams.find(function (candidate) { return teamId(candidate) === wanted; }), team = fullTeam || boardTeam || teams[0] || boardTeams[0] || {};
+      if (!fullTeam && teamId(team)) fullTeam = teams.find(function (candidate) { return teamId(candidate) === teamId(team); });
+      if (!boardTeam && teamId(team)) boardTeam = boardTeams.find(function (candidate) { return teamId(candidate) === teamId(team); });
+      var tasks = team.tasks || [], liveStatus = team.liveStatus || {}, streamMeta = stream || {}, taskClocks = {};
+      tasks.forEach(function (task) { var id = taskId(task); if (id) taskClocks[id] = { revision: safeLiveInteger(task.revision), eventSequence: safeLiveInteger(task.eventSequence) }; });
+      return { teamId: teamId(team), revision: Math.max(safeLiveInteger(team.revision), safeLiveInteger(liveStatus.revision)), pauseEpoch: Math.max(safeLiveInteger(team.pauseEpoch), safeLiveInteger(liveStatus.pauseEpoch)), taskRevision: tasks.reduce(function (latest, task) { return Math.max(latest, safeLiveInteger(task.revision)); }, 0), eventSequence: Math.max(safeLiveInteger(liveStatus.eventSequence), tasks.reduce(function (latest, task) { return Math.max(latest, safeLiveInteger(task.eventSequence)); }, 0)), taskClocks: taskClocks, semanticMarker: teamScopedSemanticMarker(fullTeam, boardTeam), streamId: typeof streamMeta.streamId === "string" ? streamMeta.streamId : "", streamSequence: safeLiveInteger(streamMeta.sequence), updatedAt: Date.parse(team.updatedAt || liveStatus.updatedAt || 0) || 0 };
+    }
+    function olderTeamSnapshot(next, current) {
+      if (!current || !current.teamId || !next || next.teamId !== current.teamId) return false;
+      if (next.streamId && current.streamId && next.streamId === current.streamId && next.streamSequence && current.streamSequence && next.streamSequence <= current.streamSequence) return true;
+      if (next.pauseEpoch !== current.pauseEpoch) return next.pauseEpoch < current.pauseEpoch;
+      if (next.revision !== current.revision) return next.revision < current.revision;
+      if (typeof next.semanticMarker === "string" && typeof current.semanticMarker === "string" && next.semanticMarker !== current.semanticMarker) return true;
+      var nextTasks = next.taskClocks || {}, currentTasks = current.taskClocks || {}, advancedTask = false;
+      for (var id in nextTasks) if (Object.prototype.hasOwnProperty.call(currentTasks, id)) {
+        if (nextTasks[id].revision < currentTasks[id].revision || nextTasks[id].revision === currentTasks[id].revision && nextTasks[id].eventSequence < currentTasks[id].eventSequence) return true;
+        if (nextTasks[id].revision > currentTasks[id].revision || nextTasks[id].eventSequence > currentTasks[id].eventSequence) advancedTask = true;
+      }
+      if (advancedTask) return false;
+      if (next.taskRevision !== current.taskRevision) return next.taskRevision < current.taskRevision;
+      if (next.eventSequence !== current.eventSequence) return next.eventSequence < current.eventSequence;
+      return next.updatedAt > 0 && current.updatedAt > 0 && next.updatedAt < current.updatedAt;
+    }
+    function streamSnapshotEnvelope(value, event) {
+      var state = value && value.state && typeof value.state === "object" ? value.state : value, live = value && value.live && typeof value.live === "object" ? value.live : state && state.liveEvent && typeof state.liveEvent === "object" ? state.liveEvent : {};
+      var eventSequence = Number(event && event.lastEventId);
+      return { state: state, live: { streamId: typeof live.streamId === "string" ? live.streamId : "", sequence: safeLiveInteger(live.sequence) || (Number.isSafeInteger(eventSequence) && eventSequence > 0 ? eventSequence : 0) } };
+    }
+    function safeTeamLiveStatus(snapshot, selectedTeamId) {
+      var board = snapshot && snapshot.projectTeamBoard || {}, boardTeams = Array.isArray(board.teams) ? board.teams : [], fullTeams = teamsFromSnapshot(snapshot), wanted = selectedTeamId || teamId(snapshot && snapshot.team || {}), team = boardTeams.find(function (candidate) { return teamId(candidate) === wanted; }) || fullTeams.find(function (candidate) { return teamId(candidate) === wanted; }) || boardTeams[0] || fullTeams[0];
+      if (!team) return null;
+      var fallbackQueue = Array.isArray(team.provisioningQueue) ? team.provisioningQueue : [], fallbackQueueNames = new Set(fallbackQueue.map(function (entry) { return entry.name; })), fallbackWorkers = (team.members || []).filter(function (member) { return member.kind === "worker"; });
+      var fallbackCounts = { registering: fallbackQueue.filter(function (entry) { return ["provisioning", "dispatching"].indexOf(entry.status) >= 0; }).length + fallbackWorkers.filter(function (member) { return memberStateKind(member) === "provisioning" && !fallbackQueueNames.has(member.name); }).length, queued: fallbackQueue.filter(function (entry) { return entry.status === "queued"; }).length, running: fallbackWorkers.filter(function (member) { return memberStateKind(member) === "running"; }).length, continuable: fallbackWorkers.filter(function (member) { return ["ready", "idle"].indexOf(memberStateKind(member)) >= 0 && (member.mode === void 0 || member.mode === "continuable"); }).length, submitted: (team.tasks || []).filter(function (task) { return (task.status || task.state) === "submitted"; }).length, backpressure: 0, providerTransient: 0, lifecycleTimeout: 0, outcomeUnknown: fallbackQueue.filter(function (entry) { return entry.status === "outcome_unknown"; }).length };
+      var source = team.liveStatus && typeof team.liveStatus === "object" ? team.liveStatus : { kind: (team.status || team.state) === "paused" ? "paused" : (team.status || team.state) === "closed" ? "closed" : fallbackCounts.outcomeUnknown ? "outcome_unknown" : fallbackCounts.backpressure ? "backpressure" : fallbackCounts.registering ? "registering" : fallbackCounts.queued ? "queued" : fallbackCounts.running ? "running" : fallbackCounts.submitted ? "submitted" : fallbackCounts.continuable ? "continuable" : "idle", counts: fallbackCounts, revision: team.revision, pauseEpoch: team.pauseEpoch, updatedAt: team.updatedAt };
+      var allowedKinds = ["registering", "queued", "running", "continuable", "submitted", "backpressure", "provider_transient", "lifecycle_timeout", "outcome_unknown", "paused", "closed", "idle"], kind = allowedKinds.indexOf(source.kind) >= 0 ? source.kind : "idle";
+      var rawCounts = source.counts || fallbackCounts, counts = { registering: safeLiveInteger(rawCounts.registering), queued: safeLiveInteger(rawCounts.queued), running: safeLiveInteger(rawCounts.running), continuable: safeLiveInteger(rawCounts.continuable), submitted: safeLiveInteger(rawCounts.submitted), backpressure: safeLiveInteger(rawCounts.backpressure), providerTransient: safeLiveInteger(rawCounts.providerTransient), lifecycleTimeout: safeLiveInteger(rawCounts.lifecycleTimeout), outcomeUnknown: safeLiveInteger(rawCounts.outcomeUnknown) };
+      var admission = source.admission && typeof source.admission === "object" ? { active: safeLiveInteger(source.admission.active), queued: safeLiveInteger(source.admission.queued), quarantined: safeLiveInteger(source.admission.quarantined), limit: safeLiveInteger(source.admission.limit), waitMs: safeLiveInteger(source.admission.waitMs) } : null;
+      var rawDiagnostic = source.diagnostic && typeof source.diagnostic === "object" ? source.diagnostic : null, safeCodes = ["PI_AI_ERROR", "SUBAGENT_ABNORMAL_END", "SUBAGENT_ABORTED", "SUBAGENT_MAX_TOKENS", "SUBAGENT_REFUSAL", "SUBAGENT_TIMEOUT", "SUBAGENT_PROVIDER_UNAVAILABLE", "SUBAGENT_ACTIVATION_TEARDOWN_FAILED", "SUBAGENT_ERROR", "AGENT_TEAMS_PROVIDER_TRANSIENT", "AGENT_TEAMS_LIFECYCLE_TIMEOUT", "AGENT_TEAMS_BACKPRESSURE", "AGENT_TEAMS_OUTCOME_UNKNOWN", "AGENT_TEAMS_RUNTIME_FAILURE"], safeCategories = ["provider_transient", "lifecycle_timeout", "backpressure", "outcome_unknown", "resource_limit", "policy", "cancellation", "teardown", "internal"], safeStages = ["registration", "admission", "provider_dispatch", "work_followup", "retirement", "recovery", "unknown"], safeActions = ["view_live_status", "wait_for_capacity", "retry_current_task", "reconcile_unknown_outcome", "review_submission", "resume_team", "none"];
+      var diagnostic = rawDiagnostic ? { errorCode: safeCodes.indexOf(rawDiagnostic.errorCode) >= 0 ? rawDiagnostic.errorCode : "AGENT_TEAMS_RUNTIME_FAILURE", category: safeCategories.indexOf(rawDiagnostic.category) >= 0 ? rawDiagnostic.category : "internal", stage: safeStages.indexOf(rawDiagnostic.stage) >= 0 ? rawDiagnostic.stage : "unknown", retryable: rawDiagnostic.retryable === true, partialOutputPresent: rawDiagnostic.partialOutputPresent === true, nextAction: safeActions.indexOf(rawDiagnostic.nextAction) >= 0 ? rawDiagnostic.nextAction : "view_live_status" } : null;
+      var currentTaskState = (team.tasks || []).some(function (task) { return (task.status || task.state) === "in_progress"; }) ? "in_progress" : (team.tasks || []).some(function (task) { return (task.status || task.state) === "submitted"; }) ? "submitted" : (team.tasks || []).some(function (task) { return (task.status || task.state) === "pending"; }) ? "pending" : "completed";
+      return { kind: kind, counts: counts, admission: admission, diagnostic: diagnostic, currentTaskState: currentTaskState, revision: safeLiveInteger(source.revision || team.revision), pauseEpoch: safeLiveInteger(source.pauseEpoch || team.pauseEpoch), eventSequence: safeLiveInteger(source.eventSequence || team.eventSequence), updatedAt: String(source.updatedAt || team.updatedAt || "").slice(0, 48) };
+    }
+    function publishSafeTeamLiveStatus(snapshot, selectedTeamId) {
+      if (typeof window === "undefined" || typeof window.dispatchEvent !== "function" || typeof window.CustomEvent !== "function") return;
+      var detail = safeTeamLiveStatus(snapshot, selectedTeamId);
+      window.__DSH_AGENT_TEAM_LIVE_STATUS__ = detail;
+      window.dispatchEvent(new window.CustomEvent(TEAM_LIVE_STATUS_EVENT, { detail: detail }));
     }
     function useTeamState(sessionId, selectedTeamId) {
       var statePair = useState(null), state = statePair[0], setState = statePair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var connectionPair = useState("disconnected"), connection = connectionPair[0], setConnection = connectionPair[1];
-      var reloadRef = useRef(function () {}), acceptRef = useRef(function (next) { setState(next); }), failureRef = useRef(0), versionRef = useRef("");
+      var reloadRef = useRef(function () {}), acceptRef = useRef(function (next) { setState(next); }), failureRef = useRef(0), versionRef = useRef(""), clockRef = useRef(null);
       useEffect(function () {
         if (!sessionId) return;
-        var alive = true, source = null, sourceOpen = false, pollTimer = null, pollAttempt = 0, publishFrame = null, pendingSnapshot = null, loadPromise = null, snapshotFallbackTimer = null, loadGeneration = 0, streamEpoch = 0;
+        var alive = true, source = null, sourceUpdate = null, sourceOpen = false, streamNeedsSnapshot = true, pollTimer = null, pollAttempt = 0, publishFrame = null, pendingSnapshot = null, pendingClock = null, loadPromise = null, snapshotFallbackTimer = null, loadGeneration = 0, streamEpoch = 0;
         versionRef.current = "";
+        clockRef.current = null;
         function hidden() { return typeof document !== "undefined" && document.visibilityState === "hidden"; }
         function requestFrame(work) { return typeof requestAnimationFrame === "function" ? requestAnimationFrame(work) : setTimeout(work, 16); }
         function cancelFrame(handle) { if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(handle); else clearTimeout(handle); }
-        function applySnapshot(next) {
-          if (!alive || !next) return;
+        function applySnapshot(next, clock) {
+          if (!alive || !next || olderTeamSnapshot(clock, clockRef.current)) return;
           var version = teamSnapshotVersion(next);
-          if (version && version === versionRef.current) return;
+          if (version && version === versionRef.current) { clockRef.current = clock; return; }
           versionRef.current = version;
+          clockRef.current = clock;
+          publishSafeTeamLiveStatus(next, selectedTeamId);
           startTransition(function () { if (alive) { setState(next); setError(""); } });
         }
         function flushSnapshot() {
           publishFrame = null;
           if (!alive || hidden() || !pendingSnapshot) return;
-          var next = pendingSnapshot;
+          var next = pendingSnapshot, clock = pendingClock;
           pendingSnapshot = null;
-          applySnapshot(next);
+          pendingClock = null;
+          applySnapshot(next, clock);
         }
-        function queueSnapshot(next) {
+        function queueSnapshot(next, stream) {
           if (!alive || !next) return;
+          var nextClock = teamSnapshotClock(next, selectedTeamId, stream);
+          if (olderTeamSnapshot(nextClock, pendingClock || clockRef.current)) return;
           pendingSnapshot = next;
+          pendingClock = nextClock;
           if (hidden() || publishFrame !== null) return;
           publishFrame = requestFrame(flushSnapshot);
         }
@@ -902,8 +972,9 @@ window.__ModuleLoader__.load({
           var operation = fetchState(sessionId, selectedTeamId).then(function (next) {
             if (alive && generation === loadGeneration && (expectedStreamEpoch === undefined || streamEpoch === expectedStreamEpoch)) {
               failureRef.current = 0;
+              streamNeedsSnapshot = false;
               queueSnapshot(next);
-              if (!sourceOpen) setConnection("polling");
+              setConnection(sourceOpen ? "live" : "polling");
             }
             return next;
           }).catch(function (err) {
@@ -922,18 +993,21 @@ window.__ModuleLoader__.load({
           var current = source;
           source = null;
           sourceOpen = false;
+          streamNeedsSnapshot = true;
           if (current) {
             current.onopen = null;
             current.onmessage = null;
             current.onerror = null;
+            if (sourceUpdate && typeof current.removeEventListener === "function") ["snapshot", "state", "update"].forEach(function (name) { current.removeEventListener(name, sourceUpdate); });
             if (typeof current.close === "function") current.close();
           }
+          sourceUpdate = null;
           clearPolling();
           clearSnapshotFallback();
         }
         function schedulePolling() {
           if (!alive || hidden() || sourceOpen || pollTimer) return;
-          var base = Math.min(30000, 4000 * Math.pow(2, Math.min(pollAttempt, 3)));
+          var base = Math.min(60000, 15000 * Math.pow(2, Math.min(pollAttempt, 2)));
           var delay = Math.round(base * (0.8 + Math.random() * 0.4));
           pollTimer = setTimeout(function () {
             pollTimer = null;
@@ -955,35 +1029,39 @@ window.__ModuleLoader__.load({
             current.onopen = function () {
               if (!alive || source !== current) return;
               sourceOpen = true;
+              streamNeedsSnapshot = true;
               pollAttempt = 0;
               clearPolling();
-              setConnection("live");
+              clearSnapshotFallback();
+              var expectedStreamEpoch = streamEpoch;
+              snapshotFallbackTimer = setTimeout(function () {
+                snapshotFallbackTimer = null;
+                if (!alive || hidden() || source !== current || streamEpoch !== expectedStreamEpoch) return;
+                load(true, expectedStreamEpoch).catch(function () {});
+              }, 3000);
+              setConnection("disconnected");
             };
             var update = function (event) {
               if (!alive || source !== current) return;
               try {
-                var next = JSON.parse(event.data);
-                if (next && typeof next.enabled === "boolean" && Object.prototype.hasOwnProperty.call(next, "team")) { failureRef.current = 0; streamEpoch += 1; clearSnapshotFallback(); queueSnapshot(next); }
-                else if (next && next.state && typeof next.state.enabled === "boolean") { failureRef.current = 0; streamEpoch += 1; clearSnapshotFallback(); queueSnapshot(next.state); }
+                var envelope = streamSnapshotEnvelope(JSON.parse(event.data), event), next = envelope.state, isAuthoritativeSnapshot = event.type === "snapshot";
+                if (streamNeedsSnapshot && !isAuthoritativeSnapshot) { load(true, streamEpoch).catch(function () {}); return; }
+                if (next && typeof next.enabled === "boolean" && Object.prototype.hasOwnProperty.call(next, "team")) { failureRef.current = 0; streamEpoch += 1; streamNeedsSnapshot = false; clearSnapshotFallback(); setConnection("live"); queueSnapshot(next, envelope.live); }
                 else load(true, streamEpoch).catch(function () {});
               } catch (_) { load(true, streamEpoch).catch(function () {}); }
             };
+            sourceUpdate = update;
             current.onmessage = update;
             ["snapshot", "state", "update"].forEach(function (name) { current.addEventListener(name, update); });
             current.onerror = function () {
               if (!alive || source !== current || hidden()) return;
               sourceOpen = false;
+              streamNeedsSnapshot = true;
               failureRef.current += 1;
               setConnection(failureRef.current >= 2 ? "stale" : "disconnected");
-              // Native EventSource keeps reconnecting while visible; sparse jittered polling is only a safety net.
+              // Native EventSource reconnects while visible. Its first accepted event must be an authoritative snapshot; sparse jittered polling is only a safety net.
               schedulePolling();
             };
-            var expectedStreamEpoch = streamEpoch;
-            snapshotFallbackTimer = setTimeout(function () {
-              snapshotFallbackTimer = null;
-              if (!alive || hidden() || source !== current || streamEpoch !== expectedStreamEpoch) return;
-              load(true, expectedStreamEpoch).catch(function () {});
-            }, 3000);
           } catch (_) {
             if (current && typeof current.close === "function") current.close();
             if (source === current) source = null;
@@ -1005,61 +1083,38 @@ window.__ModuleLoader__.load({
           alive = false;
           acceptRef.current = function () {};
           closeSource(true);
+          pendingSnapshot = null;
+          pendingClock = null;
+          clockRef.current = null;
           if (publishFrame !== null) cancelFrame(publishFrame);
+          publishSafeTeamLiveStatus(null, selectedTeamId);
           if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibilityChange);
         };
       }, [sessionId, selectedTeamId]);
       return { state: state, setState: function (next) { return acceptRef.current(next); }, error: error, setError: setError, connection: connection, reload: function () { return reloadRef.current(); } };
     }
 
-    function useTaskDetailState(sessionId, selectedTeamId, selectedTaskId) {
+    function useTaskDetailState(sessionId, selectedTeamId, selectedTaskId, snapshotVersion) {
       var detailPair = useState(null), detail = detailPair[0], setDetail = detailPair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var connectionPair = useState("disconnected"), connection = connectionPair[0], setConnection = connectionPair[1];
+      var identityRef = useRef("");
       useEffect(function () {
-        if (!sessionId || !selectedTeamId || !selectedTaskId) { setDetail(null); setError(""); setConnection("disconnected"); return; }
-        var alive = true, source = null, sourceOpen = false, pollTimer = null, loading = false, hasDetail = false;
-        setDetail(null); setError(""); setConnection("disconnected");
-        function accept(next) {
+        var identity = [sessionId || "", selectedTeamId || "", selectedTaskId || ""].join("\u0000");
+        if (!sessionId || !selectedTeamId || !selectedTaskId) { identityRef.current = identity; setDetail(null); setError(""); setConnection("disconnected"); return; }
+        var alive = true, changedIdentity = identityRef.current !== identity;
+        identityRef.current = identity;
+        if (changedIdentity) { setDetail(null); setError(""); }
+        setConnection("polling");
+        fetchTaskDetail(sessionId, selectedTeamId, selectedTaskId).then(function (next) {
           if (!alive || !next || next.unavailable || String(next.taskId || "") !== String(selectedTaskId)) return;
-          hasDetail = true; setDetail(next); setError("");
-        }
-        function schedulePoll() {
-          if (!alive || sourceOpen || pollTimer) return;
-          pollTimer = setTimeout(function () { pollTimer = null; load(true); }, 4000);
-        }
-        function load(silent) {
-          if (!alive || loading) return;
-          loading = true;
-          fetchTaskDetail(sessionId, selectedTeamId, selectedTaskId).then(function (next) {
-            accept(next);
-            if (!sourceOpen) setConnection("polling");
-          }).catch(function (err) {
-            if (!alive) return;
-            if (!silent) setError(errorText(err));
-            setConnection(hasDetail ? "stale" : "disconnected");
-          }).finally(function () { loading = false; schedulePoll(); });
-        }
-        if (typeof EventSource === "function") {
-          try {
-            source = new EventSource(taskDetailEventsUrl(sessionId, selectedTeamId, selectedTaskId));
-            var update = function (event) {
-              if (!alive) return;
-              try {
-                var next = JSON.parse(event.data);
-                if (next && next.unavailable) { setError("unavailable"); setConnection("stale"); return; }
-                accept(next);
-              } catch (_) { load(true); }
-            };
-            source.onopen = function () { if (!alive) return; sourceOpen = true; if (pollTimer) clearTimeout(pollTimer); pollTimer = null; setConnection("live"); };
-            source.onmessage = update;
-            if (typeof source.addEventListener === "function") source.addEventListener("snapshot", update);
-            source.onerror = function () { if (!alive) return; sourceOpen = false; setConnection(hasDetail ? "stale" : "disconnected"); schedulePoll(); };
-          } catch (_) { source = null; }
-        }
-        load(false);
-        return function () { alive = false; if (pollTimer) clearTimeout(pollTimer); if (source && typeof source.close === "function") source.close(); };
-      }, [sessionId, selectedTeamId, selectedTaskId]);
+          setDetail(next); setError(""); setConnection("live");
+        }).catch(function (err) {
+          if (!alive) return;
+          setError(errorText(err)); setConnection(detail ? "stale" : "disconnected");
+        });
+        return function () { alive = false; };
+      }, [sessionId, selectedTeamId, selectedTaskId, snapshotVersion]);
       return { detail: detail, error: error, connection: connection };
     }
 
@@ -1266,6 +1321,28 @@ window.__ModuleLoader__.load({
     function teamStatusLabel(t, value) { var normalized = String(value || "unknown").toLowerCase(); return normalized === "active" ? t("active") : normalized === "closed" ? t("closedStatus") : normalized === "closing" ? t("closing") : statusLabel(t, normalized); }
     function formatTime(value) { if (!value) return ""; try { return new Date(value).toLocaleString(); } catch (_) { return String(value); } }
     function isoTime(value) { try { var date = new Date(value); return Number.isNaN(date.getTime()) ? undefined : date.toISOString(); } catch (_) { return undefined; } }
+    function liveStatusLabel(t, kind) {
+      var keys = { registering: "liveStatusRegistering", queued: "liveStatusQueued", running: "liveStatusRunning", continuable: "liveStatusContinuable", submitted: "liveStatusSubmitted", backpressure: "liveStatusBackpressure", provider_transient: "liveStatusProviderTransient", lifecycle_timeout: "liveStatusLifecycleTimeout", outcome_unknown: "liveStatusOutcomeUnknown", paused: "liveStatusPaused", closed: "liveStatusClosed", idle: "liveStatusIdle" };
+      return t(keys[kind] || "liveStatusIdle");
+    }
+    function liveStatusNextLabel(t, action) {
+      var keys = { view_live_status: "liveStatusNextView", wait_for_capacity: "liveStatusNextWait", retry_current_task: "liveStatusNextRetry", reconcile_unknown_outcome: "liveStatusNextReconcile", review_submission: "liveStatusNextReview", resume_team: "liveStatusNextResume", none: "liveStatusNextNone" };
+      return t(keys[action] || "liveStatusNextView");
+    }
+    function LiveTeamStatusCard(props) {
+      var t = props.t, status = props.status;
+      if (!status) return null;
+      var chips = [["registering", status.counts.registering], ["queued", status.counts.queued], ["running", status.counts.running], ["continuable", status.counts.continuable], ["submitted", status.counts.submitted], ["backpressure", status.counts.backpressure], ["provider_transient", status.counts.providerTransient], ["lifecycle_timeout", status.counts.lifecycleTimeout], ["outcome_unknown", status.counts.outcomeUnknown]].filter(function (entry) { return entry[1] > 0; });
+      if (!chips.length) chips.push([status.kind, 0]);
+      var diagnostic = status.diagnostic, detailId = "dat-live-status-title";
+      return h("section", { className: "dat-live-status", "data-status": status.kind, role: "region", "aria-labelledby": detailId },
+        h("div", { className: "dat-live-status-head" }, h("div", null, h("h2", { id: detailId, className: "dat-live-status-title" }, t("liveStatusTitle")), h("p", { className: "dat-live-status-copy" }, t("liveStatusSnapshotHint"))), h("span", { className: "dat-badge", role: "status", "aria-live": "polite", "aria-atomic": "true" }, liveStatusLabel(t, status.kind))),
+        h("div", { className: "dat-live-status-chips", "aria-label": t("liveStatusTitle") }, chips.map(function (entry) { return h("span", { key: entry[0], className: "dat-badge", "data-status": entry[0] }, liveStatusLabel(t, entry[0]), entry[1] ? " · " + entry[1] : ""); })),
+        h("div", { className: "dat-live-status-meta" }, h("div", { className: "dat-row" }, status.updatedAt ? h("time", { className: "dat-note", dateTime: isoTime(status.updatedAt) }, t("liveStatusUpdated", { value: formatTime(status.updatedAt) })) : null, h("span", { className: "dat-note" }, t("liveStatusRevision", { value: status.revision })) ), h(Button, { small: true, onClick: props.onView, ariaLabel: t("liveStatusView") }, t("liveStatusView"))),
+        status.admission && status.admission.limit ? h("p", { className: "dat-live-status-detail" }, t("liveStatusAdmission", status.admission)) : null,
+        diagnostic ? h("div", { className: "dat-live-status-detail", role: "note" }, h("strong", null, t("liveStatusDetail", { code: diagnostic.errorCode, category: diagnostic.category, stage: diagnostic.stage })), " · ", diagnostic.retryable ? t("liveStatusRetryable") : t("liveStatusNotRetryable"), diagnostic.partialOutputPresent ? " · " + t("liveStatusPartialUntrusted") : "", h("br"), liveStatusNextLabel(t, diagnostic.nextAction)) : null
+      );
+    }
     function teamId(team) { return team && (team.id || team.teamId || team.name || team.objective); }
     function teamName(team, t) { return team && (team.name || team.objective || teamId(team)) || t("unknown"); }
     function eventIdentity(event, fallbackTeamId) {
@@ -1883,12 +1960,15 @@ window.__ModuleLoader__.load({
       var event = props.event, t = props.t, teamsById = props.teamsById || {};
       var from = event.fromName || event.memberName || event.actorName || event.from || t("unknown");
       var to = event.toName || event.toSessionId || t("unknown");
-      var status = statusLabel(t, event.status || event.eventType || "pending");
+      var eventState = String(event.status || event.eventType || "pending").toLowerCase();
+      var status = statusLabel(t, eventState);
       var fromTeam = event.fromTeamName || teamName(teamsById[event.fromTeamId], t), toTeam = event.toTeamName || teamName(teamsById[event.toTeamId], t);
       var title = event.fromTeamId && event.toTeamId ? t("crossDelivery", { fromTeam: fromTeam, toTeam: toTeam, from: from, to: to, status: status }) : t("deliveryEvent", { from: from, to: to, status: status });
+      var eventTime = eventState === "queued" ? event.queuedAt || event.createdAt || event.timestamp || event.at : event.deliveredAt || event.createdAt || event.timestamp || event.at;
       return h("article", { className: "dat-card dat-event" },
         h("div", { className: "dat-card-title" }, title),
-        event.createdAt || event.timestamp || event.at ? h("time", { dateTime: event.createdAt || event.timestamp || event.at }, formatTime(event.createdAt || event.timestamp || event.at)) : null
+        eventTime ? h("time", { dateTime: eventTime }, formatTime(eventTime)) : null,
+        eventState === "queued" ? h("p", { className: "dat-note" }, t("queuedHint")) : null
       );
     }
 
@@ -2336,7 +2416,7 @@ window.__ModuleLoader__.load({
       var noticePair = useState(""), selectionNotice = noticePair[0], setSelectionNotice = noticePair[1];
       var detailRef = useRef(null), triggerRef = useRef(null), restoreFocusRef = useRef(false);
       var selectedTask = tasks.filter(function (task) { return taskId(task) === selectedTaskId; })[0] || null;
-      var taskDetailLive = useTaskDetailState(props.sessionId, team && teamId(team), selectedTaskId);
+      var taskDetailLive = useTaskDetailState(props.sessionId, team && teamId(team), selectedTaskId, props.snapshotVersion);
       var selectedAssignee = selectedTask ? members.filter(function (member) { var assigned = selectedTask.assigneeSessionId || selectedTask.assigneeId || selectedTask.assignee || selectedTask.memberId || ""; return memberSession(member) === assigned || memberId(member) === assigned; })[0] || null : null;
       var responsible = members.filter(function (member) { return memberSession(member) === (team && team.leadSessionId) || member.kind === "lead"; })[0] || null;
       var teamsById = {}; (props.teams || []).forEach(function (item) { teamsById[teamId(item)] = item; });
@@ -3288,6 +3368,7 @@ window.__ModuleLoader__.load({
       var memberCount = team && Array.isArray(team.members) ? team.members.length : 0;
       var eventCount = team ? (team.events || team.messages || []).length + (team.inboundEvents || []).length : 0;
       var projectTeamTaskCount = snapshot && snapshot.projectTeamBoard && snapshot.projectTeamBoard.available === true ? projectTeamBoardCount(snapshot.projectTeamBoard.stats && snapshot.projectTeamBoard.stats.totalTasks) : undefined;
+      var liveStatus = safeTeamLiveStatus(snapshot, team && teamId(team));
       var workspaceContent = null;
       if (workspaceView === "projectTasks" || workspaceView === "flow") {
         workspaceContent = h(ProjectCollaborationWorkspace, { key: "project-collaboration:" + props.sessionId, t: t, projectScope: props.sessionId, workspaces: props.workspaces, setWorkspaceView: setWorkspaceView, projectTeamBoard: snapshot && snapshot.projectTeamBoard, onRecover: recoverProjectMember, onReconcile: reconcileProjectMember, onRootRecovery: recoverProjectRoot });
@@ -3312,7 +3393,7 @@ window.__ModuleLoader__.load({
             ? h(ActiveTeam, { t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props.sessions, connection: live.connection, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember })
             : workspaceView === "inbox"
               ? h(CoordinationInboxWorkspace, { t: t, team: team, teams: teams, setWorkspaceView: setWorkspaceView })
-              : h(TaskBoardWorkspace, { t: t, sessionId: props.sessionId, team: team, teams: teams, connection: live.connection, setWorkspaceView: setWorkspaceView, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember }),
+              : h(TaskBoardWorkspace, { t: t, sessionId: props.sessionId, team: team, teams: teams, snapshotVersion: teamSnapshotVersion(snapshot), connection: live.connection, setWorkspaceView: setWorkspaceView, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember }),
           h("details", { className: "dat-disclosure dat-settings-disclosure" }, h("summary", null, t("workspaceSettings")), h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-teams", disable: disable, busy: busy, hasActive: hasActiveTeams }))
         );
       }
@@ -3323,6 +3404,7 @@ window.__ModuleLoader__.load({
           live.error ? h("div", { className: "dat-error", role: "alert" }, t("loadError", { error: live.error }), " ", h(Button, { small: true, onClick: live.reload }, t("retry"))) : null,
           actionError ? h("div", { className: "dat-error", role: "alert" }, t("actionError", { error: actionError })) : null,
           notice ? h("div", { className: "dat-board-note", role: "status", "aria-live": "polite" }, notice) : null,
+          h(LiveTeamStatusCard, { t: t, status: liveStatus, onView: function () { setWorkspaceView("board"); } }),
           h("section", { className: "dat-workspace" }, h("div", { className: "dat-workspace-main" }, workspaceContent))
         )
       ));

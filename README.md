@@ -21,11 +21,13 @@
 
 ## 下载
 
-下一发布候选：**v1.0.58** · 上一稳定版：**v1.0.57** · [查看候选更新内容](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.58)
+下一发布候选：**v1.0.59** · 上一稳定版：**v1.0.58** · [查看候选更新内容](release-notes.md)
 
-> 已发布的 `v1.0.57`、其精确资产、组件、签名 Android APK 与 stable feed 保持不可变；更早版本与候选 Tag 也不会移动、重建或复用。统一候选 `v1.0.58` 修复 Electron 同会话认证跳转、Runtime 并发启动/陈旧进程/MCP 启动阻塞、手机同步 guest→shell 入口，并让 Agent Teams 在精确安全门禁内按成员事件自动续跑和验收：首个团队必须消费精确绑定 root/project/goal/team/pause/settings 的一次性 Desktop Host 授权，不能依赖全局开关或静态请求头。Codex 浏览器能力对等仍须通过真实 Electron 动态复核。正式云 Windows 资产还必须先下载到本机隔离环境完成启动验证，全部通过后才允许发布器提升 stable feed、让客户端发现更新；完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+> 已发布的 `v1.0.58`、其精确 Tag、Release 资产、组件、签名 Android APK、`release-manifest.json` 与 stable feeds 保持不可变。候选 `v1.0.59` 将官方 Harness 完整依赖图升级到 `0.1.2-alpha.5`，增强 Agent Teams 的全局自动接力、精确 lifecycle/admission、实时状态、Unicode 路径边界与热冷账本；投影缓存默认关闭并提供 `disabled | shadow | enabled` 可回滚三态，空 automatic round 不耗 Goal 追加预算。发送后控制、长会话最新区域和整枚“子代理会话：可继续”芯片也按单一键盘/至少 44×44 目标收敛，同时为 Mobile Sync、Schedule、设备预览和缓存维护补齐无损可靠性与性能改进。
 >
-> 此前的官方 `0.1.2-alpha.2` 仅保留为可复核的历史迁移基线，不再描述当前运行时或发布目标。
+> `v1.0.59` 尚未发布，也尚未进入 stable feed。下表继续提供不可变的 `v1.0.58` 稳定资产；新版本只有在安全审查、全量与移动门禁、正式云构建/签名和双云核对全部完成后，才会由唯一 resumable publisher 创建并让客户端发现。完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+>
+> 此前的官方 `0.1.2-alpha.4` 与更早版本仅保留为可复核的历史迁移基线，不再描述当前候选运行时。
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
@@ -51,24 +53,24 @@ scoop install harness-desktop/harness-desktop
 
 | 功能 | 使用方式 |
 | --- | --- |
-| 官方 Harness 工作台 | 维护依赖及完整 required/optional DSH 图统一精确固定为官方 `0.1.2-alpha.4`；branded session sequence、事件所有权、projector/node-store、Host follow-up queue、轮次导航、附件队列、断线重连、Schedule catalog、turn-outline projection 与 Remote stream 使用 alpha.4 合同，关键 capability artifacts 以精确哈希和语义片段双重校验，漂移即 fail closed。退休的 `dsh-client-runtime` 与 Desktop Schedule 重复实现不再重新注入；自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks/recovery/cursors/evidence 仍是唯一权威，官方 experimental Team 不接管也不双写。当前发布仍受 hermetic 终验和唯一 resumable publisher 硬门禁约束 |
+| 官方 Harness 工作台 | 维护依赖及完整 required/optional DSH 图统一精确固定为官方 `0.1.2-alpha.5`；branded session sequence、事件所有权、projector/node-store、Host follow-up queue、轮次导航、附件队列、断线重连、Schedule catalog、turn-outline projection、Remote stream 与受限 lifecycle/activation seam 使用 alpha.5 合同，关键 capability artifacts 以精确哈希和语义片段双重校验，漂移即 fail closed。自研 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks/recovery/cursors/evidence 仍是唯一权威，官方 experimental Team 不接管也不双写。当前候选仍受 hermetic 终验和唯一 resumable publisher 硬门禁约束 |
 | 女仆鲸桌宠 | 感知结构化任务节奏并主动提醒，记录本地默契、每日进度与连续完成；支持 TOK、抚摸、拖动、屏幕边缘及窗口互动，不读取对话正文或屏幕 |
 | 外观皮肤 | 从顶部快捷入口切换桌面配色和背景；手机端拥有独立皮肤设置与不透明核心表面，不会读取或套用电脑壁纸文件 |
 | DSH 插件与 Skills | 在应用内发现、安装和更新；随包受管 Skills 支持 Codex 风格 `$` 触发，`@` 继续用于文件引用；英文简介自动生成中文摘要并保留原文 |
 | 主模型与子代理 | 子代理可跟随主模型或单独选模型；目录区分运行中、可继续与只读历史，结束任务不会删除完整记录 |
-| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；只有一个独立辅助时使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。计划按 `draft → committed → active` 持久化，成员启动必须绑定真实任务；认领带 attempt/claim/lease fencing，Stop、两阶段 Resume、同项目 handoff/adopt 与未验证 checkpoint 均保留审计。“自动接力”默认勾选，每个目标固定追加 1–200 轮（默认 200）；可信“保存”即使尚无团队也可记录偏好，但偏好本身不授予 Goal 权限。首个符合条件团队创建时还必须把当前 Host settings proof、直接用户回合或精确 Goal round 与 routing receipt 绑定到 root/project/goal/team/pause/settings，不能靠全局开关或静态请求头伪造。正常成员等待由持久事件自动唤醒 Root 继续验收和调度；显式 Stop 或安全 blocker 仍 fail closed，须人工恢复。任务板只显示 Ready / Running / Attention / Done，取消进入历史，不伪造百分比；详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
+| 协作团队（实验） | 启用后自动判断：简单任务由主模型 solo；一个独立辅助使用普通 `subagent`；至少两个持续独立工作流且需要依赖、交接或文件边界时才建团队。计划按 `draft → committed → active` 持久化，成员启动与扩员提案都必须绑定真实任务；认领和 admission 带 attempt/claim/lease/generation/run fencing，Stop、两阶段 Resume、同项目 handoff/adopt、晚到生命周期与未验证 checkpoint 均保留审计。“自动接力”由版本化全局 Host 设置证明持久化，每个目标固定追加 1–200 轮（默认 200），仍须精确绑定 root/project/goal/team/pause/plan/settings/authorization epoch，不能靠开关、静态请求头或普通 Goal round 伪造。任务与诊断经权威状态流实时更新，relay queued 只表示本机排队；显式 Stop、跨项目、权限/能力/副作用不明仍 fail closed。详见[代理团队用户指南](docs/AGENT-TEAMS-USER-GUIDE.zh-CN.md) |
 | 内置浏览器 | 对齐 Codex 的可见导航、交互、检查与停止能力；来源/actor、站点授权、导航、敏感动作、文件/下载、取消与审计继续经过动态安全门禁，最终发布结论以真实 Electron 专项复核为准 |
 | 桌面更新 | Ed25519 签名发布清单、国内源优先、全球源自动回退、逐跳 HTTPS 与 SHA-256 校验，并在更新前展示改动内容 |
 | 用户配置保护 | 主题、插件和模型路由保存在用户目录，更新官方 Harness 时不会被覆盖 |
 | MCP 连接 | 设置页管理官方 MCP 客户端的 stdio 与 Streamable HTTP 连接；秘密只保存凭据引用，启用本地进程前明确确认 |
-| 可观察定时任务 | 复用官方 Schedule；查看当前会话任务、精确 ID、下次运行和逾期状态。任务不唤醒系统，关闭会话后只会在恢复时补投递 |
+| 可观察定时任务 | 复用官方 Schedule append-only events；查看当前会话任务、精确 ID、下次运行和逾期状态。15 秒刷新支持 ETag/304 与 since delta，出现 gap、rewind 或 generation 分叉即回退一次权威 full replay；任务不唤醒系统，关闭会话后只会在恢复时补投递 |
 | 文件上传、下载和编辑 | 用户主动把文件导入工作区 `uploads/`，下载工作区内普通文件；编辑通过官方 `read` / `edit` 工具准备为待检查草稿，不绕过文件策略 |
-| 右侧工作区与会话附件 | 工作区覆盖在官方会话右侧，不压缩聊天区域；文本、源码、HTML、图片、音频、视频与 PDF 按路径/MIME/大小边界只读预览，工具结果附件按真实会话归属投递并可从时间线重新定位 |
-| 设备工作区 | 在同一右栏查看并操作已授权的 Windows 桌面流或已配对 Android 手机；设备来源、画面比例、控制状态和停止入口保持可见，未授权或能力缺失时不猜测操作 |
+| 右侧工作区与会话附件 | 工作区覆盖在官方会话右侧，不压缩聊天区域；文本、源码、HTML、图片、音频、视频与 PDF 按路径/MIME/大小边界只读预览。活动 preview 与 durable evidence 分域，只有明确截图才持久化；工具结果附件仍按真实会话归属投递并可从时间线重新定位 |
+| 设备工作区 | 在同一右栏查看并操作已授权的 Windows 桌面流或已配对 Android 手机；活动桌面帧留在有界内存，Android 使用每设备一个 2 fps persistent stream，来源、比例、坐标空间、控制状态和停止入口保持可见，未授权或能力缺失时不猜测操作 |
 | 集成终端 | 仅供用户在桌面壳中打开固定 PowerShell、CMD、Git Bash、WSL 或系统默认 shell；终端数量和输入有界，不作为模型的任意 Shell/脚本旁路 |
 | 自适应进度 | 按计划、里程碑、失败与阻塞等语义事件显示“当前 / 已完成 / 下一步”，不按固定步数、工具数或时间刷屏 |
-| 自动本地记忆与缓存 | 显式开启后低干扰使用，只保存稳定偏好和项目约束；敏感信息硬过滤，托盘“数据与隐私”保留查看、关闭、预览和全部删除，不宣称模型自训练 |
-| Android / iOS 移动工作台 | 跨 Windows/macOS 扫码配对；四域导航保持稳定项目/会话身份，Android 原生输入和前台恢复不伪造网页事件，文档经已配对设备鉴权、POST intent、50 MiB 上限和官方工作区上传路径导入；局域网优先，异地协商原生 WebRTC P2P，失败时保持端到端加密 WSS/443 后备；秘密由操作系统加密存储，iOS 不提供跨 App 控制 |
+| 自动本地记忆与缓存 | 显式开启后低干扰使用，只保存稳定偏好和项目约束；敏感信息硬过滤。自动维护使用 cache-only 窄扫描并在不确定时只预览、fail closed；托盘“数据与隐私”保留查看、关闭、手动预览/应用和全部删除，不宣称模型自训练 |
+| Android / iOS 移动工作台 | 跨 Windows/macOS 扫码配对；Mobile Sync v6 使用 canonical snapshot、bounded delta journal 与原子 heartbeat/端口记录，保留可逆 v5 备份。四域导航保持稳定项目/会话身份，当前官方 contenteditable、长文本、键盘、附件、语音、Stop/排队与任务栏锚定继续由官方状态机拥有；文档经已配对设备鉴权、POST intent、50 MiB 上限和官方工作区上传路径导入。局域网优先，异地协商原生 WebRTC P2P，失败时保持端到端加密 WSS/443 后备；秘密由操作系统加密存储，iOS 不提供跨 App 控制 |
 | 个人 WSS 中转 | 在“手机与远程同步”中检测并保存自己的无凭据 `wss://` 地址；服务仅承担 P2P 信令与加密帧盲转发，强制容量、速率和背压上限，仓库附 Caddy/systemd 部署示例 |
 | Computer Use | 在“设置 → 插件 → 插件配置”授权后直接捕获并控制整个 Windows 虚拟桌面（含多屏），不再选择单个窗口，也不设置内容级敏感操作过滤；永久授权会在启动时自动恢复，锁屏/挂起期间暂停，Esc/停止/撤销可立即收回控制 |
 | 签名组件增量更新 | 生产 Ed25519 验签、CNB 优先/GitHub 后备、按组件暂存、健康检查和自动回滚；完整安装包始终作为后备 |

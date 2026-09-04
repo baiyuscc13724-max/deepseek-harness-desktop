@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import net from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, join, posix as posixPath, win32 as win32Path } from "node:path";
 
 const VERSION = 1;
 const TERMINAL = new Set(["ready", "failed", "cancelled"]);
@@ -15,6 +15,7 @@ const MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024;
 
 function fail(message, code = "PROJECT_SESSION_LAUNCH_INVALID") { const error = new Error(message); error.code = code; throw error; }
 function text(value, field, max = 4096) { if (typeof value !== "string" || value.trim().length === 0 || value.length > max) fail(`${field} must be a non-empty string of at most ${max} characters`); return value.trim(); }
+function boundaryText(value, field, max = 256) { if (typeof value !== "string" || value.trim().length === 0 || value.length > max) fail(`${field} must be a non-empty string of at most ${max} characters`); return value; }
 function integer(value, field, min, max) { if (!Number.isSafeInteger(value) || value < min || value > max) fail(`${field} must be an integer from ${min} through ${max}`); return value; }
 function record(value, field) { if (typeof value !== "object" || value === null || Array.isArray(value)) fail(`${field} must be an object`); return value; }
 function clone(value) { return structuredClone(value); }
@@ -33,15 +34,30 @@ async function replaceFile(source, destination) {
 }
 function digest(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function opaque(secret, kind, ...parts) { return `${kind}_${createHash("sha256").update(secret).update("\0").update(kind).update("\0").update(JSON.stringify(parts)).digest("base64url").slice(0, 32)}`; }
-function normalizeBoundary(value, field) { const normalized = text(value, field, 256).normalize("NFKC").replace(/\\/gu, "/").replace(/\/{2,}/gu, "/"); if (normalized.split("/").includes("..") || /[\p{Cc}\p{Cf}\p{Cs}]/u.test(normalized)) fail(`${field} is invalid`); return normalized; }
+function pathDialect(platform) { return platform === "win32" ? win32Path : posixPath; }
+function resolvedWorkspacePath(value, field = "workspacePath", platform = process.platform) { const dialect = pathDialect(platform); if (typeof value !== "string" || value.trim().length === 0 || value.length > 4096 || /[\u0000-\u001f\u007f]/u.test(value) || !dialect.isAbsolute(value)) fail(`${field} must be an absolute Host path of at most 4096 characters`); return dialect.resolve(value); }
+function workspaceScopeKey(value, field = "workspacePath", platform = process.platform) { const normalized = resolvedWorkspacePath(value, field, platform); return platform === "win32" ? normalized.replace(/\\/gu, "/").toLocaleLowerCase("en-US") : normalized; }
+function sameWorkspace(left, right, platform = process.platform) { return workspaceScopeKey(left, "workspacePath", platform) === workspaceScopeKey(right, "workspacePath", platform); }
+function normalizeBoundary(value, field, platform = process.platform) {
+  let normalized = boundaryText(value, field);
+  if (/[\p{Cc}\p{Cf}\p{Cs}]/u.test(normalized)) fail(`${field} is invalid`);
+  normalized = platform === "win32" ? normalized.replace(/[\\/]+/gu, "/") : normalized.replace(/\/{2,}/gu, "/");
+  const segments = normalized.split("/");
+  if (segments.includes("..")) fail(`${field} is invalid`);
+  normalized = segments.filter((segment) => segment !== ".").join("/");
+  if (normalized.length > 1) normalized = normalized.replace(/\/+$/u, "");
+  if (normalized.length === 0) fail(`${field} is invalid`);
+  return normalized;
+}
+function boundaryScopeKey(value, platform = process.platform) { return platform === "win32" ? value.toLocaleLowerCase("en-US") : value; }
 function requirementsText(value, field) { if (typeof value !== "string" || value.length === 0) fail(`${field} must be a non-empty string`); if (Buffer.byteLength(JSON.stringify(value), "utf8") > 65_536) fail(`${field} canonical JSON exceeds 65536 UTF-8 bytes`); return value; }
-function normalizeSlots(value, expected) {
+function normalizeSlots(value, expected, platform = process.platform) {
   if (!Array.isArray(value) || value.length !== expected) fail(`slots must contain exactly ${expected} entries`, "PROJECT_SESSION_LAUNCH_SLOT_COUNT");
   return value.map((candidate, index) => {
     const slot = record(candidate, `slots[${index}]`);
-    const resources = Array.isArray(slot.resources) && slot.resources.length <= 64 ? slot.resources.map((item, itemIndex) => normalizeBoundary(item, `slots[${index}].resources[${itemIndex}]`)) : [];
-    const resourceBytes = Buffer.byteLength(resources.join("\n"), "utf8");
-    if (resources.length === 0 || new Set(resources).size !== resources.length || resourceBytes > 16 * 1024) fail(`slots[${index}].resources must be a non-empty unique list of at most 64 project-relative boundaries and 16 KiB total`);
+    const resources = Array.isArray(slot.resources) && slot.resources.length <= 64 ? slot.resources.map((item, itemIndex) => normalizeBoundary(item, `slots[${index}].resources[${itemIndex}]`, platform)) : [];
+    const resourceBytes = Buffer.byteLength(resources.join("\n"), "utf8"), resourceKeys = resources.map((resource) => boundaryScopeKey(resource, platform));
+    if (resources.length === 0 || new Set(resourceKeys).size !== resources.length || resourceBytes > 16 * 1024) fail(`slots[${index}].resources must be a non-empty unique list of at most 64 project-relative boundaries and 16 KiB total`);
     return { title: text(slot.title, `slots[${index}].title`, 160), role: text(slot.role, `slots[${index}].role`, 500), resources, task: requirementsText(slot.task, `slots[${index}].task`) };
   });
 }
@@ -120,12 +136,13 @@ function consumeDesktopProjectSessionLaunchCapability({ env = process.env, conne
 function isRecordResult(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
 export class ProjectSessionLaunchRuntime {
-  constructor({ filePath, provider, maxConcurrent = 2, maxConcurrentPerProject = 1, maxSessionsPerProject = 8, maxQueued = 64, clock = Date.now, disposeProvider = true, redactProjectBinding = false, fixedProjectBinding } = {}) {
+  constructor({ filePath, provider, maxConcurrent = 2, maxConcurrentPerProject = 1, maxSessionsPerProject = 8, maxQueued = 64, clock = Date.now, disposeProvider = true, redactProjectBinding = false, fixedProjectBinding, platform = process.platform } = {}) {
     this.filePath = text(filePath, "filePath", 4096);
     this.provider = assertProvider(provider);
     this.disposeProvider = disposeProvider === true;
     this.redactProjectBinding = redactProjectBinding === true;
-    this.fixedProjectBinding = fixedProjectBinding === undefined ? undefined : { canonicalProjectKey: text(fixedProjectBinding.canonicalProjectKey, "fixedProjectBinding.canonicalProjectKey", 128), workspacePath: text(fixedProjectBinding.workspacePath, "fixedProjectBinding.workspacePath", 4096) };
+    this.platform = platform === "win32" ? "win32" : "posix";
+    this.fixedProjectBinding = fixedProjectBinding === undefined ? undefined : { canonicalProjectKey: text(fixedProjectBinding.canonicalProjectKey, "fixedProjectBinding.canonicalProjectKey", 128), workspacePath: resolvedWorkspacePath(fixedProjectBinding.workspacePath, "fixedProjectBinding.workspacePath", this.platform) };
     if (this.fixedProjectBinding && !/^[a-f0-9]{64}$/u.test(this.fixedProjectBinding.canonicalProjectKey)) fail("fixed canonicalProjectKey is invalid");
     this.maxConcurrent = integer(maxConcurrent, "maxConcurrent", 1, 8);
     this.maxConcurrentPerProject = integer(maxConcurrentPerProject, "maxConcurrentPerProject", 1, this.maxConcurrent);
@@ -139,6 +156,7 @@ export class ProjectSessionLaunchRuntime {
     this.executionByBatch = new Map();
     this.batchByRef = new Map();
     this.slotByRef = new Map();
+    this.slotByAdoptedActor = new Map();
     this.batchByProjectRequest = new Map();
     this.batchRefsByCallerRoot = new Map();
     this.queuedByProject = new Map();
@@ -158,7 +176,7 @@ export class ProjectSessionLaunchRuntime {
     this.initPromise = pending;
     try { return await pending; }
     catch (error) {
-      if (this.initPromise === pending) { this.document = undefined; this.batchByRef.clear(); this.slotByRef.clear(); this.batchByProjectRequest.clear(); this.batchRefsByCallerRoot.clear(); this.queuedByProject.clear(); this.projectOrder.length = 0; this.queuedCount = 0; this.outstandingCount = 0; }
+      if (this.initPromise === pending) { this.document = undefined; this.batchByRef.clear(); this.slotByRef.clear(); this.slotByAdoptedActor.clear(); this.batchByProjectRequest.clear(); this.batchRefsByCallerRoot.clear(); this.queuedByProject.clear(); this.projectOrder.length = 0; this.queuedCount = 0; this.outstandingCount = 0; }
       throw error;
     } finally { if (this.initPromise === pending) this.initPromise = undefined; }
   }
@@ -182,7 +200,7 @@ export class ProjectSessionLaunchRuntime {
       if (this.redactProjectBinding) {
         if (!this.fixedProjectBinding) fail("redacted launch ledger requires a fixed project binding", "PROJECT_SESSION_LAUNCH_STORE_INVALID");
         if (batch.canonicalProjectKey !== undefined || batch.workspacePath !== undefined) {
-          if (batch.canonicalProjectKey !== this.fixedProjectBinding.canonicalProjectKey || batch.workspacePath !== this.fixedProjectBinding.workspacePath) fail("legacy launch ledger belongs to another canonical project", "PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH");
+          if (batch.canonicalProjectKey !== this.fixedProjectBinding.canonicalProjectKey || typeof batch.workspacePath !== "string" || !sameWorkspace(batch.workspacePath, this.fixedProjectBinding.workspacePath, this.platform)) fail("legacy launch ledger belongs to another canonical project", "PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH");
           batch.laneBindingRef = this.#laneBindingRef(this.fixedProjectBinding.canonicalProjectKey); delete batch.canonicalProjectKey; delete batch.workspacePath; changed = true;
         }
         if (batch.laneBindingRef !== this.#laneBindingRef(this.fixedProjectBinding.canonicalProjectKey)) fail("launch ledger lane binding is invalid", "PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH");
@@ -198,7 +216,7 @@ export class ProjectSessionLaunchRuntime {
     return this.safeState();
   }
   safeState() { return { available: this.provider !== undefined, closed: this.closed, queued: this.queuedCount, running: this.running, batchCount: this.batchByRef.size }; }
-  validateSlots(totalSessions, slots) { return normalizeSlots(slots, integer(totalSessions, "totalSessions", 2, 64) - 1); }
+  validateSlots(totalSessions, slots) { return normalizeSlots(slots, integer(totalSessions, "totalSessions", 2, 64) - 1, this.platform); }
   async preflight(execution, { totalSessions, projectBinding } = {}) {
     await this.init();
     if (this.closed) fail("session launch runtime is closed", "PROJECT_SESSION_LAUNCH_CLOSED");
@@ -209,7 +227,7 @@ export class ProjectSessionLaunchRuntime {
     return { binding, project };
   }
   async prepareStart(execution, input = {}) {
-    const requestId = text(input.requestId, "requestId", 256), totalSessions = integer(input.totalSessions, "totalSessions", 2, 64), slots = normalizeSlots(input.slots, totalSessions - 1);
+    const requestId = text(input.requestId, "requestId", 256), totalSessions = integer(input.totalSessions, "totalSessions", 2, 64), slots = normalizeSlots(input.slots, totalSessions - 1, this.platform);
     const { binding, project } = await this.preflight(execution, { totalSessions, projectBinding: input.projectBinding });
     const projectRef = text(project.projectRef, "Host project binding.projectRef", 256), boardRef = text(project.boardRef, "Host project binding.boardRef", 256), rootSessionRef = text(project.rootSessionRef ?? project.seatRef, "Host project binding.seatRef", 256), projectTicket = text(project.projectTicket, "Host project binding.projectTicket", 512), inputDigest = digest({ totalSessions, slots });
     const existing = this.batchByProjectRequest.get(this.#projectRequestKey(projectRef, requestId));
@@ -311,22 +329,29 @@ export class ProjectSessionLaunchRuntime {
   }
   async recordAdoption(execution, { slotRef, adoptedActorRef, projectBinding } = {}) {
     await this.init();
-    const selected=this.slotByRef.get(text(slotRef,"slotRef",128)); if(!selected) fail("launch slot not found","PROJECT_SESSION_LAUNCH_NOT_FOUND");
-    const binding=this.#binding(projectBinding),project=await this.#resolveProject(execution,binding),{batch,slot}=selected;
-    if(!this.#matchesProjectBinding(batch,binding)||project.projectRef!==batch.projectRef||project.boardRef!==batch.boardRef) fail("reserved seat belongs to another canonical project","PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH");
-    const actor=text(adoptedActorRef,"adoptedActorRef",256),result=record(await this.provider.recordAdoption(execution,{canonicalProjectKey:binding.canonicalProjectKey,projectRef:project.projectRef,boardRef:project.boardRef,projectTicket:project.projectTicket,callerRootRef:binding.callerRootRef,batchRef:batch.batchRef,slotRef:slot.slotRef,operationRef:slot.operationRef,adoptedActorRef:actor}),"Host adoption record");
-    if(result.projectRef!==project.projectRef||result.operationRef!==slot.operationRef) fail("Host adoption record binding is invalid","PROJECT_SESSION_LAUNCH_PROVIDER_MISMATCH");
-    if(slot.adoptedActorRef!==undefined&&slot.adoptedActorRef!==actor) fail("launch slot adoption binding changed","PROJECT_SESSION_ADOPTION_FORBIDDEN");
-    slot.adoptedActorRef=actor; slot.updatedAt=timestamp(this.clock); batch.updatedAt=slot.updatedAt; await this.#persist(); return {recorded:true};
+    const selected = this.slotByRef.get(text(slotRef, "slotRef", 128));
+    if (!selected) fail("launch slot not found", "PROJECT_SESSION_LAUNCH_NOT_FOUND");
+    const binding = this.#binding(projectBinding), project = await this.#resolveProject(execution, binding), { batch, slot } = selected;
+    if (slot.state !== "ready") fail("only a ready launch slot may record adoption", "PROJECT_SESSION_ADOPTION_FORBIDDEN");
+    if (!this.#matchesProjectBinding(batch, binding) || project.projectRef !== batch.projectRef || project.boardRef !== batch.boardRef) fail("reserved seat belongs to another canonical project", "PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH");
+    const actor = text(adoptedActorRef, "adoptedActorRef", 256), actorKey = this.#adoptedActorKey(binding.canonicalProjectKey, actor), existing = this.slotByAdoptedActor.get(actorKey);
+    if (existing && (existing.batch !== batch || existing.slot !== slot)) fail("adopted root already belongs to another exact launch slot", "PROJECT_SESSION_ADOPTION_FORBIDDEN");
+    if ((slot.adoptedActorRef !== undefined && slot.adoptedActorRef !== actor) || (slot.adoptedCallerRootRef !== undefined && slot.adoptedCallerRootRef !== binding.callerRootRef)) fail("launch slot adoption binding changed", "PROJECT_SESSION_ADOPTION_FORBIDDEN");
+    const result = record(await this.provider.recordAdoption(execution, { canonicalProjectKey: binding.canonicalProjectKey, projectRef: project.projectRef, boardRef: project.boardRef, projectTicket: project.projectTicket, callerRootRef: binding.callerRootRef, batchRef: batch.batchRef, slotRef: slot.slotRef, operationRef: slot.operationRef, adoptedActorRef: actor }), "Host adoption record");
+    if (result.projectRef !== project.projectRef || result.operationRef !== slot.operationRef || result.state !== "ready") fail("Host adoption record binding is invalid", "PROJECT_SESSION_LAUNCH_PROVIDER_MISMATCH");
+    slot.adoptedActorRef = actor; slot.adoptedCallerRootRef = binding.callerRootRef; slot.updatedAt = timestamp(this.clock); batch.updatedAt = slot.updatedAt; await this.#persist(); this.slotByAdoptedActor.set(actorKey, selected); return { recorded: true };
   }
-  async recordAdoptedActorFailure(execution,{adoptedActorRef,projectBinding}={}) {
-    await this.init(); const actor=text(adoptedActorRef,"adoptedActorRef",256),binding=this.#binding(projectBinding),project=await this.#resolveProject(execution,binding);
-    const matches=[]; for(const batch of this.document.batches) if(this.#matchesProjectBinding(batch,binding)&&batch.projectRef===project.projectRef&&batch.boardRef===project.boardRef) for(const slot of batch.slots) if(slot.adoptedActorRef===actor) matches.push({batch,slot});
-    if(matches.length!==1) fail(matches.length===0?"adopted root launch binding is unavailable":"adopted root launch binding is ambiguous","PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
-    const {batch,slot}=matches[0]; if(slot.state==="failed") return this.project(batch); if(slot.state!=="ready") fail("adopted root lifecycle is not recoverable","PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
-    const result=record(await this.provider.recordFailure(execution,{canonicalProjectKey:binding.canonicalProjectKey,projectRef:project.projectRef,boardRef:project.boardRef,projectTicket:project.projectTicket,callerRootRef:binding.callerRootRef,batchRef:batch.batchRef,slotRef:slot.slotRef,operationRef:slot.operationRef}),"Host lifecycle failure record");
-    if(result.projectRef!==project.projectRef||result.operationRef!==slot.operationRef||result.state!=="failed") fail("Host lifecycle failure binding is invalid","PROJECT_SESSION_LAUNCH_PROVIDER_MISMATCH");
-    this.#setSlotState(slot,"failed");slot.errorCode=result.errorCode||"HOST_SESSION_LIFECYCLE_FAILED";slot.hostRevision=result.revision;slot.updatedAt=timestamp(this.clock);batch.state=deriveBatchState(batch);batch.updatedAt=slot.updatedAt;await this.#persist();return this.project(batch);
+  async recordAdoptedActorFailure(execution, { adoptedActorRef, projectBinding } = {}) {
+    await this.init();
+    const actor = text(adoptedActorRef, "adoptedActorRef", 256), binding = this.#binding(projectBinding), project = await this.#resolveProject(execution, binding), selected = this.slotByAdoptedActor.get(this.#adoptedActorKey(binding.canonicalProjectKey, actor));
+    if (!selected) fail("adopted root launch binding is unavailable", "PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
+    const { batch, slot } = selected;
+    if (!this.#matchesProjectBinding(batch, binding) || batch.projectRef !== project.projectRef || batch.boardRef !== project.boardRef || slot.adoptedActorRef !== actor || slot.adoptedCallerRootRef !== binding.callerRootRef) fail("adopted root launch binding is unavailable", "PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
+    if (slot.state === "failed") return this.project(batch);
+    if (slot.state !== "ready") fail("adopted root lifecycle is not recoverable", "PROJECT_ROOT_RECOVERY_EVIDENCE_REQUIRED");
+    const result = record(await this.provider.recordFailure(execution, { canonicalProjectKey: binding.canonicalProjectKey, projectRef: project.projectRef, boardRef: project.boardRef, projectTicket: project.projectTicket, callerRootRef: binding.callerRootRef, batchRef: batch.batchRef, slotRef: slot.slotRef, operationRef: slot.operationRef, adoptedActorRef: actor }), "Host lifecycle failure record");
+    if (result.projectRef !== project.projectRef || result.operationRef !== slot.operationRef || result.state !== "failed") fail("Host lifecycle failure binding is invalid", "PROJECT_SESSION_LAUNCH_PROVIDER_MISMATCH");
+    this.#setSlotState(slot, "failed"); slot.errorCode = result.errorCode || "HOST_SESSION_LIFECYCLE_FAILED"; slot.hostRevision = result.revision; slot.updatedAt = timestamp(this.clock); batch.state = deriveBatchState(batch); batch.updatedAt = slot.updatedAt; await this.#persist(); return this.project(batch);
   }
   async stop(execution, { batchRef, projectBinding } = {}) {
     await this.init();
@@ -350,13 +375,13 @@ export class ProjectSessionLaunchRuntime {
     if (targets.length) await this.#persist();
   }
   project(batch) { return { batchRef: batch.batchRef, boardRef: batch.boardRef, totalSessions: batch.totalSessions, total: batch.slots.length, reservedCount: batch.slots.filter((slot) => typeof slot.slotActorRef === "string" && typeof slot.taskRef === "string").length, noHostEffects: batch.noHostEffects === true, createdSessionCount: batch.slots.filter((slot) => slot.state === "ready").length, state: batch.state, slots: batch.slots.map(publicSlot) }; }
-  async close() { this.closed = true; await Promise.allSettled([...this.activeRuns]); this.executionByBatch.clear(); this.batchByRef.clear(); this.slotByRef.clear(); this.batchByProjectRequest.clear(); this.batchRefsByCallerRoot.clear(); this.queuedByProject.clear(); await this.writeChain; if (this.disposeProvider) this.provider?.dispose?.(); }
+  async close() { this.closed = true; await Promise.allSettled([...this.activeRuns]); this.executionByBatch.clear(); this.batchByRef.clear(); this.slotByRef.clear(); this.slotByAdoptedActor.clear(); this.batchByProjectRequest.clear(); this.batchRefsByCallerRoot.clear(); this.queuedByProject.clear(); await this.writeChain; if (this.disposeProvider) this.provider?.dispose?.(); }
   #binding(value) {
     const binding = record(value, "Host internal project binding");
     const canonicalProjectKey = text(binding.canonicalProjectKey, "canonicalProjectKey", 128);
     if (!/^[a-f0-9]{64}$/u.test(canonicalProjectKey)) fail("canonicalProjectKey is invalid");
-    const workspacePath = text(binding.workspacePath, "workspacePath", 4096), callerRootId = text(binding.callerRootId, "callerRootId", 256);
-    if (this.fixedProjectBinding && (canonicalProjectKey !== this.fixedProjectBinding.canonicalProjectKey || workspacePath !== this.fixedProjectBinding.workspacePath)) fail("project binding belongs to another launch lane", "PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH");
+    const workspacePath = resolvedWorkspacePath(binding.workspacePath, "workspacePath", this.platform), callerRootId = text(binding.callerRootId, "callerRootId", 256);
+    if (this.fixedProjectBinding && (canonicalProjectKey !== this.fixedProjectBinding.canonicalProjectKey || !sameWorkspace(workspacePath, this.fixedProjectBinding.workspacePath, this.platform))) fail("project binding belongs to another launch lane", "PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH");
     let callerRootRef;
     try { callerRootRef = this.provider.callerRootRef(canonicalProjectKey, callerRootId); } catch { throw providerError(); }
     if (typeof callerRootRef !== "string" || !/^[a-f0-9]{64}$/u.test(callerRootRef)) throw providerError();
@@ -366,7 +391,8 @@ export class ProjectSessionLaunchRuntime {
   async #resolveProject(execution, binding) { return record(await this.provider.resolveProject(execution, { canonicalProjectKey: binding.canonicalProjectKey, workspacePath: binding.workspacePath, callerRootRef: binding.callerRootRef }), "Host project binding"); }
   #laneBindingRef(canonicalProjectKey) { return opaque(this.document.secret, "lane-binding", canonicalProjectKey); }
   #canonicalProjectKey(batch) { return this.fixedProjectBinding?.canonicalProjectKey ?? batch.canonicalProjectKey; }
-  #matchesProjectBinding(batch, binding) { return this.redactProjectBinding ? batch.laneBindingRef === this.#laneBindingRef(binding.canonicalProjectKey) && binding.workspacePath === this.fixedProjectBinding?.workspacePath : binding.canonicalProjectKey === batch.canonicalProjectKey && binding.workspacePath === batch.workspacePath; }
+  #adoptedActorKey(canonicalProjectKey, adoptedActorRef) { return `${canonicalProjectKey}\0${adoptedActorRef}`; }
+  #matchesProjectBinding(batch, binding) { return this.redactProjectBinding ? batch.laneBindingRef === this.#laneBindingRef(binding.canonicalProjectKey) && sameWorkspace(binding.workspacePath, this.fixedProjectBinding.workspacePath, this.platform) : binding.canonicalProjectKey === batch.canonicalProjectKey && sameWorkspace(binding.workspacePath, batch.workspacePath, this.platform); }
   #projectRequestKey(projectRef, requestId) { return `${projectRef}\0${requestId}`; }
   #batch(batchRef) { const selected = this.batchByRef.get(text(batchRef, "batchRef", 128)); if (!selected) fail("launch batch not found", "PROJECT_SESSION_LAUNCH_NOT_FOUND"); return selected; }
   #noteProject(projectRef) { if (!this.projectOrder.includes(projectRef)) this.projectOrder.push(projectRef); }
@@ -375,13 +401,19 @@ export class ProjectSessionLaunchRuntime {
     this.batchByProjectRequest.set(this.#projectRequestKey(batch.projectRef, batch.requestId), batch);
     const roots = this.batchRefsByCallerRoot.get(batch.callerStopRef) ?? new Set(); roots.add(batch.batchRef); this.batchRefsByCallerRoot.set(batch.callerStopRef, roots);
     for (const slot of batch.slots) {
-      this.slotByRef.set(slot.slotRef, { batch, slot });
+      const selected = { batch, slot };
+      this.slotByRef.set(slot.slotRef, selected);
+      if (typeof slot.adoptedActorRef === "string") {
+        const actorKey = this.#adoptedActorKey(this.#canonicalProjectKey(batch), slot.adoptedActorRef), existing = this.slotByAdoptedActor.get(actorKey);
+        if (existing && (existing.batch !== batch || existing.slot !== slot)) fail("persisted adopted root binding is ambiguous", "PROJECT_SESSION_LAUNCH_STORE_INVALID");
+        this.slotByAdoptedActor.set(actorKey, selected);
+      }
       if (!TERMINAL.has(slot.state)) this.outstandingCount += 1;
       if (slot.state === "queued" && !batch.stopRequested) this.#enqueue(batch, slot);
     }
   }
   #rebuildIndexes() {
-    this.batchByRef.clear(); this.slotByRef.clear(); this.batchByProjectRequest.clear(); this.batchRefsByCallerRoot.clear(); this.queuedByProject.clear(); this.projectOrder.length = 0; this.queuedCount = 0; this.outstandingCount = 0;
+    this.batchByRef.clear(); this.slotByRef.clear(); this.slotByAdoptedActor.clear(); this.batchByProjectRequest.clear(); this.batchRefsByCallerRoot.clear(); this.queuedByProject.clear(); this.projectOrder.length = 0; this.queuedCount = 0; this.outstandingCount = 0;
     for (const batch of this.document.batches) this.#indexBatch(batch);
   }
   #enqueue(batch, slot) {
@@ -471,7 +503,8 @@ export class ProjectSessionLaunchRegistry {
     this.rootPath = text(rootPath, "rootPath", 4096);
     this.legacyFilePath = legacyFilePath === undefined ? undefined : text(legacyFilePath, "legacyFilePath", 4096);
     this.provider = assertProvider(provider);
-    this.runtimeOptions = runtimeOptions;
+    this.platform = (runtimeOptions.platform ?? process.platform) === "win32" ? "win32" : "posix";
+    this.runtimeOptions = { ...runtimeOptions, platform: this.platform };
     this.runtimes = new Map();
     this.legacyRuntime = undefined;
     this.closed = false;
@@ -485,7 +518,7 @@ export class ProjectSessionLaunchRegistry {
     return this.safeState();
   }
   safeState() { return { available: this.provider !== undefined, closed: this.closed, laneCount: this.runtimes.size, queued: [...this.runtimes.values()].reduce((sum, entry) => sum + entry.runtime.safeState().queued, 0), running: [...this.runtimes.values()].reduce((sum, entry) => sum + entry.runtime.safeState().running, 0) }; }
-  validateSlots(totalSessions, slots) { return normalizeSlots(slots, integer(totalSessions, "totalSessions", 2, 64) - 1); }
+  validateSlots(totalSessions, slots) { return normalizeSlots(slots, integer(totalSessions, "totalSessions", 2, 64) - 1, this.platform); }
   async preflight(execution, input = {}) { return (await this.#lane(input.projectBinding)).preflight(execution, input); }
   async prepareStart(execution, input = {}) { return (await this.#lane(input.projectBinding)).prepareStart(execution, input); }
   async prepareAdoptions(execution, input = {}) { return (await this.#lane(input.projectBinding)).prepareAdoptions(execution, input); }
@@ -522,7 +555,7 @@ export class ProjectSessionLaunchRegistry {
   }
   async #lane(projectBinding) {
     if (this.closed) fail("session launch registry is closed", "PROJECT_SESSION_LAUNCH_CLOSED");
-    const binding = record(projectBinding, "Host internal project binding"), canonicalProjectKey = text(binding.canonicalProjectKey, "canonicalProjectKey", 128), workspacePath = text(binding.workspacePath, "workspacePath", 4096);
+    const binding = record(projectBinding, "Host internal project binding"), canonicalProjectKey = text(binding.canonicalProjectKey, "canonicalProjectKey", 128), workspacePath = resolvedWorkspacePath(binding.workspacePath, "workspacePath", this.platform);
     const laneRef = this.#laneReference(binding);
     let entry = this.runtimes.get(laneRef);
     if (!entry) {

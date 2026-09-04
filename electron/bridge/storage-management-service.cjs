@@ -2,13 +2,14 @@ const path = require('node:path')
 const { randomUUID } = require('node:crypto')
 
 const { CapabilityBroker } = require('./capability-broker.cjs')
-const { StorageCleanupService } = require('./storage-cleanup-service.cjs')
+const { StorageCleanupService, areCachePlansEquivalent } = require('./storage-cleanup-service.cjs')
 const { scanHarnessData } = require('./storage-scan-service.cjs')
 
 const PREVIEW_TTL_MS = 10 * 60_000
 const MAX_PENDING_PREVIEWS = 8
 const MAX_TEMP_ENTRIES = 100
 const AUTO_CACHE_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000
+const AUTO_CACHE_NARROW_SCAN_ENABLED = process.env.DSH_AUTO_CACHE_NARROW_SCAN !== '0'
 
 function sanitizeOptions(input = {}) {
   const tempEntries = Array.isArray(input.tempEntries)
@@ -31,7 +32,7 @@ function sanitizeOptions(input = {}) {
 
 function publicPlan(plan) {
   const sanitize = item => {
-    const { identity, ...safe } = item || {}
+    const { identity, observedMtimeMs, ...safe } = item || {}
     return safe
   }
   return {
@@ -57,6 +58,9 @@ class StorageManagementService {
     this.previews = new Map()
     this.maintenancePromise = null
     this.lastMaintenance = null
+    const narrowScanRequested = options.automaticCacheNarrowScan ?? AUTO_CACHE_NARROW_SCAN_ENABLED
+    this.automaticCacheNarrowScan = Boolean(narrowScanRequested && typeof this.cleanup.planCacheOnly === 'function')
+    this.cacheNarrowValidated = false
   }
 
   async scan() {
@@ -99,29 +103,70 @@ class StorageManagementService {
     if (this.maintenancePromise) return this.maintenancePromise
     const threshold = Math.max(AUTO_CACHE_MIN_AGE_MS, Number.isFinite(Number(minAgeMs)) ? Number(minAgeMs) : AUTO_CACHE_MIN_AGE_MS)
     this.maintenancePromise = (async () => {
-      const startedAt = new Date(this.now()).toISOString()
+      const referenceNowMs = this.now()
+      const startedAt = new Date(referenceNowMs).toISOString()
+      let planner = this.automaticCacheNarrowScan ? 'shadow' : 'legacy'
+      let shadowCompared = false
       try {
-        const preview = await this.cleanup.plan(this.root, {
+        const previewOptions = {
           preview: true,
           includeOldRuntimes: false,
           includeCaches: true,
           cacheMinAgeMs: threshold,
-          tempEntries: []
-        })
+          tempEntries: [],
+          referenceNowMs
+        }
+        let preview
+        if (this.automaticCacheNarrowScan && !this.cacheNarrowValidated) {
+          const legacyPreview = await this.#planAutomaticLegacy(previewOptions)
+          const narrowPreview = await this.cleanup.planCacheOnly(this.root, previewOptions)
+          shadowCompared = true
+          if (!areCachePlansEquivalent(legacyPreview, narrowPreview)) {
+            this.lastMaintenance = {
+              ok: false,
+              previewOnly: true,
+              planner,
+              shadowCompared,
+              startedAt,
+              completedAt: new Date(this.now()).toISOString(),
+              deletedEntries: 0,
+              freedBytes: 0,
+              legacyCandidates: legacyPreview.deletions.filter(candidate => candidate.kind === 'cache').length,
+              cacheOnlyCandidates: narrowPreview.deletions.filter(candidate => candidate.kind === 'cache').length,
+              error: 'cache-only shadow preview 与 legacy preview 不等价；已 fail closed。'
+            }
+            return { ...this.lastMaintenance }
+          }
+          this.cacheNarrowValidated = true
+          preview = narrowPreview
+          planner = 'cache-only'
+        } else if (this.automaticCacheNarrowScan) {
+          preview = await this.cleanup.planCacheOnly(this.root, previewOptions)
+          planner = 'cache-only'
+        } else {
+          preview = await this.#planAutomaticLegacy(previewOptions)
+        }
+
         const approvedCandidates = preview.deletions.filter(candidate => candidate.kind === 'cache' && Number(candidate.ageMs) >= threshold)
+        const applyOptions = {
+          preview: false,
+          includeOldRuntimes: false,
+          includeCaches: true,
+          cacheMinAgeMs: threshold,
+          tempEntries: [],
+          approvedCandidates
+        }
         const applied = approvedCandidates.length
-          ? await this.cleanup.plan(this.root, {
-              preview: false,
-              includeOldRuntimes: false,
-              includeCaches: true,
-              cacheMinAgeMs: threshold,
-              tempEntries: [],
-              approvedCandidates
-            })
+          ? planner === 'cache-only'
+            ? await this.cleanup.planCacheOnly(this.root, applyOptions)
+            : await this.#planAutomaticLegacy(applyOptions)
           : { applied: [], summary: { candidates: 0, freedBytes: 0 } }
         const deleted = (applied.applied || []).filter(item => item.applied)
         this.lastMaintenance = {
           ok: true,
+          previewOnly: false,
+          planner,
+          shadowCompared,
           startedAt,
           completedAt: new Date(this.now()).toISOString(),
           deletedEntries: deleted.length,
@@ -131,6 +176,9 @@ class StorageManagementService {
       } catch (error) {
         this.lastMaintenance = {
           ok: false,
+          previewOnly: true,
+          planner,
+          shadowCompared,
           startedAt,
           completedAt: new Date(this.now()).toISOString(),
           deletedEntries: 0,
@@ -153,6 +201,10 @@ class StorageManagementService {
       automaticCache: {
         enabled: true,
         minimumAgeMs: AUTO_CACHE_MIN_AGE_MS,
+        planner: this.automaticCacheNarrowScan
+          ? this.cacheNarrowValidated ? 'cache-only' : 'shadow-pending'
+          : 'legacy',
+        rollbackFlag: 'DSH_AUTO_CACHE_NARROW_SCAN=0',
         protectedKinds: ['sessions', 'attachments', 'memories', 'workspace', 'current-runtime'],
         lastRun: this.lastMaintenance ? { ...this.lastMaintenance } : null
       }
@@ -162,6 +214,13 @@ class StorageManagementService {
   stop() {
     this.previews.clear()
     return this.broker.stop(null, 'DESKTOP_STOP')
+  }
+
+  async #planAutomaticLegacy(options) {
+    if (typeof this.cleanup.planCacheOnlyLegacy !== 'function') {
+      throw new Error('自动缓存维护缺少 constrained legacy oracle；已 fail closed。')
+    }
+    return this.cleanup.planCacheOnlyLegacy(this.root, options)
   }
 
   #dispatch(action, payload, confirm) {
@@ -185,6 +244,7 @@ class StorageManagementService {
 
 module.exports = {
   AUTO_CACHE_MIN_AGE_MS,
+  AUTO_CACHE_NARROW_SCAN_ENABLED,
   MAX_PENDING_PREVIEWS,
   MAX_TEMP_ENTRIES,
   PREVIEW_TTL_MS,

@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
-const { createHmac, randomBytes } = require('node:crypto')
+const { createHash, createHmac, randomBytes } = require('node:crypto')
 const { mkdir, mkdtemp, readFile, rm } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
 const { createAgentTeamsSessionLaunchService, projectKeyForWorkspace, CALLER_SALT_ENV } = require('../electron/bridge/agent-teams-session-launch-service.cjs')
@@ -109,4 +109,60 @@ test('the unique cross-session board entry exposes requests accessibly and proje
   const ctx = { agents: { roots: () => [], get: id => id === member.id ? member : undefined, currentInitiator: () => member } }
   assert.throws(() => mod.requireProjectRootCaller(ctx, { agent: member }), error => error.code === 'PROJECT_COLLABORATION_ROOT_REQUIRED')
   assert.equal(JSON.stringify(member).includes('projectRef'), false)
+})
+
+test('projection cache never crosses ACL, owner, epoch, settings, session, selection, or live Goal authorization boundaries', async () => {
+  const mod = await import(`${indexUrl}?projection-security=${Date.now()}-${Math.random()}`)
+  const cwd = path.resolve(os.tmpdir(), 'projection-security-root')
+  const pathIdentity = process.platform === 'win32' ? cwd.replace(/\\/gu, '/').toLocaleLowerCase('en-US') : cwd.replace(/\\/gu, '/')
+  const projectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', pathIdentity])).digest('hex')
+  const timestamp = '2026-01-01T00:00:00.000Z'
+  const team = {
+    id: 'secure-team', projectKey, rootLeadSessionId: 'secure-root', name: 'Secure', objective: 'Exact projection security', revision: 1, state: 'active', pauseEpoch: 0, createdAt: timestamp, updatedAt: timestamp,
+    members: [{ id: 'lead:secure-root', sessionId: 'secure-root', name: 'Lead', role: 'lead', kind: 'lead', state: 'running', createdAt: timestamp, updatedAt: timestamp }],
+    tasks: [], messages: [], plan: { phase: 'active', hash: 'a'.repeat(64) },
+    autopilot: { status: 'active', goalId: 'goal-one', rootSessionId: 'secure-root', authorizationEpoch: 1, pauseEpochAtGrant: 0 },
+    ownershipHistory: [],
+  }
+  const document = { version: 8, settings: { enabled: true, maxMembers: 8, maxActiveTurns: 8, autopilotEnabled: true, autopilotMaxAdditionalRounds: 200 }, teams: [team], routingReceipts: [], routingReceiptArchive: { version: 1, count: 0, chainHash: '0'.repeat(64) } }
+  const cache = mod.createTeamProjectionCache({ mode: 'enabled' })
+  let goal = { id: 'goal-one', phase: 'active', activation: 'armed' }
+  const root = { id: 'secure-root', session: { header: { cwd } } }
+  let roots = [root]
+  const ctx = { agents: { get: id => id === root.id ? root : undefined, roots: () => roots }, goals: { get: candidate => candidate === root ? goal : undefined } }
+
+  const pure = cache.project(document, 'secure-root', 'secure-team', 'task-one')
+  const pureHit = cache.project(document, 'secure-root', 'secure-team', 'task-one')
+  assert.strictEqual(pureHit, pure)
+  const liveOne = mod.teamSnapshotWithAutopilotAuthorization(ctx, document, 'secure-root', 'secure-team', cache.project)
+  assert.equal(liveOne.autopilotAuthorization.goalId, 'goal-one')
+  goal = { id: 'goal-two', phase: 'active', activation: 'armed' }
+  const liveTwo = mod.teamSnapshotWithAutopilotAuthorization(ctx, document, 'secure-root', 'secure-team', cache.project)
+  assert.equal(liveTwo.autopilotAuthorization.goalId, 'goal-two', 'Goal authorization is freshly overlaid and never frozen in the store cache')
+  assert.notEqual(liveTwo.cursor, liveOne.cursor)
+  roots = []
+  assert.equal(mod.teamSnapshotWithAutopilotAuthorization(ctx, document, 'secure-root', 'secure-team', cache.project).autopilotAuthorization, null)
+
+  const wrongSession = cache.project(document, 'other-session', 'secure-team', 'task-one')
+  const wrongSelection = cache.project(document, 'secure-root', 'not-owned', 'task-one')
+  const wrongTask = cache.project(document, 'secure-root', 'secure-team', 'task-two')
+  assert.equal(wrongSession.activeTeamId, null)
+  assert.equal(wrongSelection.activeTeamId, 'secure-team')
+  assert.notStrictEqual(wrongTask, pure)
+
+  team.autopilot.authorizationEpoch = 2
+  team.pauseEpoch = 1
+  team.revision += 1
+  team.rootLeadSessionId = 'new-owner'
+  team.members[0].id = 'lead:new-owner'
+  team.members[0].sessionId = 'new-owner'
+  document.settings.maxMembers = 7
+  const staleOwner = cache.project(document, 'secure-root', 'secure-team', 'task-one')
+  const newOwner = cache.project(document, 'new-owner', 'secure-team', 'task-one')
+  assert.equal(staleOwner.activeTeamId, null)
+  assert.equal(newOwner.team.rootLeadSessionId, 'new-owner')
+  assert.equal(newOwner.config.maxMembers, 7)
+  assert.notStrictEqual(newOwner, pure)
+  assert.ok(cache.stats().misses >= 6)
+  cache.close()
 })

@@ -117,10 +117,11 @@ test('public exports expose the versioned Remote/Session seam without relying on
   }
   for (const [name, currentKeys] of Object.entries(expected)) {
     const pkg = manifest(name)
-    assert.ok(['0.1.2-alpha.2', '0.1.2-alpha.3', '0.1.2-alpha.4'].includes(pkg.version), `unsupported ${name} version ${pkg.version}`)
-    const keys = pkg.version === '0.1.2-alpha.4' ? currentKeys : [...currentKeys, './invariant']
+    assert.ok(['0.1.2-alpha.2', '0.1.2-alpha.3', '0.1.2-alpha.4', '0.1.2-alpha.5'].includes(pkg.version), `unsupported ${name} version ${pkg.version}`)
+    const usesCurrentExports = pkg.version === '0.1.2-alpha.4' || pkg.version === '0.1.2-alpha.5'
+    const keys = usesCurrentExports ? currentKeys : [...currentKeys, './invariant']
     for (const key of keys) assert.ok(Object.hasOwn(pkg.exports, key), `${name} is missing ${key}`)
-    assert.equal(Object.hasOwn(pkg.exports, './invariant'), pkg.version !== '0.1.2-alpha.4', `${name} invariant export does not match its pinned version`)
+    assert.equal(Object.hasOwn(pkg.exports, './invariant'), !usesCurrentExports, `${name} invariant export does not match its pinned version`)
   }
   const report = readFileSync(path.join(repoRoot, 'docs', 'OFFICIAL-ALPHA2-REMOTE-SESSION-SEAM.zh-CN.md'), 'utf8')
   assert.match(report, /unproven=blocked/u)

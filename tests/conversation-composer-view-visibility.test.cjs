@@ -30,6 +30,6 @@ test('modern conversation patch exposes the active view and hides the composer o
 test('modern runtime dispatch keeps broad official UI patches skipped and applies only composer visibility', async () => {
   const source = await readFile(patchFile, 'utf8')
   assert.match(source, /const modernConversationComposerChanged = targetsModernAlpha \? await patchInstalledModernConversationComposerVisibility\(\) : false/u)
-  assert.match(source, /const conversationChanged = targetsAlpha3 \? false : targetsAlpha4 \? false : await patchInstalledConversation\(\)/u)
+  assert.match(source, /const conversationChanged = targetsAlpha5 \? false : targetsAlpha3 \? false : targetsAlpha4 \? false : await patchInstalledConversation\(\)/u)
   assert.match(source, /restoreModernConversationComposerVisibilitySource\(source\)/u)
 })

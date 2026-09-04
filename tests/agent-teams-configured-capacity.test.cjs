@@ -54,7 +54,12 @@ test('configured 8/8 capacity saves directly and bootstraps eight visible peers'
   process.env.DSH_HOME = root
   try {
     const mod = await import(`${pathToFileURL(pluginFile).href}?bootstrap-eight=${Date.now()}-${Math.random()}`)
-    const tools = new Map(), routes = new Map(), prompts = [], starts = [], followups = []
+    const tools = new Map(), routes = new Map(), listeners = new Map(), prompts = [], starts = [], followups = [], lifecycleStarts = [], lifecycleEnds = [], activeRuns = new Map()
+    let nextRun = 0, maxObservedActive = 0
+    const emitLifecycle = async (event, info) => {
+      const handler = listeners.get(event)
+      if (handler !== undefined) await handler(info)
+    }
     const lead = {
       id: 'bootstrap-eight-lead',
       status: 'running',
@@ -71,11 +76,29 @@ test('configured 8/8 capacity saves directly and bootstraps eight visible peers'
       systemPrompt: { section(section) { prompts.push(section); return () => {} } },
       webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
       effect(setup) { const cleanup = setup(); if (typeof cleanup === 'function') cleanups.push(cleanup) },
-      on() { return () => {} },
+      on(event, handler) { listeners.set(event, handler); return () => { if (listeners.get(event) === handler) listeners.delete(event) } },
       agents: { get(id) { return id === lead.id ? lead : undefined }, roots() { return [lead] }, currentInitiator() { return lead } },
       subagents: {
-        async startContinuable(spec) { starts.push(spec); return { childId: spec.childId, messageId: `start-${starts.length}` } },
-        async [queueSubagentPrompt](parent, childId, content) { followups.push({ parent, childId, content }); return `followup-${followups.length}` },
+        async startContinuable(spec) {
+          starts.push(spec)
+          const runId = `capacity-run-${++nextRun}`
+          activeRuns.set(spec.childId, runId)
+          lifecycleStarts.push({ childId: spec.childId, runId })
+          maxObservedActive = Math.max(maxObservedActive, activeRuns.size)
+          await emitLifecycle('subagent/start', { id: spec.childId, runId })
+          return { childId: spec.childId, messageId: `start-${starts.length}`, runId }
+        },
+        async [queueSubagentPrompt](parent, childId, content) {
+          const runId = activeRuns.get(childId)
+          assert.equal(typeof runId, 'string', 'followup must remain bound to the exact admitted lifecycle run')
+          followups.push({ parent, childId, content, runId })
+          await emitLifecycle('subagent/end', { id: childId, runId: `${runId}-stale`, stopReason: 'completed' })
+          assert.equal(activeRuns.get(childId), runId, 'a stale lifecycle end cannot close the fixture run')
+          await emitLifecycle('subagent/end', { id: childId, runId, stopReason: 'completed' })
+          lifecycleEnds.push({ childId, runId })
+          activeRuns.delete(childId)
+          return `followup-${followups.length}`
+        },
         async drainContinuableChildren() {}
       }
     }
@@ -132,6 +155,17 @@ test('configured 8/8 capacity saves directly and bootstraps eight visible peers'
     assert.equal(bootstrapped.team.members.filter(member => member.kind === 'worker').length, 8)
     assert.equal(starts.length, 8)
     assert.equal(followups.length, 8)
+    assert.equal(lifecycleStarts.length, 8)
+    assert.equal(lifecycleEnds.length, 8)
+    assert.equal(new Set(lifecycleStarts.map(event => event.runId)).size, 8, 'every reserved child receives one unique exact run id')
+    assert.deepEqual(
+      new Set(lifecycleEnds.map(event => `${event.childId}:${event.runId}`)),
+      new Set(lifecycleStarts.map(event => `${event.childId}:${event.runId}`)),
+      'every published followup ends only its exact generation-bound lifecycle run'
+    )
+    assert.ok(maxObservedActive >= 1)
+    assert.ok(maxObservedActive <= 8, 'fixture-observed active runs never exceed configured capacity')
+    assert.equal(activeRuns.size, 0)
 
     openDirectHumanTurn(lead)
     await assert.rejects(
@@ -143,6 +177,50 @@ test('configured 8/8 capacity saves directly and bootstraps eight visible peers'
     process.env.DSH_HOME = previousHome
     for (const cleanup of cleanups.reverse()) await cleanup()
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('generation-bound admission keeps the ninth queued until one exact run ends', async () => {
+  const mod = await import(`${pathToFileURL(pluginFile).href}?capacity-generation=${Date.now()}-${Math.random()}`)
+  const admission = mod.createTeamTurnAdmission({ limit: 8, maxQueued: 4, maxQueuedPerRoot: 2, waitMs: 1_000 })
+  const root = { id: 'capacity-generation-root' }
+  try {
+    for (let index = 0; index < 8; index += 1) {
+      const childId = `capacity-child-${index}`
+      await admission.run(root, childId, new AbortController().signal, async () => {
+        assert.equal(admission.noteStart({ id: childId, runId: `capacity-exact-run-${index}` }), true)
+      })
+    }
+    assert.equal(admission.snapshot().active, 8)
+    let ninthCalls = 0
+    const ninth = admission.run(root, 'capacity-child-8', new AbortController().signal, async () => {
+      ninthCalls += 1
+      assert.equal(admission.noteStart({ id: 'capacity-child-8', runId: 'capacity-exact-run-8' }), true)
+      return 'ninth-admitted'
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(ninthCalls, 0)
+    assert.equal(admission.snapshot().queued, 1)
+    const firstGeneration = admission.current('capacity-child-0').generation
+    assert.equal(admission.noteEnd({ id: 'capacity-child-0', runId: 'capacity-wrong-run' }), false)
+    assert.equal(admission.confirmDrained('capacity-child-0', firstGeneration + 1), false)
+    assert.equal(admission.snapshot().active, 8)
+    assert.equal(admission.snapshot().queued, 1)
+    assert.equal(admission.noteEnd({ id: 'capacity-child-0', runId: 'capacity-exact-run-0' }), true)
+    assert.equal(await ninth, 'ninth-admitted')
+    assert.equal(ninthCalls, 1)
+    assert.equal(admission.snapshot().active, 8)
+    for (let index = 1; index <= 8; index += 1) assert.equal(admission.noteEnd({ id: `capacity-child-${index}`, runId: `capacity-exact-run-${index}` }), true)
+    assert.equal(admission.snapshot().active, 0)
+    await admission.run(root, 'capacity-child-0', new AbortController().signal, async () => {
+      assert.equal(admission.noteStart({ id: 'capacity-child-0', runId: 'capacity-newer-run-0' }), true)
+    })
+    assert.equal(admission.noteEnd({ id: 'capacity-child-0', runId: 'capacity-exact-run-0' }), false, 'a stale old end cannot release a newer lease for the same child')
+    assert.equal(admission.snapshot().active, 1)
+    assert.equal(admission.noteEnd({ id: 'capacity-child-0', runId: 'capacity-newer-run-0' }), true)
+    assert.equal(admission.snapshot().active, 0)
+  } finally {
+    admission.close()
   }
 })
 

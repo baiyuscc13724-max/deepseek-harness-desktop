@@ -217,6 +217,34 @@ test('Host routes, model tools, and the sole UI workspace converge on the same b
   assert.match(client, /h\(ProjectCollaborationWorkspace, \{ key: "project-collaboration:" \+ props\.sessionId,[\s\S]*onRecover: recoverProjectMember, onReconcile: reconcileProjectMember, onRootRecovery: recoverProjectRoot \}\)/u)
 })
 
+test('alpha.5 preserves Desktop Agent Teams, Goal, Schedule, Stop, and authorization-epoch ownership boundaries', async () => {
+  const [host, authorization, main] = await Promise.all([
+    source('index.js'),
+    readFile(path.join(root, 'electron', 'bridge', 'agent-teams-authorization-service.cjs'), 'utf8'),
+    readFile(path.join(root, 'electron', 'main.cjs'), 'utf8'),
+  ])
+  const coreManifest = JSON.parse(await readFile(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))
+  for (const name of ['@deepseek-ai/dsh-goal', '@deepseek-ai/dsh-schedule']) {
+    assert.equal(coreManifest.dependencies[name], '^0.1.2-alpha.5')
+    const installed = JSON.parse(await readFile(path.join(root, 'node_modules', '@deepseek-ai', name.slice('@deepseek-ai/'.length), 'package.json'), 'utf8'))
+    assert.equal(installed.version, '0.1.2-alpha.5')
+  }
+  for (const tool of ['team_start', 'team_resume', 'team_shutdown']) assert.match(host, new RegExp(`name: "${tool}"`, 'u'))
+  assert.match(host, /kind: "user_stop"[\s\S]{0,220}leaseEpoch: task\.leaseEpoch/u)
+  assert.match(host, /team\.autopilot\.authorizationEpoch !== hostState\.authorizationEpoch/u)
+  assert.match(authorization, /pending\.authorizationEpoch !== authorizationEpoch/u)
+  assert.match(authorization, /const nextAuthorizationEpoch = previous => \{[\s\S]{0,220}candidate === previous[\s\S]{0,120}HOST_AUTHORIZATION_STATE_INVALID/u)
+  assert.match(authorization, /if \(!state \|\| state\.legacy\)[\s\S]{0,320}authorizationEpoch: nextAuthorizationEpoch\(\)/u)
+  assert.match(authorization, /verifyAuthorizationHead\(state\)[\s\S]{0,120}applyAuthorizationState\(state\)/u)
+  assert.match(authorization, /const recovered = createAuthorizationState\([\s\S]{0,260}authorizationEpoch: nextAuthorizationEpoch\(previousEpoch\)[\s\S]{0,100}autopilotSettingsProof: null/u)
+  assert.match(authorization, /const AUTHORIZATION_STATE_KEYS = Object\.freeze\(\['version', 'revision', 'consumed', 'authorizationEpoch', 'autopilotSettingsProof'\]\)/u)
+  assert.match(authorization, /const capabilityToken = Buffer\.from\(token\)/u)
+  assert.match(authorization, /capabilityToken\.fill\(0\)/u)
+  assert.match(authorization, /HOST_AUTHORIZATION_MISMATCH/u)
+  assert.match(main, /revokeAgentTeamsAutopilotAuthorizations\('runtime start advanced the authorization epoch'\)/u)
+  assert.match(main, /revokeAgentTeamsAutopilotAuthorizations\('runtime stop revoked automatic continuation authority'\)/u)
+})
+
 test('the current implementation satisfies the adapter-port method contract without exposing storage to UI', async () => {
   const [storeMod, serviceMod, webMod] = await Promise.all([
     import(moduleUrl('project-task-store.js')),

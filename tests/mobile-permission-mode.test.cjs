@@ -56,8 +56,8 @@ test('composer decoration preserves the official permission control as an intera
     querySelectorAll: () => []
   }
   const document = { querySelector: () => conversation }
-  const decorate = new Function('document', 'window', 'decorateConversationWorkflow', 'accessibleButtonText', 'ensureMobileComposerModelControl', 'normalizeMobileComposerLayers', `${source}\nreturn decorateConversation`) // eslint-disable-line no-new-func
-    (document, {}, () => {}, button => String(button.getAttribute('aria-label') || button.title || button.textContent || '').trim(), () => {}, () => {})
+  const decorate = new Function('document', 'window', 'decorateConversationWorkflow', 'accessibleButtonText', 'ensureMobileComposerModelControl', 'normalizeMobileComposerLayers', 'composerInput', `${source}\nreturn decorateConversation`) // eslint-disable-line no-new-func
+    (document, {}, () => {}, button => String(button.getAttribute('aria-label') || button.title || button.textContent || '').trim(), () => {}, () => {}, scope => scope?.querySelector?.('[data-composer-input][data-phase], textarea[data-phase]') || null)
   decorate()
   assert.equal(permission.dataset.harnessMobilePermissionTrigger, 'true')
   assert.equal(permission.dataset.harnessMobileComposerTool, undefined)

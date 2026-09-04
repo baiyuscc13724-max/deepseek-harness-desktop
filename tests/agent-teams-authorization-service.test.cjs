@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const os = require('node:os')
 const path = require('node:path')
-const { mkdtemp, readFile, rm } = require('node:fs/promises')
+const { mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { createHash } = require('node:crypto')
 const { pathToFileURL } = require('node:url')
 const { createAgentTeamsAuthorizationService, startAgentTeamsAuthorizationService, ENDPOINT_ENV, TOKEN_ENV, AUTOPILOT_RECEIPT_TTL_MS, autopilotSettingsHash } = require('../electron/bridge/agent-teams-authorization-service.cjs')
@@ -424,6 +424,180 @@ test('autopilot authorization burns wrong bindings and rejects expiry, revocatio
     await assert.rejects(capability.consumeAutopilotAuthorization(autopilotRequest({ authorizationId: 'unissued-local-header' }, body)), error => error?.code === 'AGENT_TEAMS_HOST_AUTHORIZATION_INVALID')
     capability.dispose()
   } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('global autopilot proof and epoch survive restart without persisting a team grant, while disable and revoke stay closed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-autopilot-persisted-'))
+  const stateFile = path.join(root, 'state.json')
+  const issuedAt = 1_920_000_000_000
+  const epochs = ['a'.repeat(32), 'b'.repeat(32), 'c'.repeat(32), 'd'.repeat(32)]
+  const create = overrides => createAgentTeamsAuthorizationService({
+    stateFile,
+    now: () => issuedAt,
+    createAutopilotEpoch: () => epochs.shift(),
+    showMessageBox: async () => ({ response: 0 }),
+    ...overrides
+  })
+  const body = autopilotIssue()
+  const desktopBinding = autopilotDesktopBinding()
+  let service = create()
+  try {
+    await service.start()
+    let capability = await capabilityFor(service, 'persist-enable')
+    const enabledAuthorization = issueAndClaimAutopilot(service, body, desktopBinding)
+    const enabledReceipt = await capability.consumeAutopilotAuthorization(autopilotRequest(enabledAuthorization, body))
+    const enabledProof = autopilotProof(body, 'b'.repeat(32), issuedAt)
+    assert.deepEqual(enabledReceipt.autopilotSettingsProof, enabledProof)
+    await assert.rejects(capability.consumeAutopilotAuthorization(autopilotRequest(enabledAuthorization, body)), error => error?.code === 'AGENT_TEAMS_HOST_AUTHORIZATION_REPLAY')
+    capability.dispose()
+    await service.close()
+
+    const durable = JSON.parse(await readFile(stateFile, 'utf8'))
+    assert.deepEqual(Object.keys(durable).sort(), ['authorizationEpoch', 'autopilotSettingsProof', 'consumed', 'revision', 'version'])
+    assert.equal(durable.version, 2)
+    assert.equal(durable.authorizationEpoch, 'b'.repeat(32))
+    assert.deepEqual(durable.autopilotSettingsProof, enabledProof)
+    const serialized = JSON.stringify(durable)
+    for (const scopedValue of ['root-1', 'team-1', 'goal-1', enabledAuthorization.authorizationId]) assert.equal(serialized.includes(scopedValue), false, `${scopedValue} must not become a persisted team grant or receipt`)
+
+    service = create()
+    await service.start()
+    assert.deepEqual(service.readAutopilotAuthorizationState(), autopilotState('b'.repeat(32), enabledProof), 'a new Host instance restores only the global settings proof')
+    capability = await capabilityFor(service, 'persist-disable')
+    await assert.rejects(capability.consumeAutopilotAuthorization(autopilotRequest(enabledAuthorization, body)), error => error?.code === 'AGENT_TEAMS_HOST_AUTHORIZATION_INVALID')
+    const disabledBody = autopilotIssue({ autopilotEnabled: false })
+    const disabledAuthorization = issueAndClaimAutopilot(service, disabledBody, desktopBinding)
+    const disabledReceipt = await capability.consumeAutopilotAuthorization(autopilotRequest(disabledAuthorization, disabledBody))
+    const disabledProof = autopilotProof(disabledBody, 'c'.repeat(32), issuedAt)
+    assert.deepEqual(disabledReceipt.autopilotSettingsProof, disabledProof)
+    capability.dispose()
+    await service.close()
+
+    service = create()
+    await service.start()
+    assert.deepEqual(service.readAutopilotAuthorizationState(), autopilotState('c'.repeat(32), disabledProof), 'an explicit off setting cannot restart as enabled')
+    assert.deepEqual(service.revokeAutopilotAuthorizations('explicit Host revoke'), autopilotState('d'.repeat(32)))
+    await service.close()
+
+    service = create()
+    await service.start()
+    assert.deepEqual(service.readAutopilotAuthorizationState(), autopilotState('d'.repeat(32)), 'a durable revoke clears the proof across restart')
+  } finally {
+    await service.close().catch(() => undefined)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('legacy state migrates disabled and malformed, truncated, or unknown state fails closed', async t => {
+  for (const [name, contents] of [
+    ['malformed', '{not-json'],
+    ['truncated', '{"version":2,"revision":1,"consumed":[]'],
+    ['unknown-version', JSON.stringify({ version: 99, revision: 1, consumed: [], authorizationEpoch: 'a'.repeat(32), autopilotSettingsProof: null })]
+  ]) {
+    await t.test(name, async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agent-teams-autopilot-${name}-`))
+      const stateFile = path.join(root, 'state.json')
+      await writeFile(stateFile, contents, 'utf8')
+      const service = createAgentTeamsAuthorizationService({ stateFile, showMessageBox: async () => ({ response: 0 }) })
+      try { await assert.rejects(service.start(), error => error?.code === 'HOST_AUTHORIZATION_STATE_INVALID') }
+      finally { await service.close(); await rm(root, { recursive: true, force: true }) }
+    })
+  }
+
+  await t.test('legacy-consumed-state', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-autopilot-legacy-'))
+    const stateFile = path.join(root, 'state.json')
+    await writeFile(stateFile, `${JSON.stringify({ version: 1, consumed: [{ authorizationId: 'legacy-consumed', requestHash: 'a'.repeat(64), consumedAt: 1_800_000_000_000 }] })}\n`, 'utf8')
+    let prompts = 0
+    const service = createAgentTeamsAuthorizationService({
+      stateFile,
+      createAutopilotEpoch: () => 'l'.repeat(32),
+      showMessageBox: async () => { prompts += 1; return { response: 0 } }
+    })
+    await service.start()
+    try {
+      assert.deepEqual(service.readAutopilotAuthorizationState(), autopilotState('l'.repeat(32)), 'legacy consumption history must not silently enable autopilot')
+      const capability = await capabilityFor(service, 'legacy-state')
+      await assert.rejects(capability.consumeResolveUnknown(request('legacy-consumed')), error => error?.code === 'AGENT_TEAMS_HOST_AUTHORIZATION_REPLAY')
+      assert.equal(prompts, 0)
+      capability.dispose()
+      const migrated = JSON.parse(await readFile(stateFile, 'utf8'))
+      assert.equal(migrated.version, 2)
+      assert.equal(migrated.autopilotSettingsProof, null)
+      assert.equal(migrated.consumed[0].authorizationId, 'legacy-consumed')
+    } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
+  })
+})
+
+test('state rollback is rejected instead of restoring an older autopilot epoch', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-autopilot-rollback-'))
+  const stateFile = path.join(root, 'state.json')
+  const epochs = ['a'.repeat(32), 'b'.repeat(32)]
+  let service = createAgentTeamsAuthorizationService({
+    stateFile,
+    createAutopilotEpoch: () => epochs.shift(),
+    showMessageBox: async () => ({ response: 0 })
+  })
+  try {
+    await service.start()
+    const rolledBackState = await readFile(stateFile, 'utf8')
+    const capability = await capabilityFor(service, 'rollback-source')
+    const body = autopilotIssue()
+    const authorization = issueAndClaimAutopilot(service, body)
+    await capability.consumeAutopilotAuthorization(autopilotRequest(authorization, body))
+    capability.dispose()
+    await service.close()
+
+    await writeFile(stateFile, rolledBackState, 'utf8')
+    service = createAgentTeamsAuthorizationService({ stateFile, showMessageBox: async () => ({ response: 0 }) })
+    await assert.rejects(service.start(), error => error?.code === 'HOST_AUTHORIZATION_STATE_INVALID')
+  } finally {
+    await service.close().catch(() => undefined)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('atomic autopilot write failure burns the receipt and leaves a durable fail-closed recovery marker', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-autopilot-atomic-failure-'))
+  const stateFile = path.join(root, 'state.json')
+  const epochs = ['a'.repeat(32), 'b'.repeat(32), 'c'.repeat(32), 'd'.repeat(32)]
+  const options = {
+    stateFile,
+    now: () => 1_930_000_000_000,
+    createAutopilotEpoch: () => epochs.shift(),
+    showMessageBox: async () => ({ response: 0 })
+  }
+  let service = createAgentTeamsAuthorizationService(options)
+  try {
+    await service.start()
+    let capability = await capabilityFor(service, 'atomic-baseline')
+    const enabledBody = autopilotIssue()
+    const enabledAuthorization = issueAndClaimAutopilot(service, enabledBody)
+    await capability.consumeAutopilotAuthorization(autopilotRequest(enabledAuthorization, enabledBody))
+    capability.dispose()
+    await service.close()
+
+    service = createAgentTeamsAuthorizationService({
+      ...options,
+      writeAuthorizationState: () => { throw Object.assign(new Error('injected atomic write failure'), { code: 'EIO' }) }
+    })
+    await service.start()
+    capability = await capabilityFor(service, 'atomic-failure')
+    const disabledBody = autopilotIssue({ autopilotEnabled: false })
+    const failedAuthorization = issueAndClaimAutopilot(service, disabledBody)
+    await assert.rejects(capability.consumeAutopilotAuthorization(autopilotRequest(failedAuthorization, disabledBody)), error => error?.code === 'AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE')
+    await assert.rejects(capability.consumeAutopilotAuthorization(autopilotRequest(failedAuthorization, disabledBody)), error => error?.code === 'AGENT_TEAMS_HOST_AUTHORIZATION_REPLAY')
+    await assert.rejects(capability.readAutopilotAuthorizationState(), error => error?.code === 'AGENT_TEAMS_HOST_AUTHORIZATION_UNAVAILABLE')
+    capability.dispose()
+    await service.close()
+
+    service = createAgentTeamsAuthorizationService(options)
+    await service.start()
+    assert.deepEqual(service.readAutopilotAuthorizationState(), autopilotState('d'.repeat(32)), 'restart after a partial transaction rotates the epoch and clears the prior enabled proof')
+  } finally {
+    await service.close().catch(() => undefined)
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('authorization bridge start failure is fail-soft for ordinary Runtime and cleans partial service', async () => {

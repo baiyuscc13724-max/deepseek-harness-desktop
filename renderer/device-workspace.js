@@ -24,6 +24,28 @@
     }
   }
 
+  const DESKTOP_POLL_MS = 700
+  const ANDROID_LEGACY_POLL_MS = 1_000
+  const ANDROID_STREAM_FALLBACK_MS = 10_000
+  const ANDROID_STREAM_FAILURE_LIMIT = 3
+
+  function previewTickDelay(source, legacyAndroid) {
+    if (source === 'computer') return DESKTOP_POLL_MS
+    return legacyAndroid ? ANDROID_LEGACY_POLL_MS : null
+  }
+
+  function binaryFrameBytes(value) {
+    if (value instanceof ArrayBuffer) return value
+    if (ArrayBuffer.isView(value)) return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+    return null
+  }
+
+  function isDesktopFrameTransferFailure(reason) {
+    const code = String(reason?.code || '')
+    const message = String(reason?.message || reason || '')
+    return code === 'desktop-frame-transfer-failed' || /arraybuffer|data.?clone|could not be cloned|serializ|transfer/i.test(message)
+  }
+
   function create({ api } = {}) {
     if (!api?.desktopDeviceAction || typeof document === 'undefined') throw new Error('desktop device API is unavailable')
     const el = (tag, className, text) => {
@@ -114,7 +136,7 @@
     const androidSelect = el('select', 'right-workspace-device-select')
     androidSelect.setAttribute('aria-label', '选择 Android 真机或模拟器')
     androidTargetField.append(androidSelect)
-    const androidRefresh = button('刷新', 'right-workspace-device-button', () => refreshAndroid({ selectFirst: true, forceStream: true }))
+    const androidRefresh = button('刷新', 'right-workspace-device-button', () => manualRefreshAndroid())
     androidToolbar.append(androidTargetField, androidRefresh)
 
     const androidScreen = el('div', 'right-workspace-android-stage')
@@ -159,20 +181,69 @@
     let activeSource = 'computer'
     let disposed = false
     let timer = 0
+    let androidReconnectTimer = 0
     let busy = false
     let snapshot = null
     let frame = null
+    let desktopFrameObjectUrl = ''
+    let desktopLegacyFallbackUntil = 0
     let targets = []
     let androidBusy = false
     let androidDevices = []
     let androidAvds = []
     let androidSerial = ''
     let androidStreamUrl = ''
+    let androidTransport = ''
+    let androidLegacyForced = false
+    let androidLegacyFallbackUntil = 0
+    let androidStreamFailures = 0
     let androidPointerStart = null
 
     function showError(reason) {
       error.textContent = reason ? (reason.message || String(reason)) : ''
       error.hidden = !error.textContent
+    }
+
+    function clearDesktopFrame() {
+      frame = null
+      image.removeAttribute('src')
+      if (desktopFrameObjectUrl) window.URL.revokeObjectURL(desktopFrameObjectUrl)
+      desktopFrameObjectUrl = ''
+    }
+
+    function applyDesktopFrame(captured) {
+      if (typeof captured?.data === 'string' && captured.data.startsWith('data:image/')) {
+        if (desktopFrameObjectUrl) window.URL.revokeObjectURL(desktopFrameObjectUrl)
+        desktopFrameObjectUrl = ''
+        frame = captured
+        return true
+      }
+      const bytes = binaryFrameBytes(captured?.bytes)
+      if (!bytes || typeof window.Blob !== 'function' || typeof window.URL?.createObjectURL !== 'function') return false
+      const nextUrl = window.URL.createObjectURL(new window.Blob([bytes], { type: captured.mimeType || 'image/png' }))
+      const previousUrl = desktopFrameObjectUrl
+      desktopFrameObjectUrl = nextUrl
+      const { bytes: _releasedBytes, ...metadata } = captured
+      frame = { ...metadata, data: nextUrl }
+      if (previousUrl) window.URL.revokeObjectURL(previousUrl)
+      return true
+    }
+
+    function androidLegacyActive(now = Date.now()) {
+      return androidLegacyForced || androidLegacyFallbackUntil > now
+    }
+
+    function setAndroidPreview(url, transport) {
+      androidStreamUrl = String(url || '')
+      androidTransport = androidStreamUrl ? transport : ''
+      if (!androidStreamUrl) androidImage.removeAttribute('src')
+      else if (androidImage.src !== androidStreamUrl) androidImage.src = androidStreamUrl
+    }
+
+    function clearAndroidPreview() {
+      androidStreamUrl = ''
+      androidTransport = ''
+      androidImage.removeAttribute('src')
     }
 
     function setControlsOpen(open) {
@@ -223,7 +294,8 @@
     function renderAndroid() {
       const online = androidDevices.filter(device => device.state === 'device')
       if (activeSource === 'android') {
-        status.textContent = androidBusy ? '正在连接' : (androidStreamUrl ? '实时' : (online.length ? '可用' : '未连接'))
+        const previewStatus = androidTransport === 'stream' ? '实时' : '兼容预览'
+        status.textContent = androidBusy ? '正在连接' : (androidStreamUrl ? previewStatus : (online.length ? '可用' : '未连接'))
         status.dataset.state = androidStreamUrl ? 'live' : (online.length ? 'ready' : 'off')
       }
       const prior = androidSelect.value
@@ -258,10 +330,14 @@
       renderAndroid()
     }
 
-    async function invokeDesktop(name, payload = {}, { quiet = false } = {}) {
+    async function invokeDesktop(name, payload = {}, { quiet = false, throwOnError = false } = {}) {
       if (!quiet) { busy = true; showError(null); render() }
       try { return await desktopAction(name, payload) }
-      catch (reason) { if (!quiet) showError(reason); return null }
+      catch (reason) {
+        if (throwOnError) throw reason
+        if (!quiet) showError(reason)
+        return null
+      }
       finally { if (!quiet) { busy = false; render() } }
     }
 
@@ -278,23 +354,37 @@
       snapshot = next
       if (!next.ready) {
         targets = []
-        frame = null
+        desktopLegacyFallbackUntil = 0
+        clearDesktopFrame()
         render()
         return
       }
       const listed = await invokeDesktop('targets', {}, { quiet: true })
       if (listed?.targets) targets = listed.targets
-      const captured = await invokeDesktop('screenshot', { force }, { quiet })
-      if (captured?.data) frame = captured
+      const screenshotPayload = { force }
+      if (desktopLegacyFallbackUntil > Date.now()) screenshotPayload.fallbackReason = 'transfer-unavailable'
+      let captured = null
+      let captureError = null
+      try { captured = await invokeDesktop('screenshot', screenshotPayload, { quiet, throwOnError: true }) }
+      catch (reason) { captureError = reason }
+      let applied = applyDesktopFrame(captured)
+      const transferFailed = captured?.transport === 'array-buffer' || isDesktopFrameTransferFailure(captureError)
+      if (!applied && transferFailed && screenshotPayload.fallbackReason !== 'transfer-unavailable' && snapshot?.ready) {
+        desktopLegacyFallbackUntil = Date.now() + 5_000
+        captured = await invokeDesktop('screenshot', { force: true, fallbackReason: 'transfer-unavailable' }, { quiet: true })
+        applied = applyDesktopFrame(captured)
+      }
+      if (applied) showError(null)
+      if (applied && captured?.transport === 'array-buffer') desktopLegacyFallbackUntil = 0
+      if (!applied && !quiet) showError(captureError || new Error('桌面预览传输不可用。'))
       render()
     }
 
     async function captureAndroid({ quiet = true } = {}) {
       if (!androidSerial) return false
-      const captured = await invokeAndroid('capture', { device: androidSerial }, { quiet })
+      const captured = await invokeAndroid('capture', { device: androidSerial, preview: true }, { quiet })
       if (!captured?.data) return false
-      androidStreamUrl = captured.data
-      if (androidImage.src !== androidStreamUrl) androidImage.src = androidStreamUrl
+      setAndroidPreview(captured.data, 'legacy')
       render()
       return true
     }
@@ -304,37 +394,68 @@
       const switched = await invokeAndroid('switchDevice', { device: serial }, { quiet })
       if (!switched?.device) return false
       androidSerial = switched.device || serial
-      await captureAndroid({ quiet })
+      androidLegacyForced = switched.previewTransport === 'legacy-capture-poll'
+      if (androidLegacyActive()) return captureAndroid({ quiet })
+      if (!switched.streamUrl) return false
+      setAndroidPreview(switched.streamUrl, 'stream')
       render()
       return true
     }
 
     async function refreshAndroid({ selectFirst = false, forceStream = false, quiet = false } = {}) {
       const listing = await invokeAndroid('devices', {}, { quiet })
-      if (!listing || disposed) return
+      if (!listing || disposed) return false
+      androidLegacyForced = listing.previewTransport === 'legacy-capture-poll'
       androidDevices = Array.isArray(listing.devices) ? listing.devices : []
       androidAvds = Array.isArray(listing.avds) ? listing.avds : []
       const online = androidDevices.filter(device => device.state === 'device')
       if (!online.some(device => device.serial === androidSerial)) {
         androidSerial = online.find(device => device.streaming)?.serial || (selectFirst ? online[0]?.serial : '') || ''
-        androidStreamUrl = ''
-        androidImage.removeAttribute('src')
+        clearAndroidPreview()
       }
       render()
-      if (androidSerial && (forceStream || !androidStreamUrl)) await connectAndroid(androidSerial, { quiet })
-      else if (androidSerial) await captureAndroid({ quiet: true })
+      if (!androidSerial) return false
+      if (forceStream || !androidStreamUrl || (androidTransport === 'legacy' && !androidLegacyActive())) {
+        return connectAndroid(androidSerial, { quiet })
+      }
+      if (androidLegacyActive()) return captureAndroid({ quiet: true })
+      return true
     }
 
     function scheduleTick(delay) {
       window.clearTimeout(timer)
-      if (active && !disposed) timer = window.setTimeout(tick, delay)
+      timer = 0
+      if (active && !disposed && Number.isFinite(delay)) timer = window.setTimeout(tick, delay)
+    }
+
+    function scheduleAndroidReconnect() {
+      window.clearTimeout(androidReconnectTimer)
+      if (!active || disposed || activeSource !== 'android' || androidLegacyActive()) return
+      const delay = Math.min(2_000, 250 * (2 ** Math.max(0, androidStreamFailures - 1)))
+      androidReconnectTimer = window.setTimeout(async () => {
+        androidReconnectTimer = 0
+        const connected = await refreshAndroid({ forceStream: true, quiet: true })
+        if (!connected && active && !disposed && activeSource === 'android') {
+          androidStreamFailures += 1
+          if (androidStreamFailures >= ANDROID_STREAM_FAILURE_LIMIT) {
+            androidLegacyFallbackUntil = Date.now() + ANDROID_STREAM_FALLBACK_MS
+            await captureAndroid({ quiet: true })
+            scheduleTick(ANDROID_LEGACY_POLL_MS)
+          } else scheduleAndroidReconnect()
+        }
+      }, delay)
     }
 
     async function tick() {
       if (!active || disposed) return
-      if (activeSource === 'computer') await refreshDesktop({ quiet: true })
-      else await refreshAndroid({ quiet: true })
-      scheduleTick(activeSource === 'computer' ? 700 : 1_000)
+      if (activeSource === 'computer') {
+        await refreshDesktop({ quiet: true })
+      } else if (androidLegacyActive()) {
+        await refreshAndroid({ quiet: true })
+      } else if (androidTransport === 'legacy' || !androidStreamUrl) {
+        await refreshAndroid({ forceStream: true, quiet: true })
+      }
+      scheduleTick(previewTickDelay(activeSource, androidLegacyActive()))
     }
 
     async function setSource(source) {
@@ -342,11 +463,22 @@
       if (source === activeSource) return
       activeSource = source
       window.clearTimeout(timer)
+      window.clearTimeout(androidReconnectTimer)
+      if (source === 'android') clearDesktopFrame()
+      else clearAndroidPreview()
       showError(null)
       render()
       if (source === 'android') await refreshAndroid({ selectFirst: true, forceStream: true })
       else await refreshDesktop({ force: true, quiet: true })
-      scheduleTick(source === 'computer' ? 700 : 1_000)
+      scheduleTick(previewTickDelay(source, androidLegacyActive()))
+    }
+
+    async function manualRefreshAndroid() {
+      androidLegacyFallbackUntil = 0
+      androidStreamFailures = 0
+      window.clearTimeout(androidReconnectTimer)
+      await refreshAndroid({ selectFirst: true, forceStream: true })
+      scheduleTick(previewTickDelay('android', androidLegacyActive()))
     }
 
     async function toggleControl() {
@@ -401,13 +533,40 @@
     })
     targetSelect.addEventListener('change', async () => {
       await invokeDesktop('selectTarget', { target_id: targetSelect.value })
-      frame = null
+      clearDesktopFrame()
       await refreshDesktop({ force: true, quiet: true })
     })
-    androidSelect.addEventListener('change', () => connectAndroid(androidSelect.value))
+    androidSelect.addEventListener('change', () => {
+      androidLegacyFallbackUntil = 0
+      androidStreamFailures = 0
+      window.clearTimeout(androidReconnectTimer)
+      connectAndroid(androidSelect.value).then(() => scheduleTick(previewTickDelay('android', androidLegacyActive())))
+    })
     androidInput.addEventListener('input', render)
     androidInput.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); sendAndroidText() }
+    })
+    androidImage.addEventListener('load', () => {
+      if (androidTransport !== 'stream') return
+      androidStreamFailures = 0
+      androidLegacyFallbackUntil = 0
+      window.clearTimeout(androidReconnectTimer)
+      render()
+    })
+    androidImage.addEventListener('error', async () => {
+      const failedTransport = androidTransport
+      clearAndroidPreview()
+      if (failedTransport !== 'stream' || !active || disposed || activeSource !== 'android') {
+        scheduleTick(previewTickDelay(activeSource, androidLegacyActive()))
+        return
+      }
+      androidStreamFailures += 1
+      if (androidStreamFailures >= ANDROID_STREAM_FAILURE_LIMIT) {
+        androidLegacyFallbackUntil = Date.now() + ANDROID_STREAM_FALLBACK_MS
+        await captureAndroid({ quiet: true })
+        scheduleTick(ANDROID_LEGACY_POLL_MS)
+      } else scheduleAndroidReconnect()
+      render()
     })
     androidImage.addEventListener('pointerdown', event => {
       if (event.button !== 0 || !androidSerial) return
@@ -437,20 +596,37 @@
       deactivate() {
         active = false
         window.clearTimeout(timer)
+        window.clearTimeout(androidReconnectTimer)
+        clearDesktopFrame()
+        clearAndroidPreview()
       },
       dispose() {
         active = false
         disposed = true
         window.clearTimeout(timer)
-        androidImage.removeAttribute('src')
+        window.clearTimeout(androidReconnectTimer)
+        clearDesktopFrame()
+        clearAndroidPreview()
       },
       refresh() {
-        return activeSource === 'computer' ? refreshDesktop({ force: true }) : refreshAndroid({ selectFirst: true, forceStream: true })
+        return activeSource === 'computer' ? refreshDesktop({ force: true }) : manualRefreshAndroid()
       }
     }
   }
 
-  const exported = { create, mapFramePoint, mapNormalizedPoint, clamp }
+  const exported = {
+    ANDROID_LEGACY_POLL_MS,
+    ANDROID_STREAM_FAILURE_LIMIT,
+    ANDROID_STREAM_FALLBACK_MS,
+    DESKTOP_POLL_MS,
+    binaryFrameBytes,
+    clamp,
+    create,
+    isDesktopFrameTransferFailure,
+    mapFramePoint,
+    mapNormalizedPoint,
+    previewTickDelay
+  }
   if (typeof module !== 'undefined' && module.exports) module.exports = exported
   if (typeof window !== 'undefined') window.HarnessDeviceWorkspace = Object.freeze(exported)
 })()

@@ -13,7 +13,13 @@ const launchUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-ag
 const storeUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-store.js')).href
 const webUrl = pathToFileURL(path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-task-web.js')).href
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
-const canonicalFor = root => { const normalized = root.session.header.cwd.trim().replace(/\\/gu, '/').replace(/\/+$/u, '').normalize('NFKC'); return createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', process.platform === 'win32' ? normalized.toLocaleLowerCase('en-US') : normalized])).digest('hex') }
+const projectKeyForDialect = (value, platform = process.platform) => {
+  const dialect = platform === 'win32' ? path.win32 : path.posix
+  const resolved = dialect.resolve(value)
+  const scope = platform === 'win32' ? resolved.replace(/\\/gu, '/').toLocaleLowerCase('en-US') : resolved
+  return createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', scope])).digest('hex')
+}
+const canonicalFor = root => projectKeyForDialect(root.session.header.cwd)
 
 function baseProjectEntry(root) {
   const key = Buffer.alloc(32, 37), internal = Object.freeze(Object.create(null)), projectRef = 'project_base_authority_registry_01'
@@ -37,12 +43,76 @@ function rootAgent(index, cwd) {
   return { id: `canonical-root-${index}`, status: 'running', session: { header: { cwd }, events: [{ type: 'turn/start', id: `turn-${index}`, time: index + 1 }, { type: 'user/message', data: { source: { kind: 'user' } } }], snapshotEvents() { return this.events.slice() } } }
 }
 
+test('multi-project authorization keys preserve Unicode siblings in Linux and Windows dialects', () => {
+  for (const [platform, base] of [['linux', '/workspace'], ['win32', 'C:\\Workspace']]) {
+    const dialect = platform === 'win32' ? path.win32 : path.posix
+    assert.notEqual(projectKeyForDialect(dialect.join(base, 'Caf\u00e9'), platform), projectKeyForDialect(dialect.join(base, 'Cafe\u0301'), platform))
+    assert.notEqual(projectKeyForDialect(dialect.join(base, 'Project-Ａ'), platform), projectKeyForDialect(dialect.join(base, 'Project-A'), platform))
+    const noisy = platform === 'win32' ? 'C:\\Workspace\\.\\Lane\\\\' : '/workspace//./Lane/'
+    const clean = platform === 'win32' ? 'c:/workspace/lane' : '/workspace/Lane'
+    assert.equal(projectKeyForDialect(noisy, platform), projectKeyForDialect(clean, platform))
+  }
+})
+
+test('session launch resource boundaries preserve code points and apply only dialect path rules', async () => {
+  const { ProjectSessionLaunchRegistry } = await import(`${launchUrl}?resource-boundaries=${Date.now()}`)
+  const makeSlots = resources => [{ title: 'Unicode paths', role: 'path owner', resources, task: 'keep exact resource boundaries' }]
+  const linux = new ProjectSessionLaunchRegistry({ rootPath: 'unused-linux-lane', platform: 'linux' })
+  const windows = new ProjectSessionLaunchRegistry({ rootPath: 'unused-windows-lane', platform: 'win32' })
+  const linuxResources = linux.validateSlots(2, makeSlots(['src//./Caf\u00e9/', 'src/Cafe\u0301', 'src/Ａ', 'src/A', 'src\\literal', 'src/．．/child']))[0].resources
+  assert.deepEqual(linuxResources, ['src/Caf\u00e9', 'src/Cafe\u0301', 'src/Ａ', 'src/A', 'src\\literal', 'src/．．/child'])
+  const windowsResources = windows.validateSlots(2, makeSlots(['src\\.\\Caf\u00e9//', 'src/Cafe\u0301', 'src/Ａ', 'src/A', 'src\\literal', 'src/．．/child']))[0].resources
+  assert.deepEqual(windowsResources, ['src/Caf\u00e9', 'src/Cafe\u0301', 'src/Ａ', 'src/A', 'src/literal', 'src/．．/child'])
+  assert.notEqual(windowsResources[0], windowsResources[1], 'Windows must not compose NFC and NFD path components')
+  assert.notEqual(windowsResources[2], windowsResources[3], 'Windows must not compatibility-fold full-width and ASCII path components')
+  assert.throws(() => windows.validateSlots(2, makeSlots(['SRC/File.js', 'src/file.js'])), error => error.code === 'PROJECT_SESSION_LAUNCH_INVALID')
+  assert.equal(linux.validateSlots(2, makeSlots(['SRC/File.js', 'src/file.js']))[0].resources.length, 2)
+  for (const [registry, traversal] of [[linux, 'src/../escape'], [windows, 'src\\..\\escape']]) {
+    assert.throws(() => registry.validateSlots(2, makeSlots([traversal])), error => error.code === 'PROJECT_SESSION_LAUNCH_INVALID')
+    assert.throws(() => registry.validateSlots(2, makeSlots(['src/\u0000escape'])), error => error.code === 'PROJECT_SESSION_LAUNCH_INVALID')
+  }
+})
+
+test('session launch workspace matching keeps Unicode identities separate in both dialects', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'canonical-launch-workspace-unicode-'))
+  const { ProjectSessionLaunchRuntime } = await import(`${launchUrl}?workspace-boundaries=${Date.now()}`)
+  const provider = {
+    callerRootRef: () => 'a'.repeat(64),
+    resolveProject: async () => ({ maxSessions: 8 }),
+    reserveAdoption: async () => { throw new Error('unused') },
+    launch: async () => { throw new Error('unused') },
+    reconcile: async () => { throw new Error('unused') },
+    cancel: async () => ({ cancelled: true }),
+    redeemAdoption: async () => { throw new Error('unused') },
+  }
+  const cases = [
+    { platform: 'linux', exact: '/workspace/Caf\u00e9', syntax: '/workspace//./Caf\u00e9/', sibling: '/workspace/Cafe\u0301' },
+    { platform: 'linux', exact: '/workspace/Project-Ａ', syntax: '/workspace//./Project-Ａ/', sibling: '/workspace/Project-A' },
+    { platform: 'win32', exact: 'C:\\Workspace\\Caf\u00e9', syntax: 'c:/workspace/./caf\u00e9/', sibling: 'C:\\Workspace\\Cafe\u0301' },
+    { platform: 'win32', exact: 'C:\\Workspace\\Project-Ａ', syntax: 'c:/workspace/./project-ａ/', sibling: 'C:\\Workspace\\Project-A' },
+  ]
+  try {
+    for (const [index, sample] of cases.entries()) {
+      const canonicalProjectKey = String(index + 1).repeat(64)
+      const runtime = new ProjectSessionLaunchRuntime({ filePath: path.join(root, `${sample.platform}-${index}.json`), provider, disposeProvider: false, redactProjectBinding: true, fixedProjectBinding: { canonicalProjectKey, workspacePath: sample.exact }, platform: sample.platform })
+      const binding = workspacePath => ({ canonicalProjectKey, workspacePath, callerRootId: `root-${index}` })
+      try {
+        await runtime.preflight({}, { totalSessions: 2, projectBinding: binding(sample.exact) })
+        await runtime.preflight({}, { totalSessions: 2, projectBinding: binding(sample.syntax) })
+        await assert.rejects(runtime.preflight({}, { totalSessions: 2, projectBinding: binding(sample.sibling) }), error => error.code === 'PROJECT_SESSION_LAUNCH_PROJECT_MISMATCH')
+      } finally { await runtime.close() }
+    }
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test('registered project tools isolate 16 canonical roots with identical model ids and independent slow/fast SQLite lanes', async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'canonical-project-tools-'))
   const base = baseProjectEntry(temporary)
   const [{ ProjectEntryRegistry }, mod, { ProjectTaskWebRuntime }] = await Promise.all([import(`${registryUrl}?lanes=${Date.now()}`), import(`${indexUrl}?lanes=${Date.now()}`), import(webUrl)])
   const registry = new ProjectEntryRegistry({ projectEntry: base, dshHome: temporary })
-  const roots = Array.from({ length: 16 }, (_, index) => rootAgent(index, path.join(temporary, `workspace-${index}`)))
+  const workspaceNames = ['workspace-Caf\u00e9', 'workspace-Cafe\u0301', 'workspace-Ａ', 'workspace-A', ...Array.from({ length: 12 }, (_, index) => `workspace-${index}`)]
+  const roots = workspaceNames.map((name, index) => rootAgent(index, path.join(temporary, name)))
+  assert.equal(new Set(roots.map(canonicalFor)).size, roots.length, 'NFC/NFD and full-width/ASCII siblings require distinct project authorization keys')
   const tools = new Map(); let current = roots[0]
   const ctx = { agents: { roots: () => roots, get: id => roots.find(root => root.id === id), currentInitiator: () => current }, tools: { register: tool => { tools.set(tool.name, tool) } }, systemPrompt: { section: () => {} } }
   mod.registerProjectCollaborationTools(ctx, registry, { redeemAdoption: async () => { throw new Error('unused') } })

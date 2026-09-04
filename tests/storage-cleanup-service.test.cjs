@@ -1,9 +1,14 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { access, mkdir, utimes, writeFile } = require('node:fs/promises')
+const { access, lstat, mkdir, realpath, readdir, rm, symlink, utimes, writeFile } = require('node:fs/promises')
 const path = require('node:path')
 
-const { StorageCleanupService, isCurrentRuntime, parseRuntimeDirName } = require('../electron/bridge/storage-cleanup-service.cjs')
+const {
+  StorageCleanupService,
+  areCachePlansEquivalent,
+  isCurrentRuntime,
+  parseRuntimeDirName
+} = require('../electron/bridge/storage-cleanup-service.cjs')
 const { buildHarnessData, destroyHarnessData } = require('./harness-data-fixture.cjs')
 
 // 使用真实时钟，便于结合 utimes 控制文件年龄。
@@ -13,6 +18,22 @@ function makeService(version = '1.0.23') {
 
 async function exists(p) {
   try { await access(p); return true } catch { return false }
+}
+
+function createTrackingFs(accesses) {
+  const operations = { lstat, readdir, realpath }
+  return Object.fromEntries(Object.entries(operations).map(([operation, implementation]) => [
+    operation,
+    async (target, ...args) => {
+      accesses.push({ operation, target: path.resolve(String(target)) })
+      return implementation(target, ...args)
+    }
+  ]))
+}
+
+function isWithin(target, root) {
+  const relative = path.relative(path.resolve(root), path.resolve(target))
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
 async function applyPlan(service, root, options = {}) {
@@ -49,6 +70,32 @@ test('cleanup is dry-run by default and never deletes anything', async () => {
     // 什么都不删。
     assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64', 'marker.txt')), true)
     assert.equal(await exists(path.join(fixture.homeDir, 'marketplace', 'cache', 'cache.db')), true)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('cleanup planner prunes the current runtime before filesystem access', async () => {
+  const fixture = await buildHarnessData()
+  const accesses = []
+  const currentRuntime = path.join(fixture.runDir, '1.0.23-win32-x64')
+  const service = new StorageCleanupService({
+    now: Date.now,
+    version: '1.0.23',
+    platform: 'win32',
+    arch: 'x64',
+    scanFs: createTrackingFs(accesses)
+  })
+  try {
+    const plan = await service.plan(fixture.root, {
+      preview: true,
+      includeOldRuntimes: true,
+      includeCaches: false,
+      tempEntries: []
+    })
+    assert.ok(plan.deletions.some(candidate => candidate.name === '1.0.20-win32-x64'))
+    assert.equal(plan.deletions.some(candidate => candidate.name === '1.0.23-win32-x64'), false)
+    assert.deepEqual(accesses.filter(access => isWithin(access.target, currentRuntime)), [])
   } finally {
     await destroyHarnessData(fixture.root)
   }
@@ -141,6 +188,120 @@ test('cleanup plans never include protected sessions/attachments', async () => {
       const base = path.basename(d.path).toLowerCase()
       assert.ok(!['sessions', 'attachments', 'memories'].includes(base), `should not delete ${d.path}`)
     }
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('cache read failure is fail-closed in both legacy and cache-only planners', async () => {
+  const fixture = await buildHarnessData()
+  const cache = path.join(fixture.homeDir, 'marketplace', 'cache')
+  const scanFs = {
+    lstat,
+    realpath,
+    async readdir(target, ...args) {
+      if (path.resolve(target) === path.resolve(cache)) throw new Error('injected EACCES')
+      return readdir(target, ...args)
+    }
+  }
+  const service = new StorageCleanupService({
+    now: Date.now,
+    version: '1.0.23',
+    platform: 'win32',
+    arch: 'x64',
+    scanFs
+  })
+  try {
+    const options = {
+      preview: true,
+      includeOldRuntimes: false,
+      includeCaches: true,
+      cacheMinAgeMs: 0,
+      tempEntries: [],
+      referenceNowMs: Date.now()
+    }
+    const legacy = await service.plan(fixture.root, options)
+    const constrainedLegacy = await service.planCacheOnlyLegacy(fixture.root, options)
+    const cacheOnly = await service.planCacheOnly(fixture.root, options)
+    assert.equal(legacy.deletions.some(candidate => candidate.path === cache), false)
+    assert.equal(constrainedLegacy.deletions.some(candidate => candidate.path === cache), false)
+    assert.equal(cacheOnly.deletions.some(candidate => candidate.path === cache), false)
+    assert.equal(await exists(path.join(cache, 'cache.db')), true)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('cache-only preview is canonically equivalent to the legacy safety planner', async () => {
+  const fixture = await buildHarnessData()
+  const { service } = makeService()
+  try {
+    const cache = path.join(fixture.homeDir, 'marketplace', 'cache')
+    const directCache = path.join(fixture.homeDir, 'caches')
+    await mkdir(directCache, { recursive: true })
+    await writeFile(path.join(directCache, 'cache.bin'), 'cache')
+    await backdate(path.join(cache, 'cache.db'))
+    await backdate(cache)
+    await backdate(path.join(directCache, 'cache.bin'))
+    await backdate(directCache)
+    const options = {
+      preview: true,
+      includeOldRuntimes: false,
+      includeCaches: true,
+      cacheMinAgeMs: 7 * 24 * 60 * 60 * 1000,
+      tempEntries: [],
+      referenceNowMs: Date.now()
+    }
+    const legacy = await service.plan(fixture.root, options)
+    const constrainedLegacy = await service.planCacheOnlyLegacy(fixture.root, options)
+    const cacheOnly = await service.planCacheOnly(fixture.root, options)
+    assert.equal(legacy.deletions.length, 2)
+    assert.equal(constrainedLegacy.deletions.length, 2)
+    assert.equal(cacheOnly.deletions.length, 2)
+    assert.ok(cacheOnly.deletions[0].identity.canonicalPath)
+    assert.equal(areCachePlansEquivalent(legacy, constrainedLegacy), true)
+    assert.equal(areCachePlansEquivalent(constrainedLegacy, cacheOnly), true)
+
+    const ageDrift = {
+      ...cacheOnly,
+      deletions: cacheOnly.deletions.map((candidate, index) => index === 0
+        ? { ...candidate, ageMs: candidate.ageMs + 1 }
+        : candidate)
+    }
+    assert.equal(areCachePlansEquivalent(constrainedLegacy, ageDrift), false)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('cache-only planner rejects cache symlink/reparse targets inside the root', async t => {
+  const fixture = await buildHarnessData()
+  const { service } = makeService()
+  const cache = path.join(fixture.homeDir, 'marketplace', 'cache')
+  try {
+    await rm(cache, { recursive: true, force: true })
+    try {
+      await symlink(path.join(fixture.homeDir, 'sessions'), cache, 'junction')
+    } catch {
+      t.skip('当前平台无法创建 junction/symlink fixture')
+      return
+    }
+    const options = {
+      preview: true,
+      includeOldRuntimes: false,
+      includeCaches: true,
+      cacheMinAgeMs: 0,
+      tempEntries: [],
+      referenceNowMs: Date.now()
+    }
+    const legacy = await service.plan(fixture.root, options)
+    const constrainedLegacy = await service.planCacheOnlyLegacy(fixture.root, options)
+    const cacheOnly = await service.planCacheOnly(fixture.root, options)
+    assert.equal(legacy.deletions.some(candidate => candidate.path === cache), false)
+    assert.equal(constrainedLegacy.deletions.some(candidate => candidate.path === cache), false)
+    assert.equal(cacheOnly.deletions.some(candidate => candidate.path === cache), false)
+    assert.equal(await exists(path.join(fixture.homeDir, 'sessions', 's1.json')), true)
+    assert.equal(await exists(cache), true)
   } finally {
     await destroyHarnessData(fixture.root)
   }

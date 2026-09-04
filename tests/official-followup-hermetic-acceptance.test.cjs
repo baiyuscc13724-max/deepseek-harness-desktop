@@ -57,11 +57,15 @@ test('canonical digest uses unsigned UTF-8 bytes, decimal size, lowercase file h
   assert.deepEqual(helper.compareManifests(first, helper.manifest(root)).differences.map(row => [row.path, row.kind]), [['added', 'added'], ['z', 'changed'], ['é', 'removed']].sort((a, b) => Buffer.compare(Buffer.from(a[0]), Buffer.from(b[0]))))
 })
 
-test('malformed UTF-8, unsafe paths, duplicates, Unicode collisions and order inversion fail closed', () => {
+test('Unicode code points stay distinct while malformed UTF-8, unsafe paths, exact duplicates and order inversion fail closed', () => {
   assert.throws(() => helper.parseFrozenManifest(Buffer.from([0xff, 0x0a])), /UTF8/u)
-  assert.throws(() => helper.parseFrozenManifest(Buffer.from(`${frozenRow('../x')}\n`)), /PATH_UNSAFE/u)
+  for (const relative of ['../x', './x', 'a//b', 'a/./b', 'a/../b', 'a/']) {
+    assert.throws(() => helper.parseFrozenManifest(Buffer.from(`${frozenRow(relative)}\n`)), /PATH_UNSAFE/u)
+  }
   assert.throws(() => helper.parseFrozenManifest(Buffer.from(`${frozenRow('a')}\n${frozenRow('a')}\n`)), /DUPLICATE/u)
-  assert.throws(() => helper.parseFrozenManifest(Buffer.from(`${frozenRow('é')}\n${frozenRow('é')}\n`)), /COLLISION/u)
+  const distinctUnicodePaths = ['é', 'é'].sort(helper.utf8Compare)
+  const unicodeRows = helper.parseFrozenManifest(Buffer.from(`${distinctUnicodePaths.map(relative => frozenRow(relative)).join('\n')}\n`))
+  assert.deepEqual(unicodeRows.map(row => row.path), distinctUnicodePaths)
   assert.throws(() => helper.parseFrozenManifest(Buffer.from(`${frozenRow('z')}\n${frozenRow('a')}\n`)), /ORDER/u)
   assert.throws(() => helper.assertCanonicalRelativePath(`bad-${String.fromCharCode(0xd800)}`), /PATH_UTF8/u)
 })

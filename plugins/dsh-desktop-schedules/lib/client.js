@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
     var React = require("react");
     var h = React.createElement;
     var useEffect = React.useEffect;
+    var useRef = React.useRef;
     var useState = React.useState;
     var NS = "desktop-schedules";
     var zh = {
@@ -252,13 +253,66 @@ window.__ModuleLoader__.load({
       `;
       if (!style.isConnected) document.head.appendChild(style);
     }
-    function fetchState(sessionId) {
-      return fetch("/api/desktop-schedules/state?sessionId=" + encodeURIComponent(sessionId), { cache: "no-store", credentials: "same-origin" }).then(function (response) {
+    function validatorsEnabled() {
+      return window.__DSH_DESKTOP_SCHEDULES_VALIDATORS__ !== false;
+    }
+    function validValidator(value) {
+      return !!value && typeof value.etag === "string" && value.etag.length <= 256 && Number.isSafeInteger(value.cursor) && value.cursor >= -1 && typeof value.generation === "string" && value.generation.length > 0 && value.generation.length <= 128;
+    }
+    function responseValidator(response, body, fallback) {
+      var rawCursor = response.headers && response.headers.get ? response.headers.get("x-schedule-cursor") : null;
+      var cursor = rawCursor === null || rawCursor === "" ? (body && body.projection ? body.projection.cursor : undefined) : Number(rawCursor);
+      var generation = response.headers && response.headers.get ? response.headers.get("x-schedule-generation") : null;
+      if (!generation && body && body.projection) generation = body.projection.generation;
+      var etag = response.headers && response.headers.get ? response.headers.get("etag") : null;
+      var candidate = { etag: etag || (fallback && fallback.etag), cursor: cursor, generation: generation };
+      return validValidator(candidate) ? candidate : null;
+    }
+    function deltaNeedsFull(body, previous) {
+      var projection = body && body.projection;
+      if (!projection || projection.mode !== "delta") return false;
+      return !validValidator(previous) || projection.generation !== previous.generation || projection.since !== previous.cursor || !Number.isSafeInteger(projection.cursor) || projection.cursor < previous.cursor;
+    }
+    function fetchState(sessionId, validator) {
+      var enabled = validatorsEnabled();
+      var previous = enabled && validValidator(validator) ? validator : null;
+      var url = "/api/desktop-schedules/state?sessionId=" + encodeURIComponent(sessionId);
+      var headers = { accept: "application/json" };
+      if (previous) {
+        url += "&since=" + encodeURIComponent(String(previous.cursor)) + "&generation=" + encodeURIComponent(previous.generation);
+        headers["if-none-match"] = previous.etag;
+      }
+      return fetch(url, { cache: "no-store", credentials: "same-origin", headers: headers }).then(function (response) {
+        if (response.status === 304) {
+          var unchangedValidator = responseValidator(response, null, previous);
+          var invalid304 = !previous || !unchangedValidator || unchangedValidator.generation !== previous.generation || unchangedValidator.cursor < previous.cursor;
+          return { notModified: !invalid304, retryFull: invalid304, state: null, validator: invalid304 ? null : unchangedValidator };
+        }
         return response.json().then(function (body) {
           if (!response.ok) throw new Error(body.error || ("HTTP " + response.status));
-          return body;
+          if (!body || typeof body !== "object" || (body.sessionId !== undefined && body.sessionId !== sessionId)) throw new Error("Invalid schedule response");
+          var nextValidator = responseValidator(response, body, previous);
+          var projection = body.projection;
+          var transportMismatch = !!projection && !!nextValidator && (projection.cursor !== nextValidator.cursor || projection.generation !== nextValidator.generation);
+          var retryFull = deltaNeedsFull(body, previous) || transportMismatch;
+          return { notModified: false, retryFull: retryFull, state: body, validator: retryFull || !enabled ? null : nextValidator };
         });
       });
+    }
+    function fetchStateWithFallback(sessionId, validator) {
+      return fetchState(sessionId, validator).then(function (result) {
+        if (!result.retryFull) return result;
+        return fetchState(sessionId, null).then(function (full) {
+          if (full.retryFull || full.notModified || !full.state) throw new Error("Schedule full fallback was not authoritative");
+          return full;
+        });
+      });
+    }
+    function commitFetchResult(result, validatorRef, setState) {
+      validatorRef.current = result.validator || null;
+      if (result.notModified) return false;
+      setState(result.state);
+      return true;
     }
     function kindLabel(kind) { return t(kind); }
     function dateLabel(value) {
@@ -291,35 +345,42 @@ window.__ModuleLoader__.load({
       var searchPair = useState(""), search = searchPair[0], setSearch = searchPair[1];
       var filterPair = useState("all"), filter = filterPair[0], setFilter = filterPair[1];
       var createPair = useState(false), showCreate = createPair[0], setShowCreate = createPair[1];
-      function reload(silent) {
+      var validatorRef = useRef(null);
+      var requestRef = useRef(null);
+      function reload(silent, isAlive) {
+        if (requestRef.current) return requestRef.current;
         if (!silent) setLoading(true);
-        setError("");
-        return fetchState(props.sessionId).then(setState).catch(function (cause) {
-          setError(cause.message || String(cause));
+        var task = fetchStateWithFallback(props.sessionId, validatorRef.current).then(function (result) {
+          if (isAlive && !isAlive()) return result;
+          var rendered = commitFetchResult(result, validatorRef, setState);
+          if (rendered) setError("");
+          return result;
+        }).catch(function (cause) {
+          validatorRef.current = null;
+          if (!isAlive || isAlive()) setError(cause.message || String(cause));
         }).finally(function () {
-          if (!silent) setLoading(false);
+          if (requestRef.current === task) requestRef.current = null;
+          if (!silent && (!isAlive || isAlive())) setLoading(false);
         });
+        requestRef.current = task;
+        return task;
       }
       useEffect(function () {
         var alive = true;
+        validatorRef.current = null;
+        requestRef.current = null;
         function guarded() {
           if (!alive) return Promise.resolve();
-          return reload(true);
+          return reload(true, function () { return alive; });
         }
-        setLoading(true);
-        fetchState(props.sessionId).then(function (next) {
-          if (alive) setState(next);
-        }).catch(function (cause) {
-          if (alive) setError(cause.message || String(cause));
-        }).finally(function () {
-          if (alive) setLoading(false);
-        });
+        reload(false, function () { return alive; });
         var timer = setInterval(guarded, 15000);
         function visible() { if (document.visibilityState === "visible") guarded(); }
         document.addEventListener("visibilitychange", visible);
         window.addEventListener("focus", visible);
         return function () {
           alive = false;
+          validatorRef.current = null;
           clearInterval(timer);
           document.removeEventListener("visibilitychange", visible);
           window.removeEventListener("focus", visible);
@@ -487,6 +548,9 @@ window.__ModuleLoader__.load({
       });
     }
     exports.apply = apply;
+    exports.commitFetchResult = commitFetchResult;
+    exports.fetchState = fetchState;
+    exports.fetchStateWithFallback = fetchStateWithFallback;
     exports.inject = ["slots", "locale"];
     return module.exports;
   }

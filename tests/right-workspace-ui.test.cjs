@@ -277,9 +277,10 @@ test('right workspace data panes preserve scrollTop only across filter/refresh r
   // bare loading render can never clear the pending scroll before the final
   // data render captures the still-visible old scrollTop.
   assert.match(integration, /if \(!opts\.preserve\) \{\r?\n      filesSnapshot = null\r?\n      renderFiles\(\)\r?\n    \}/u)
-  assert.match(integration, /if \(!opts\.preserve\) \{\r?\n      schedulesSnapshot = null\r?\n      renderSchedules\(\)\r?\n    \}/u)
+  assert.match(integration, /const preserve = Boolean\(opts\.preserve \|\| schedulesSnapshot\)/u)
+  assert.match(integration, /if \(!preserve\) \{\r?\n      schedulesSnapshot = null\r?\n      renderSchedules\(\)\r?\n    \}/u)
   assert.match(integration, /renderFiles\(opts\.preserve \? \{ preserve: true \} : \{\}\)/u)
-  assert.match(integration, /renderSchedules\(opts\.preserve \? \{ preserve: true \} : \{\}\)/u)
+  assert.match(integration, /renderSchedules\(preserve \? \{ preserve: true \} : \{\}\)/u)
 
   // The refresh button hands straight to the preserve load; there is no
   // separate pre-capture that a loading render could clear, so the preserved
@@ -391,4 +392,16 @@ test('mobile entry layout watch is idempotent and switches host and trigger beha
   assert.equal(switched.hidden, false)
   context.observers[0].callback([{ target: hostA, contentRect: { width: 1 } }])
   assert.deepEqual({ left: context.entry.style.left, top: context.entry.style.top, hidden: context.entry.hidden }, switched)
+})
+
+test('schedule pane keeps validators session-bound and performs no render on 304', async () => {
+  const integration = await source('renderer/right-workspace-integration.js')
+  assert.match(integration, /let schedulesValidator = null/u)
+  assert.match(integration, /__DSH_DESKTOP_SCHEDULES_VALIDATORS__ !== false/u)
+  assert.match(integration, /etag: previous\.etag, since: previous\.cursor, generation: previous\.generation/u)
+  assert.match(integration, /if \(result\?\.notModified\) \{[\s\S]{0,240}schedulesValidator =[\s\S]{0,160}return\r?\n\s*\}/u)
+  assert.doesNotMatch(integration, /if \(result\?\.notModified\) \{[^}]*renderSchedules/u)
+  assert.match(integration, /invalidScheduleDelta\(result, conditional \? previous : null\)/u)
+  assert.match(integration, /result = await resource\('schedules', \{ validator: false \}\)/u)
+  assert.match(integration, /schedulesValidator = null\r?\n\s+schedulesRequestRevision \+= 1/u)
 })

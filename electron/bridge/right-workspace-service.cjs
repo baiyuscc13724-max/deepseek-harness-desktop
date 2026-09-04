@@ -30,6 +30,30 @@ function sessionId(value) {
   return value
 }
 
+function scheduleCursor(value) {
+  if (value === undefined || value === null) return undefined
+  if (!Number.isSafeInteger(value) || value < -1) {
+    throw Object.assign(new TypeError('schedule cursor must be a safe integer'), { code: 'RIGHT_WORKSPACE_BAD_SCHEDULE_CURSOR' })
+  }
+  return value
+}
+
+function scheduleGeneration(value) {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string' || !value || value.length > 128 || value.trim() !== value || /[\r\n\u0000]/u.test(value)) {
+    throw Object.assign(new TypeError('schedule generation must be a bounded token'), { code: 'RIGHT_WORKSPACE_BAD_SCHEDULE_GENERATION' })
+  }
+  return value
+}
+
+function scheduleEtag(value) {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string' || !value || value.length > 256 || /[\r\n\u0000]/u.test(value)) {
+    throw Object.assign(new TypeError('schedule ETag must be a bounded header'), { code: 'RIGHT_WORKSPACE_BAD_SCHEDULE_ETAG' })
+  }
+  return value
+}
+
 function relativeFilePath(value) {
   if (typeof value !== 'string' || !value || value.length > 4096 || value.trim() !== value || value.includes('\u0000') || /[\r\n]/u.test(value)) {
     throw Object.assign(new TypeError('path must be a bounded workspace file target'), { code: 'RIGHT_WORKSPACE_BAD_PATH' })
@@ -52,6 +76,12 @@ function resourceUrl(runtimeUrl, kind, payload = {}) {
   const target = new URL(pathname, `${runtimeOrigin(runtimeUrl)}/`)
   target.searchParams.set('sessionId', sessionId(payload.sessionId))
   if (kind === 'filePreview' || kind === 'fileContent') target.searchParams.set('path', relativeFilePath(payload.path))
+  if (kind === 'schedules' && payload.validator !== false) {
+    const since = scheduleCursor(payload.since)
+    const generation = scheduleGeneration(payload.generation)
+    if (since !== undefined) target.searchParams.set('since', String(since))
+    if (generation !== undefined) target.searchParams.set('generation', generation)
+  }
   return target
 }
 
@@ -125,6 +155,24 @@ async function previewLocalDocument(value, options = {}) {
   return { ...base, previewable: true, previewKind: 'text', mimeType: 'text/plain; charset=utf-8', text: bytes.toString('utf8'), truncated: false, maxPreviewBytes: MAX_LOCAL_PREVIEW_BYTES }
 }
 
+function scheduleTransport(response, body, fallbackEtag) {
+  const etag = scheduleEtag(response.headers?.get?.('etag') || fallbackEtag)
+  const cursorValue = response.headers?.get?.('x-schedule-cursor')
+  const cursor = cursorValue == null || cursorValue === '' ? undefined : scheduleCursor(Number(cursorValue))
+  const generation = scheduleGeneration(response.headers?.get?.('x-schedule-generation') || undefined)
+  const checksumValue = response.headers?.get?.('x-schedule-checksum')
+  const checksum = typeof checksumValue === 'string' && /^[a-f0-9]{64}$/u.test(checksumValue) ? checksumValue : undefined
+  return {
+    status: response.status,
+    notModified: response.status === 304,
+    ...(etag === undefined ? {} : { etag }),
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(generation === undefined ? {} : { generation }),
+    ...(checksum === undefined ? {} : { checksum }),
+    body
+  }
+}
+
 async function loadRightWorkspaceResource(options = {}) {
   if (typeof options.fetchImpl !== 'function') throw new TypeError('fetchImpl is required')
   const target = resourceUrl(options.runtimeUrl, options.kind, options)
@@ -132,13 +180,21 @@ async function loadRightWorkspaceResource(options = {}) {
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   timer.unref?.()
   try {
+    const headers = { accept: 'application/json' }
+    if (options.kind === 'schedules' && options.validator !== false) {
+      const etag = scheduleEtag(options.etag)
+      if (etag !== undefined) headers['if-none-match'] = etag
+    }
     const response = await options.fetchImpl(target, {
       method: 'GET',
       cache: 'no-store',
       redirect: 'error',
       signal: controller.signal,
-      headers: { accept: 'application/json' }
+      headers
     })
+    if (options.kind === 'schedules' && response.status === 304) {
+      return scheduleTransport(response, null, options.etag)
+    }
     const bytes = await responseBytes(response)
     let body
     try { body = JSON.parse(bytes.toString('utf8')) } catch { throw Object.assign(new Error('Right workspace returned invalid JSON'), { code: 'RIGHT_WORKSPACE_INVALID_RESPONSE' }) }
@@ -150,6 +206,7 @@ async function loadRightWorkspaceResource(options = {}) {
     if (options.kind === 'filePreview' && body?.file && typeof body.file === 'object') {
       body.file.contentUrl = fileContentUrl(options.runtimeUrl, options).toString()
     }
+    if (options.kind === 'schedules') return scheduleTransport(response, body, options.etag)
     return body
   } finally {
     clearTimeout(timer)

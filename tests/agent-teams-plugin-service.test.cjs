@@ -22,7 +22,7 @@ test('Agent Teams plugin installs an explicitly marked artifact fixture into the
     const second = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot, allowArtifactFixture: true, requireArtifact: true })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.58')
+    assert.equal(first.version, '1.0.59')
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-agent-teams/g) || []).length, 1)
@@ -44,7 +44,7 @@ test('Agent Teams plugin installs an explicitly marked artifact fixture into the
     assert.doesNotMatch(client, /conversation\.session\.header\.actions|conversation\.input\.dock/u)
     assert.match(client, /\/api\/agent-teams\/events/u)
     const manifest = JSON.parse(await readFile(path.join(first.destination, 'package.json'), 'utf8'))
-    assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-subagent'], '^0.1.2-alpha.4')
+    assert.equal(manifest.peerDependencies['@deepseek-ai/dsh-subagent'], '^0.1.2-alpha.5')
     assert.equal(manifest.dependencies['@peculiar/x509'], '2.0.0')
     assert.equal(manifest.dependencies['reflect-metadata'], '0.2.2')
     assert.equal(await readFile(path.join(first.destination, 'node_modules', 'reflect-metadata', 'package.json'), 'utf8').then(JSON.parse).then(value => value.name), 'reflect-metadata')
@@ -139,7 +139,7 @@ test('default desktop startup mode still installs from a source checkout while g
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-source-startup-'))
   try {
     const installed = await ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot })
-    assert.equal(installed.version, '1.0.58')
+    assert.equal(installed.version, '1.0.59')
     assert.equal(await readFile(path.join(installed.destination, 'package.json'), 'utf8').then(JSON.parse).then(value => value.name), 'dsh-agent-teams')
     await assert.rejects(ensureAgentTeamsPlugin({ dshHome: root, bundledRoot: repositoryPluginRoot, requireArtifact: true }), error => error?.code === 'AGENT_TEAMS_ARTIFACT_REQUIRED')
   } finally { await rm(root, { recursive: true, force: true }) }

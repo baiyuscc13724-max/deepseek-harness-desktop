@@ -9,6 +9,12 @@ const { CALLER_SALT_ENV, createAgentTeamsSessionLaunchService, projectKeyForWork
 
 const rootRef = value => createHash('sha256').update(value).digest('hex')
 const derivedRootRef = (salt, canonicalProjectKey, sessionId) => createHmac('sha256', Buffer.from(salt, 'base64url')).update(JSON.stringify(['agent-teams-caller-root-v1', canonicalProjectKey, sessionId])).digest('hex')
+const projectKeyForDialect = (value, platform = process.platform) => {
+  const dialect = platform === 'win32' ? path.win32 : path.posix
+  const resolved = dialect.resolve(value)
+  const scope = platform === 'win32' ? resolved.replace(/\\/gu, '/').toLocaleLowerCase('en-US') : resolved
+  return createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', scope])).digest('hex')
+}
 const requestOf = payload => payload?.args?.request
 async function fixture(serviceOptions = {}, rpcOverride) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'atsl-')), token = randomBytes(32), calls = [], sessions = new Set()
@@ -30,6 +36,58 @@ test('internal resolve validates canonical key, issues caller-specific ticket, a
     assert.equal(a1.maxSessions, 8)
     assert.equal(JSON.stringify(a1).includes(value.projects.a), false)
     await assert.rejects(value.service.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey: '0'.repeat(64), workspacePath: value.projects.a, callerRootRef: rootRef('x') }), error => error.code === 'HOST_SESSION_LAUNCH_PROJECT_MISMATCH')
+  } finally { await cleanup(value) }
+})
+
+test('project-key fixture preserves code points under Linux and Windows path dialects', () => {
+  for (const [platform, base] of [['linux', '/workspace'], ['win32', 'C:\\Workspace']]) {
+    const dialect = platform === 'win32' ? path.win32 : path.posix
+    const composed = dialect.join(base, 'Caf\u00e9'), decomposed = dialect.join(base, 'Cafe\u0301')
+    const fullWidth = dialect.join(base, 'Project-Ａ'), ascii = dialect.join(base, 'Project-A')
+    assert.notEqual(projectKeyForDialect(composed, platform), projectKeyForDialect(decomposed, platform))
+    assert.notEqual(projectKeyForDialect(fullWidth, platform), projectKeyForDialect(ascii, platform))
+    const noisy = platform === 'win32' ? 'C:\\Workspace\\.\\Lane\\\\' : '/workspace//./Lane/'
+    const clean = platform === 'win32' ? 'c:/workspace/lane' : '/workspace/Lane'
+    assert.equal(projectKeyForDialect(noisy, platform), projectKeyForDialect(clean, platform))
+    if (platform !== 'win32') assert.notEqual(projectKeyForDialect('/workspace/Lane', platform), projectKeyForDialect('/workspace/lane', platform))
+  }
+})
+
+test('workspace identity preserves composed, decomposed, and full-width Unicode siblings across restart', async () => {
+  const value = await fixture()
+  try {
+    const specs = [
+      { key: 'u', name: 'project，lane', caller: 'wide-root', suffix: 'u1' },
+      { key: 'c', name: 'project,lane', caller: 'ascii-root', suffix: 'c1' },
+      { key: 'n', name: 'Caf\u00e9', caller: 'nfc-root', suffix: 'n1' },
+      { key: 'd', name: 'Cafe\u0301', caller: 'nfd-root', suffix: 'd1' },
+    ]
+    for (const spec of specs) value.projects[spec.key] = path.join(value.root, spec.name)
+    const keys = Object.fromEntries(specs.map(spec => [spec.key, projectKeyForWorkspace(value.projects[spec.key])]))
+    assert.equal(new Set(Object.values(keys)).size, specs.length, 'compatibility- or canonically-equivalent sibling spellings must remain distinct')
+    for (const spec of specs) assert.equal(keys[spec.key], projectKeyForDialect(value.projects[spec.key]))
+    const bindings = {}
+    for (const spec of specs) {
+      bindings[spec.key] = await value.resolve(spec.key, spec.caller)
+      assert.equal((await value.service.handleRequest(value.launch(bindings[spec.key], spec.suffix, spec.caller))).state, 'ready')
+    }
+    const workspacePaths = value.calls.filter(([method]) => method === 'workspace/create').map(([, payload]) => requestOf(payload).path)
+    assert.deepEqual(workspacePaths, specs.map(spec => path.resolve(value.projects[spec.key])), 'Host I/O keeps every resolved code-point-exact workspace path')
+    const equivalentWorkspace = process.platform === 'win32' ? path.resolve(value.projects.u).replace(/\\/gu, '/').toLocaleUpperCase('en-US') : `${path.resolve(value.projects.u)}${path.sep}`
+    assert.equal(projectKeyForWorkspace(equivalentWorkspace), keys.u)
+    const replay = await value.service.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey: keys.u, workspacePath: equivalentWorkspace, callerRootRef: rootRef('wide-root') })
+    assert.equal(replay.projectRef, bindings.u.projectRef); assert.equal(replay.projectTicket, bindings.u.projectTicket)
+    await assert.rejects(value.service.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey: keys.u, workspacePath: value.projects.c, callerRootRef: rootRef('wide-root') }), error => error.code === 'HOST_SESSION_LAUNCH_PROJECT_MISMATCH')
+    await value.service.close()
+    value.service = createAgentTeamsSessionLaunchService({ stateFile: value.stateFile, token: value.token, callRuntimeRpc: value.rpc })
+    await value.service.start()
+    const reboundRefs = []
+    for (const spec of specs) {
+      const rebound = await value.service.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey: keys[spec.key], workspacePath: value.projects[spec.key], callerRootRef: rootRef(spec.caller) })
+      assert.equal(rebound.projectRef, bindings[spec.key].projectRef)
+      reboundRefs.push(rebound.projectRef)
+    }
+    assert.equal(new Set(reboundRefs).size, specs.length)
   } finally { await cleanup(value) }
 })
 
@@ -196,6 +254,38 @@ test('private adoption capability is stable across restart and redeemable only b
     const childAfterRestart = await restarted.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey, workspacePath: value.projects.a, callerRootRef: childCallerRootRef })
     const replay = await restarted.handleRequest({ action: 'redeemAdoption', ...childEnvelope, projectTicket: childAfterRestart.projectTicket, projectRef: childAfterRestart.projectRef, boardRef: childAfterRestart.boardRef })
     assert.equal(replay.adoptionCapability, reserved.adoptionCapability)
+  } finally { await cleanup(value) }
+})
+
+test('adopted lifecycle failure is actor-, child-, project-, and operation-bound across restart', async () => {
+  const value = await fixture()
+  try {
+    const canonicalProjectKey = projectKeyForWorkspace(value.projects.a), parent = await value.resolve('a', 'lifecycle-parent'), launch = value.launch(parent, 'a9', 'lifecycle-parent')
+    assert.equal((await value.service.handleRequest(launch)).state, 'ready')
+    let stored = JSON.parse(await readFile(value.stateFile, 'utf8'))
+    const callerSalt = value.service.runtimeEnvironment({})[CALLER_SALT_ENV], childCallerRootRef = derivedRootRef(callerSalt, canonicalProjectKey, stored.operations[0].sessionId)
+    let child = await value.service.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey, workspacePath: value.projects.a, callerRootRef: childCallerRootRef })
+    const exact = { token: value.auth, canonicalProjectKey, callerRootRef: childCallerRootRef, projectTicket: child.projectTicket, projectRef: child.projectRef, boardRef: child.boardRef, batchRef: launch.batchRef, slotRef: launch.slotRef, operationRef: launch.operationRef }, adoptedActorRef = 'actor_exact_adopted_root_0000000000000000'
+    assert.equal((await value.service.handleRequest({ action: 'recordAdoption', ...exact, adoptedActorRef })).state, 'ready')
+    await assert.rejects(value.service.handleRequest({ action: 'recordAdoption', ...exact, adoptedActorRef: 'actor_wrong_rebind_000000000000000000' }), error => error.code === 'HOST_SESSION_ADOPTION_FORBIDDEN')
+    await assert.rejects(value.service.handleRequest({ action: 'recordFailure', ...exact, adoptedActorRef: 'actor_wrong_failure_0000000000000000' }), error => error.code === 'HOST_SESSION_ADOPTION_FORBIDDEN')
+    await assert.rejects(value.service.handleRequest({ action: 'recordFailure', ...exact, callerRootRef: rootRef('lifecycle-parent'), projectTicket: parent.projectTicket, adoptedActorRef }), error => error.code === 'HOST_SESSION_ADOPTION_FORBIDDEN')
+    await assert.rejects(value.service.handleRequest({ action: 'recordFailure', ...exact, operationRef: 'operation_wrong', adoptedActorRef }), error => error.code === 'HOST_SESSION_ADOPTION_FORBIDDEN')
+    await assert.rejects(value.service.handleRequest({ action: 'recordFailure', ...exact, slotRef: 'slot_wrong', adoptedActorRef }), error => error.code === 'HOST_SESSION_ADOPTION_FORBIDDEN')
+    await assert.rejects(value.service.handleRequest({ action: 'recordFailure', ...exact, boardRef: 'board_wrong', adoptedActorRef }), error => error.code === 'HOST_SESSION_LAUNCH_PROJECT_MISMATCH')
+    const foreign = await value.resolve('b', 'foreign-child')
+    await assert.rejects(value.service.handleRequest({ action: 'recordFailure', ...exact, canonicalProjectKey: projectKeyForWorkspace(value.projects.b), callerRootRef: rootRef('foreign-child'), projectTicket: foreign.projectTicket, projectRef: foreign.projectRef, boardRef: foreign.boardRef, adoptedActorRef }), error => error.code === 'HOST_SESSION_ADOPTION_FORBIDDEN')
+    await value.service.close()
+    value.service = createAgentTeamsSessionLaunchService({ stateFile: value.stateFile, token: value.token, callRuntimeRpc: value.rpc })
+    await value.service.start()
+    assert.equal(value.service.runtimeEnvironment({})[CALLER_SALT_ENV], callerSalt)
+    child = await value.service.handleRequest({ action: 'resolveProject', token: value.auth, canonicalProjectKey, workspacePath: value.projects.a, callerRootRef: childCallerRootRef })
+    const rebound = { ...exact, projectTicket: child.projectTicket, projectRef: child.projectRef, boardRef: child.boardRef }
+    const failed = await value.service.handleRequest({ action: 'recordFailure', ...rebound, adoptedActorRef })
+    assert.equal(failed.state, 'failed'); assert.equal(failed.errorCode, 'HOST_SESSION_LIFECYCLE_FAILED'); assert.equal(failed.revision, 2)
+    assert.deepEqual(await value.service.handleRequest({ action: 'recordFailure', ...rebound, adoptedActorRef }), failed)
+    stored = JSON.parse(await readFile(value.stateFile, 'utf8'))
+    assert.equal(stored.operations[0].adoptedActorRef, adoptedActorRef); assert.equal(stored.operations[0].adoptedCallerRootRef, childCallerRootRef)
   } finally { await cleanup(value) }
 })
 

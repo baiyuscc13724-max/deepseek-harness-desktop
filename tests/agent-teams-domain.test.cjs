@@ -2021,32 +2021,143 @@ test('error and refusal lifecycle endings never attach a success result', async 
   }
 })
 
-async function memberRecoveryFixture(label) {
+test('late exact graceful-retirement completion heals timeout while stale error and refusal never self-heal', async () => {
+  const fx = await fixture()
+  let reconciler
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const lead = { id: 'late-retirement-lead' }
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Converge late retirement lifecycle' })
+    const timestamp = new Date().toISOString()
+    const retiring = (sessionId, targetRunId) => ({
+      ...worker(sessionId, sessionId), id: `member-${sessionId}`, state: 'failed', shutdownUnconfirmed: true, stopUnconfirmed: true,
+      error: 'graceful retirement remains unconfirmed (AGENT_TEAMS_LIFECYCLE_TIMEOUT)',
+      retirement: { intentId: `intent-${sessionId}`, scope: 'member', status: 'pending', pauseEpoch: 0, requestedAt: timestamp, updatedAt: timestamp, targetRunId }
+    })
+    await fx.store.mutate(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      current.members.push(retiring('late-complete', 'target-complete'), retiring('late-error', 'target-error'), retiring('late-refusal', 'target-refusal'))
+    })
+    reconciler = fx.mod.createSubagentEventReconciler({ logger: { warn() {} } }, fx.store, Promise.resolve(), 60_000)
+    const stale = reconciler.enqueue('end', { id: 'late-complete', runId: 'stale-old-run', stopReason: 'completed' })
+    await reconciler.flush(); await stale
+    let current = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+    assert.equal(current.members.find(member => member.sessionId === 'late-complete').state, 'failed')
+    assert.equal(current.members.find(member => member.sessionId === 'late-complete').retirement.status, 'pending')
+
+    const completed = reconciler.enqueue('end', { id: 'late-complete', runId: 'target-complete', stopReason: 'completed' })
+    const errored = reconciler.enqueue('end', { id: 'late-error', runId: 'target-error', stopReason: 'error' })
+    const refused = reconciler.enqueue('end', { id: 'late-refusal', runId: 'target-refusal', stopReason: 'refusal' })
+    await reconciler.flush(); await Promise.all([completed, errored, refused])
+    current = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+    const healed = current.members.find(member => member.sessionId === 'late-complete')
+    assert.equal(healed.state, 'retired')
+    assert.equal(healed.error, undefined)
+    assert.equal(healed.shutdownUnconfirmed, undefined)
+    assert.equal(healed.stopUnconfirmed, undefined)
+    assert.equal(healed.retirement.status, 'completed')
+    assert.equal(healed.retirement.stopReason, 'completed')
+    for (const [sessionId, stopReason] of [['late-error', 'error'], ['late-refusal', 'refusal']]) {
+      const member = current.members.find(candidate => candidate.sessionId === sessionId)
+      assert.equal(member.state, 'failed')
+      assert.equal(member.retirement.status, 'failed')
+      assert.equal(member.retirement.stopReason, stopReason)
+      assert.equal(member.shutdownUnconfirmed, true)
+      assert.equal(member.stopUnconfirmed, true)
+    }
+
+    const cannotHeal = reconciler.enqueue('end', { id: 'late-error', runId: 'target-error', stopReason: 'completed' })
+    await reconciler.flush(); await cannotHeal
+    current = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+    assert.equal(current.members.find(member => member.sessionId === 'late-error').state, 'failed')
+    assert.equal(current.members.find(member => member.sessionId === 'late-error').retirement.status, 'failed')
+  } finally {
+    reconciler?.close()
+    await rm(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('restart preserves exact graceful-retirement target and late completion converges safely', async () => {
+  const fx = await fixture()
+  let reconciler
+  try {
+    await fx.store.mutate(document => { document.settings.enabled = true })
+    const lead = { id: 'restart-retirement-lead' }
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Preserve retirement target through restart' })
+    const timestamp = new Date().toISOString()
+    await fx.store.mutate(document => {
+      document.teams.find(candidate => candidate.id === team.id).members.push({
+        ...worker('restart-retirement-worker', 'RestartRetire'), id: 'restart-retirement-member', state: 'shutting_down',
+        retirement: { intentId: 'restart-retirement-intent', scope: 'member', status: 'pending', pauseEpoch: 0, requestedAt: timestamp, updatedAt: timestamp, targetRunId: 'restart-target-run' }
+      })
+    })
+    const restarted = new fx.mod.AgentTeamsStore(fx.file)
+    await restarted.init()
+    let member = restarted.snapshot().teams.find(candidate => candidate.id === team.id).members.find(candidate => candidate.id === 'restart-retirement-member')
+    assert.equal(member.state, 'failed')
+    assert.equal(member.shutdownUnconfirmed, true)
+    assert.equal(member.stopUnconfirmed, true)
+    assert.equal(member.retirement.status, 'pending')
+    assert.equal(member.retirement.targetRunId, 'restart-target-run')
+    assert.equal(member.retirement.errorCode, 'AGENT_TEAMS_HOST_RESTARTED')
+    reconciler = fx.mod.createSubagentEventReconciler({ logger: { warn() {} } }, restarted, Promise.resolve(), 60_000)
+    const late = reconciler.enqueue('end', { id: 'restart-retirement-worker', runId: 'restart-target-run', stopReason: 'completed' })
+    await reconciler.flush(); await late
+    member = restarted.snapshot().teams.find(candidate => candidate.id === team.id).members.find(candidate => candidate.id === 'restart-retirement-member')
+    assert.equal(member.state, 'retired')
+    assert.equal(member.error, undefined)
+    assert.equal(member.shutdownUnconfirmed, undefined)
+    assert.equal(member.stopUnconfirmed, undefined)
+    assert.equal(member.retirement.status, 'completed')
+  } finally {
+    reconciler?.close()
+    await rm(fx.root, { recursive: true, force: true })
+  }
+})
+
+async function memberRecoveryFixture(label, admissionOptions = {}) {
   const fx = await fixture()
   const lead = { id: `${label}-lead`, status: 'running' }
   const workerSession = `${label}-worker`
   const agents = new Map([[lead.id, lead], [workerSession, { id: workerSession, status: 'idle' }]])
-  const followups = [], starts = [], drains = []
-  let failFollowupFor, observerRunningFor
+  const followups = [], starts = [], drains = [], lifecycleRuns = new Map(), omitLifecycleStartFor = new Set()
+  let lifecycleRun = 0
+  let failFollowupFor, observerRunningFor, afterStart
   const ctx = {
     agents: { get: id => agents.get(id), roots: () => [lead] },
     subagents: {
       async [queueSubagentPrompt](_lead, childId, content) {
         followups.push({ childId, text: content[0].text })
+        let runId = lifecycleRuns.get(childId)
+        if (!omitLifecycleStartFor.has('*') && !omitLifecycleStartFor.has(childId)) {
+          runId ??= `recovery-run-${++lifecycleRun}`
+          lifecycleRuns.set(childId, runId)
+          admission.noteStart({ id: childId, runId })
+        }
         if (observerRunningFor === childId) await fx.store.mutate(document => { const current = document.teams.find(candidate => candidate.id === team.id); const member = current?.members.find(candidate => candidate.sessionId === childId); if (member) member.state = 'running' })
         if (failFollowupFor === childId) throw Object.assign(new Error('recovery followup failed'), { code: 'RECOVERY_SEND_FAILED' })
+        if (runId !== undefined) { admission.noteEnd({ id: childId, runId }); lifecycleRuns.delete(childId) }
         return `message-${followups.length}`
       },
-      async drainContinuableChildren(_lead, ids) { drains.push([...ids]) },
+      async drainContinuableChildren(_lead, ids) {
+        drains.push([...ids])
+        for (const id of ids) { const runId = lifecycleRuns.get(id); if (runId !== undefined) { admission.noteEnd({ id, runId }); lifecycleRuns.delete(id) } }
+      },
       async startContinuable(spec) {
         starts.push(spec)
         const child = { id: spec.childId, childId: spec.childId, status: 'idle' }
         agents.set(spec.childId, child)
+        if (!omitLifecycleStartFor.has('*') && !omitLifecycleStartFor.has(spec.childId)) {
+          const runId = `recovery-run-${++lifecycleRun}`
+          lifecycleRuns.set(spec.childId, runId)
+          admission.noteStart({ id: spec.childId, runId })
+          await afterStart?.({ childId: spec.childId, runId, releaseStarted() { admission.noteEnd({ id: spec.childId, runId }); lifecycleRuns.delete(spec.childId) } })
+        }
         return child
       }
     }
   }
-  const admission = fx.mod.createTeamTurnAdmission({ limit: 4, maxQueued: 8, maxQueuedPerRoot: 4, waitMs: 1_000 })
+  const admission = fx.mod.createTeamTurnAdmission({ limit: 4, maxQueued: 8, maxQueuedPerRoot: 4, waitMs: 1_000, ...admissionOptions })
   await fx.store.mutate(document => { document.settings.enabled = true })
   const team = await fx.mod.createTeam(fx.store, lead, { objective: `Recover ${label}` })
   await fx.store.mutate(document => {
@@ -2067,8 +2178,14 @@ async function memberRecoveryFixture(label) {
     lead, workerSession, agents, followups, starts, drains, ctx, admission, teamId: team.id, memberId: `${label}-member`, taskId: task.id, claim,
     setFailFollowup(id) { failFollowupFor = id },
     setObserverRunning(id) { observerRunningFor = id },
+    setAfterStart(callback) { afterStart = callback },
+    omitLifecycleStart(id) { omitLifecycleStartFor.add(id) },
+    allowLifecycleStart(id) { omitLifecycleStartFor.delete(id) },
+    noteLifecycleStart(id, runId) { lifecycleRuns.set(id, runId); return admission.noteStart({ id, runId }) },
+    noteLifecycleEnd(id, runId) { lifecycleRuns.delete(id); return admission.noteEnd({ id, runId }) },
     revision() { return this.store.snapshot().teams.find(candidate => candidate.id === this.teamId).revision },
-    recover(action, requestId, expectedRevision = this.revision()) { return this.mod.recoverFailedMember(this.ctx, this.store, this.admission, this.lead, { teamId: this.teamId, memberId: this.memberId, action, requestId, expectedRevision }, new AbortController().signal) },
+    recover(action, requestId, expectedRevision = this.revision()) { return this.recoverWithSignal(action, requestId, expectedRevision, new AbortController().signal) },
+    recoverWithSignal(action, requestId, expectedRevision, signal) { return this.mod.recoverFailedMember(this.ctx, this.store, this.admission, this.lead, { teamId: this.teamId, memberId: this.memberId, action, requestId, expectedRevision }, signal) },
     async closeRecovery() { admission.close(); await rm(this.root, { recursive: true, force: true }) }
   })
 }
@@ -2081,6 +2198,215 @@ test('member recovery fails closed without the official Host queue and never exe
     fx.ctx.subagents.followup = async () => { legacyCalls += 1; return 'legacy-delivery' }
     await assert.rejects(fx.recover('retry', 'queue-fail-closed'), error => error?.code === 'AGENT_TEAMS_SUBAGENT_UNAVAILABLE')
     assert.equal(legacyCalls, 0)
+  } finally { await fx.closeRecovery() }
+})
+
+test('retry admission timeout stays not-started, preserves exact ownership, and replays without reconciliation', async () => {
+  const fx = await memberRecoveryFixture('retry-admission-timeout', { limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 20 })
+  try {
+    const blockerRoot = { id: 'timeout-blocker-root' }
+    await fx.admission.run(blockerRoot, 'timeout-blocker-child', new AbortController().signal, async () => fx.admission.noteStart({ id: 'timeout-blocker-child', runId: 'timeout-blocker-run' }))
+    const expectedRevision = fx.revision(), requestId = 'retry-timeout-replay'
+    const before = structuredClone(fx.store.snapshot().teams.find(team => team.id === fx.teamId))
+    await assert.rejects(fx.recover('retry', requestId, expectedRevision), error => error?.code === 'AGENT_TEAMS_ADMISSION_TIMEOUT')
+    const waiting = fx.store.snapshot().teams.find(team => team.id === fx.teamId)
+    const receipt = waiting.memberRecoveries.find(candidate => candidate.requestId === requestId)
+    assert.equal(receipt.status, 'prepared')
+    assert.equal(receipt.phase, 'retry_awaiting_admission')
+    assert.equal(receipt.dispatchOutcome, 'not_started')
+    assert.equal(receipt.retryable, true)
+    assert.equal(receipt.errorCode, 'AGENT_TEAMS_ADMISSION_TIMEOUT')
+    assert.deepEqual(receipt.admission, { active: 1, queued: 0, quarantined: 0, limit: 1, waitMs: 20 })
+    assert.deepEqual(waiting.tasks, before.tasks, 'pre-dispatch timeout cannot change task, claim, or lease state')
+    assert.deepEqual(waiting.members, before.members, 'pre-dispatch timeout cannot change the failed member')
+    assert.equal(fx.followups.length, 0)
+    assert.equal(fx.admission.noteEnd({ id: 'timeout-blocker-child', runId: 'timeout-blocker-run' }), true)
+    const recovered = await fx.recover('retry', requestId, expectedRevision)
+    assert.equal(recovered.recovery.status, 'delivered')
+    assert.equal(fx.followups.length, 1)
+  } finally { await fx.closeRecovery() }
+})
+
+test('retry admission cancellation stays not-started and exact request replay keeps claim and lease', async () => {
+  const fx = await memberRecoveryFixture('retry-admission-cancel', { limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 1_000 })
+  try {
+    const blockerRoot = { id: 'cancel-blocker-root' }
+    await fx.admission.run(blockerRoot, 'cancel-blocker-child', new AbortController().signal, async () => fx.admission.noteStart({ id: 'cancel-blocker-child', runId: 'cancel-blocker-run' }))
+    const expectedRevision = fx.revision(), requestId = 'retry-cancel-replay', controller = new AbortController()
+    const before = structuredClone(fx.store.snapshot().teams.find(team => team.id === fx.teamId))
+    const pending = fx.recoverWithSignal('retry', requestId, expectedRevision, controller.signal)
+    await new Promise(resolve => setImmediate(resolve))
+    controller.abort()
+    await assert.rejects(pending, error => error?.code === 'AGENT_TEAMS_ADMISSION_CANCELLED')
+    const waiting = fx.store.snapshot().teams.find(team => team.id === fx.teamId), receipt = waiting.memberRecoveries.find(candidate => candidate.requestId === requestId)
+    assert.equal(receipt.status, 'prepared')
+    assert.equal(receipt.dispatchOutcome, 'not_started')
+    assert.equal(receipt.retryable, true)
+    assert.equal(receipt.errorCode, 'AGENT_TEAMS_ADMISSION_CANCELLED')
+    assert.deepEqual(waiting.tasks, before.tasks)
+    assert.deepEqual(waiting.members, before.members)
+    assert.equal(fx.admission.noteEnd({ id: 'cancel-blocker-child', runId: 'cancel-blocker-run' }), true)
+    const recovered = await fx.recover('retry', requestId, expectedRevision)
+    assert.equal(recovered.recovery.status, 'delivered')
+    const task = fx.store.snapshot().teams.find(team => team.id === fx.teamId).tasks.find(candidate => candidate.id === fx.taskId)
+    assert.equal(task.claimId, fx.claim.claimId)
+    assert.equal(task.leaseEpoch, fx.claim.leaseEpoch)
+  } finally { await fx.closeRecovery() }
+})
+
+test('retry admission queue-full stays not-started and never requires human outcome reconciliation', async () => {
+  const fx = await memberRecoveryFixture('retry-admission-full', { limit: 1, maxQueued: 1, maxQueuedPerRoot: 1, waitMs: 1_000 })
+  try {
+    const blockerRoot = { id: 'full-blocker-root' }, queuedRoot = { id: 'full-queued-root' }
+    await fx.admission.run(blockerRoot, 'full-blocker-child', new AbortController().signal, async () => fx.admission.noteStart({ id: 'full-blocker-child', runId: 'full-blocker-run' }))
+    const queuedController = new AbortController()
+    const queued = fx.admission.run(queuedRoot, 'full-queued-child', queuedController.signal, async () => assert.fail('dummy queued callback must not run'))
+    const queuedCancelled = assert.rejects(queued, error => error?.code === 'AGENT_TEAMS_ADMISSION_CANCELLED')
+    await new Promise(resolve => setImmediate(resolve))
+    const expectedRevision = fx.revision(), requestId = 'retry-queue-full-replay'
+    const before = structuredClone(fx.store.snapshot().teams.find(team => team.id === fx.teamId))
+    await assert.rejects(fx.recover('retry', requestId, expectedRevision), error => error?.code === 'AGENT_TEAMS_ADMISSION_QUEUE_FULL')
+    const waiting = fx.store.snapshot().teams.find(team => team.id === fx.teamId), receipt = waiting.memberRecoveries.find(candidate => candidate.requestId === requestId)
+    assert.equal(receipt.status, 'prepared')
+    assert.equal(receipt.phase, 'retry_awaiting_admission')
+    assert.equal(receipt.dispatchOutcome, 'not_started')
+    assert.equal(receipt.retryable, true)
+    assert.equal(receipt.errorCode, 'AGENT_TEAMS_ADMISSION_QUEUE_FULL')
+    assert.equal(receipt.admission.queued, 1)
+    assert.deepEqual(waiting.tasks, before.tasks)
+    assert.deepEqual(waiting.members, before.members)
+    queuedController.abort()
+    await queuedCancelled
+    assert.equal(fx.admission.noteEnd({ id: 'full-blocker-child', runId: 'full-blocker-run' }), true)
+    const recovered = await fx.recover('retry', requestId, expectedRevision)
+    assert.equal(recovered.recovery.status, 'delivered')
+  } finally { await fx.closeRecovery() }
+})
+
+test('replacement drain releases only the exact adopted generation before starting the replacement', async () => {
+  const fx = await memberRecoveryFixture('replace-adopted-drain', { limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 50 })
+  try {
+    assert.equal(fx.admission.adopt(fx.lead, fx.workerSession, 'adopted-original-run'), true)
+    await fx.store.mutate(document => { document.teams.find(team => team.id === fx.teamId).members.find(member => member.id === fx.memberId).runId = 'adopted-original-run' })
+    const recovered = await fx.recover('replace', 'replace-after-adopted-drain')
+    assert.equal(recovered.recovery.status, 'delivered')
+    assert.deepEqual(fx.drains, [[fx.workerSession]])
+    assert.equal(fx.starts.length, 1)
+    assert.equal(fx.followups.length, 1)
+    assert.equal(fx.admission.snapshot().active, 0)
+    assert.equal(fx.admission.noteEnd({ id: fx.workerSession, runId: 'adopted-original-run' }), false, 'late stale end cannot touch the replacement generation')
+  } finally { await fx.closeRecovery() }
+})
+
+test('replacement start admission timeout preserves original member task claim and lease after one exact drain', async () => {
+  const fx = await memberRecoveryFixture('replace-start-timeout', { limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 20 })
+  try {
+    const blockerRoot = { id: 'replace-start-blocker-root' }
+    await fx.admission.run(blockerRoot, 'replace-start-blocker', new AbortController().signal, async () => fx.admission.noteStart({ id: 'replace-start-blocker', runId: 'replace-start-blocker-run' }))
+    const before = structuredClone(fx.store.snapshot().teams.find(team => team.id === fx.teamId)), expectedRevision = fx.revision(), requestId = 'replace-start-timeout-replay'
+    await assert.rejects(fx.recover('replace', requestId, expectedRevision), error => error?.code === 'AGENT_TEAMS_ADMISSION_TIMEOUT')
+    const waiting = fx.store.snapshot().teams.find(team => team.id === fx.teamId), receipt = waiting.memberRecoveries.find(candidate => candidate.requestId === requestId)
+    assert.equal(receipt.status, 'prepared')
+    assert.equal(receipt.phase, 'start_awaiting_admission')
+    assert.equal(receipt.dispatchOutcome, 'not_started')
+    assert.equal(receipt.retryable, true)
+    assert.equal(receipt.errorCode, 'AGENT_TEAMS_ADMISSION_TIMEOUT')
+    assert.equal(waiting.members.some(member => member.id === receipt.replacementMemberId), false)
+    assert.deepEqual(waiting.members, before.members)
+    assert.deepEqual(waiting.tasks, before.tasks)
+    assert.deepEqual(fx.drains, [[fx.workerSession]])
+    assert.equal(fx.starts.length, 0)
+    assert.equal(fx.admission.noteEnd({ id: 'replace-start-blocker', runId: 'replace-start-blocker-run' }), true)
+    const recovered = await fx.recover('replace', requestId, expectedRevision)
+    assert.equal(recovered.recovery.status, 'delivered')
+    assert.equal(fx.starts.length, 1)
+    assert.deepEqual(fx.drains, [[fx.workerSession]], 'start-admission replay cannot drain the original twice')
+  } finally { await fx.closeRecovery() }
+})
+
+test('replacement followup admission timeout keeps the accepted child published and replays only followup', async () => {
+  const fx = await memberRecoveryFixture('replace-followup-timeout', { limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 20 })
+  try {
+    const blockerRoot = { id: 'replace-followup-blocker-root' }
+    fx.setAfterStart(async ({ releaseStarted }) => {
+      releaseStarted()
+      fx.setAfterStart(undefined)
+      await fx.admission.run(blockerRoot, 'replace-followup-blocker', new AbortController().signal, async () => fx.admission.noteStart({ id: 'replace-followup-blocker', runId: 'replace-followup-blocker-run' }))
+    })
+    const expectedRevision = fx.revision(), requestId = 'replace-followup-timeout-replay'
+    await assert.rejects(fx.recover('replace', requestId, expectedRevision), error => error?.code === 'AGENT_TEAMS_ADMISSION_TIMEOUT')
+    let team = fx.store.snapshot().teams.find(candidate => candidate.id === fx.teamId), receipt = team.memberRecoveries.find(candidate => candidate.requestId === requestId)
+    const replacement = team.members.find(member => member.id === receipt.replacementMemberId), task = team.tasks.find(candidate => candidate.id === fx.taskId)
+    assert.equal(receipt.status, 'prepared')
+    assert.equal(receipt.phase, 'followup_awaiting_admission')
+    assert.equal(receipt.dispatchOutcome, 'not_started')
+    assert.equal(receipt.retryable, true)
+    assert.equal(receipt.errorCode, 'AGENT_TEAMS_ADMISSION_TIMEOUT')
+    assert.equal(team.members.find(member => member.id === fx.memberId).state, 'retired')
+    assert.equal(replacement.sessionId, receipt.replacementSessionId)
+    assert.equal(task.assigneeSessionId, replacement.sessionId)
+    assert.equal(task.claimId, undefined)
+    assert.equal(fx.starts.length, 1)
+    assert.equal(fx.followups.length, 0)
+    assert.equal(fx.admission.noteEnd({ id: 'replace-followup-blocker', runId: 'replace-followup-blocker-run' }), true)
+    const recovered = await fx.recover('replace', requestId, expectedRevision)
+    assert.equal(recovered.recovery.status, 'delivered')
+    assert.equal(fx.starts.length, 1, 'followup replay cannot duplicate an accepted replacement child')
+    assert.equal(fx.followups.length, 1)
+    team = fx.store.snapshot().teams.find(candidate => candidate.id === fx.teamId)
+    assert.equal(team.memberRecoveries.find(candidate => candidate.requestId === requestId).errorCode, undefined)
+  } finally { await fx.closeRecovery() }
+})
+
+test('accepted replacement without start is quarantined and exact late start resumes followup without duplicate child', async () => {
+  const fx = await memberRecoveryFixture('replace-missed-start', { limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 50 })
+  try {
+    fx.omitLifecycleStart('*')
+    const expectedRevision = fx.revision(), requestId = 'replace-missed-start-replay'
+    await assert.rejects(fx.recover('replace', requestId, expectedRevision), error => error?.code === 'AGENT_TEAMS_ADMISSION_HANDSHAKE_PENDING')
+    let team = fx.store.snapshot().teams.find(candidate => candidate.id === fx.teamId), receipt = team.memberRecoveries.find(candidate => candidate.requestId === requestId)
+    assert.equal(receipt.status, 'prepared')
+    assert.equal(receipt.phase, 'followup_awaiting_admission')
+    assert.equal(receipt.dispatchOutcome, 'not_started')
+    assert.equal(receipt.retryable, true)
+    assert.equal(receipt.errorCode, 'AGENT_TEAMS_ADMISSION_HANDSHAKE_PENDING')
+    assert.equal(receipt.admission.active, 1)
+    assert.equal(receipt.admission.quarantined, 1)
+    assert.equal(fx.starts.length, 1)
+    assert.equal(fx.followups.length, 0)
+    const childId = receipt.replacementSessionId
+    assert.equal(fx.noteLifecycleStart(childId, 'late-replacement-run'), true)
+    fx.allowLifecycleStart('*')
+    const recovered = await fx.recover('replace', requestId, expectedRevision)
+    assert.equal(recovered.recovery.status, 'delivered')
+    assert.equal(fx.starts.length, 1)
+    assert.equal(fx.followups.length, 1)
+    assert.equal(fx.admission.snapshot().active, 0)
+    team = fx.store.snapshot().teams.find(candidate => candidate.id === fx.teamId)
+    assert.equal(team.members.find(member => member.id === receipt.replacementMemberId).state, 'ready')
+  } finally { await fx.closeRecovery() }
+})
+
+test('accepted child before Host crash remains quarantined until exact late start and never starts twice', async () => {
+  const fx = await memberRecoveryFixture('replace-accepted-crash', { limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 50 })
+  try {
+    fx.omitLifecycleStart('*')
+    const expectedRevision = fx.revision(), requestId = 'replace-accepted-before-crash'
+    await crashRecoveryAfterPhase(fx, 'child_started', () => fx.recover('replace', requestId, expectedRevision))
+    assert.equal(fx.starts.length, 1)
+    await assert.rejects(fx.recover('replace', requestId, expectedRevision), error => error?.code === 'AGENT_TEAMS_ADMISSION_HANDSHAKE_PENDING')
+    let team = fx.store.snapshot().teams.find(candidate => candidate.id === fx.teamId), receipt = team.memberRecoveries.find(candidate => candidate.requestId === requestId)
+    assert.equal(receipt.status, 'prepared')
+    assert.equal(receipt.phase, 'followup_awaiting_admission')
+    assert.equal(receipt.errorCode, 'AGENT_TEAMS_ADMISSION_HANDSHAKE_PENDING')
+    assert.equal(fx.starts.length, 1)
+    assert.equal(fx.followups.length, 0)
+    assert.equal(fx.noteLifecycleStart(receipt.replacementSessionId, 'late-after-crash-run'), true)
+    fx.allowLifecycleStart('*')
+    const recovered = await fx.recover('replace', requestId, expectedRevision)
+    assert.equal(recovered.recovery.status, 'delivered')
+    assert.equal(fx.starts.length, 1)
+    assert.equal(fx.followups.length, 1)
   } finally { await fx.closeRecovery() }
 })
 
@@ -2127,7 +2453,7 @@ test('prepared retry replay resumes the exact attempt with one active claim, pen
     await fx.store.mutate(document => { const team = document.teams.find(candidate => candidate.id === fx.teamId); team.plan.authorization.cost = 'human_attested'; team.plan.authorization.permissions = 'human_attested'; team.plan.authorization.files = 'human_attested'; team.plan.authorization.externalSideEffects = 'human_attested' })
     const expectedRevision = fx.revision(), requestId = 'prepared-retry-exact'
     const inputHash = createHash('sha256').update(JSON.stringify({ action: 'retry', teamId: fx.teamId, memberId: fx.memberId, expectedRevision })).digest('hex')
-    await fx.store.mutate(document => { const team = document.teams.find(candidate => candidate.id === fx.teamId), timestamp = new Date().toISOString(); team.memberRecoveries = [{ requestId, inputHash, action: 'retry', status: 'prepared', phase: 'prepared', memberId: fx.memberId, sessionId: fx.workerSession, taskIds: [fx.taskId, pending.id], activeTaskIds: [fx.taskId], activeClaims: [{ taskId: fx.taskId, claimId: fx.claim.claimId, leaseEpoch: fx.claim.leaseEpoch }], createdAt: timestamp, updatedAt: timestamp, pauseEpoch: fx.claim.leaseEpoch, teamRevision: expectedRevision }] })
+    await fx.store.mutate(document => { const team = document.teams.find(candidate => candidate.id === fx.teamId), timestamp = new Date().toISOString(); team.memberRecoveries = [{ requestId, inputHash, action: 'retry', status: 'prepared', phase: 'retry_awaiting_admission', memberId: fx.memberId, sessionId: fx.workerSession, taskIds: [fx.taskId, pending.id], activeTaskIds: [fx.taskId], activeClaims: [{ taskId: fx.taskId, claimId: fx.claim.claimId, leaseEpoch: fx.claim.leaseEpoch }], dispatchOutcome: 'not_started', retryable: true, createdAt: timestamp, updatedAt: timestamp, pauseEpoch: fx.claim.leaseEpoch, teamRevision: expectedRevision }] })
     fx.setObserverRunning(fx.workerSession)
     const result = await fx.recover('retry', requestId, expectedRevision)
     assert.equal(result.recovery.status, 'delivered')
@@ -2159,11 +2485,11 @@ async function crashRecoveryAfterPhase(fx, phase, run) {
   fx.store = restarted
 }
 
-test('Host restart replays prepared, child-started, published, and followup-returned phases without duplicate start or followup', async () => {
+test('Host restart replays admission-waiting, child-started, published, and followup-returned phases without duplicate start or followup', async () => {
   const prepared = await memberRecoveryFixture('restart-prepared')
   try {
     const expected = prepared.revision()
-    await crashRecoveryAfterPhase(prepared, 'prepared', () => prepared.recover('retry', 'restart-prepared', expected))
+    await crashRecoveryAfterPhase(prepared, 'retry_awaiting_admission', () => prepared.recover('retry', 'restart-prepared', expected))
     const result = await prepared.recover('retry', 'restart-prepared', expected)
     assert.equal(result.recovery.status, 'delivered')
     assert.equal(prepared.followups.length, 1)
@@ -2532,6 +2858,88 @@ test('a near-saturated lifecycle ledger reserves claim submission acceptance wit
     assert.deepEqual(completed.lifecycleLedger.slice(0, preserved.length), preserved)
     assert.deepEqual(completed.lifecycleLedger.slice(-3).map(event => [event.sequence, event.kind]), [[254, 'claim'], [255, 'submission'], [256, 'acceptance']])
     await assert.rejects(fx.mod.updateTask(fx.store, lead, { teamId: team.id, taskId: task.id, action: 'reopen' }), error => error?.code === 'AGENT_TEAMS_TASK_LEDGER_FULL')
+  } finally { await rm(fx.root, { recursive: true, force: true }) }
+})
+
+test('restart safely requeues pre-dispatch provisioning but fences dispatching as outcome unknown', async () => {
+  const fx = await fixture()
+  const lead = { id: 'queue-restart-lead' }
+  try {
+    await fx.store.mutate(document => {
+      document.settings.enabled = true
+      document.settings.maxMembers = 8
+      document.settings.maxActiveTurns = 8
+    })
+    const team = await fx.mod.createTeam(fx.store, lead, { objective: 'Preserve exact queued peer identities across restart' })
+    const safeTask = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Safe pre-dispatch retry', files: ['src/safe-retry.js'] })).task
+    const uncertainTask = (await fx.mod.createTask(fx.store, lead, { teamId: team.id, title: 'Uncertain dispatch fence', files: ['src/uncertain-dispatch.js'] })).task
+    await activateCurrentPlan(fx.store, team.id)
+    const timestamp = new Date().toISOString()
+    await fx.store.mutate(document => {
+      const current = document.teams.find(candidate => candidate.id === team.id)
+      const addEntry = (taskId, status, suffix) => {
+        const memberId = `queue-member-${suffix}`
+        const childId = `queue-child-${suffix}`
+        const placeholderSessionId = `provisioning:${memberId}`
+        const entry = {
+          id: `queue-entry-${suffix}`, enqueueSequence: suffix === 'safe' ? 1 : 2, memberId, childId, name: `Q ${suffix}`, role: 'isolated queued work', prompt: `Deliver queued work ${suffix}`,
+          taskIds: [taskId], pauseEpoch: current.pauseEpoch, planRevision: current.plan.revision, planHash: current.plan.hash,
+          modelTier: 'subagent', inheritsMain: true, routeSource: 'runtime-default', status, attempt: status === 'dispatching' ? 1 : 0,
+          createdAt: timestamp, updatedAt: timestamp, admissionEpoch: 'old-process-admission', retryAfterRelease: 7,
+          ...(status === 'dispatching' ? { admissionGeneration: 11 } : {})
+        }
+        entry.inputHash = fx.mod.provisioningQueueInputHash({ teamId: current.id, ...entry })
+        current.provisioningQueue.push(entry)
+        current.members.push({
+          id: memberId, sessionId: placeholderSessionId, name: entry.name, role: entry.role,
+          modelTier: entry.modelTier, inheritsMain: entry.inheritsMain, routeSource: entry.routeSource,
+          kind: 'worker', state: 'provisioning', createdAt: timestamp, updatedAt: timestamp
+        })
+        const task = current.tasks.find(candidate => candidate.id === taskId)
+        task.assigneeSessionId = placeholderSessionId
+        task.updatedAt = timestamp
+        task.revision += 1
+      }
+      addEntry(safeTask.id, 'provisioning', 'safe')
+      addEntry(uncertainTask.id, 'dispatching', 'unknown')
+      current.updatedAt = timestamp
+    })
+    const preSequenceSchema = JSON.parse(await readFile(fx.file, 'utf8'))
+    for (const entry of preSequenceSchema.teams.find(candidate => candidate.id === team.id).provisioningQueue) delete entry.enqueueSequence
+    await writeFile(fx.file, `${JSON.stringify(preSequenceSchema)}\n`, 'utf8')
+
+    const restarted = new fx.mod.AgentTeamsStore(fx.file)
+    await restarted.init()
+    const current = restarted.snapshot().teams.find(candidate => candidate.id === team.id)
+    const safe = current.provisioningQueue.find(entry => entry.id === 'queue-entry-safe')
+    const uncertain = current.provisioningQueue.find(entry => entry.id === 'queue-entry-unknown')
+    assert.deepEqual(current.provisioningQueue.map(entry => entry.enqueueSequence), [1, 2], 'missing additive FIFO identities migrate in durable array order')
+    assert.equal(safe.status, 'queued')
+    assert.equal(safe.admissionGeneration, undefined)
+    assert.equal(safe.errorCode, 'AGENT_TEAMS_HOST_RESTARTED')
+    assert.equal(current.members.some(member => member.id === safe.memberId), false)
+    assert.equal(current.tasks.find(task => task.id === safeTask.id).assigneeSessionId, undefined)
+    assert.equal(uncertain.status, 'outcome_unknown')
+    assert.equal(uncertain.admissionGeneration, 11, 'the exact dispatched generation remains fenced for audit')
+    const uncertainMember = current.members.find(member => member.id === uncertain.memberId)
+    assert.equal(uncertainMember.sessionId, uncertain.childId)
+    assert.equal(uncertainMember.state, 'failed')
+    assert.equal(uncertainMember.shutdownUnconfirmed, true)
+    assert.equal(current.tasks.find(task => task.id === uncertainTask.id).assigneeSessionId, uncertain.childId, 'uncertain dispatch retains exact task ownership')
+    assert.equal(current.provisioningQueue.filter(entry => entry.status === 'queued').length, 1, 'uncertain dispatch is never silently requeued')
+    assert.doesNotThrow(() => fx.mod.validateStoreDocument(restarted.snapshot()))
+
+    const stopContext = {
+      agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+      subagents: { async drainContinuableChildren() {} },
+      logger: { warn() {} }
+    }
+    await fx.mod.pauseTeamsForUserStop(stopContext, restarted, lead, [{ teamId: team.id, childIds: [] }], new Date().toISOString())
+    const stopped = restarted.snapshot().teams.find(candidate => candidate.id === team.id)
+    assert.equal(stopped.state, 'paused')
+    assert.equal(stopped.provisioningQueue.some(entry => entry.id === safe.id), false, 'Stop revokes a definitively unstarted queued spawn')
+    assert.equal(stopped.provisioningQueue.find(entry => entry.id === uncertain.id).status, 'outcome_unknown', 'Stop preserves an already-dispatched uncertainty fence')
+    assert.doesNotThrow(() => fx.mod.validateStoreDocument(restarted.snapshot()))
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 

@@ -38,6 +38,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const runtimeClient = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js')
 const directoryPickerRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-host-directory-picker-native', 'lib', 'index.js')
 const conversationRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
+const chatRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'client.js')
 const attachmentUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-attachment', 'lib', 'client.js')
 const toolUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-tool', 'lib', 'client.js')
 const tokenMeterRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-token-meter', 'lib', 'index.js')
@@ -73,6 +74,74 @@ function dedentOne(source) {
 
 function bundleFunctionSource(fn) {
   return fn.toString().split('\n').map(line => `\t\t${line}`).join('\n')
+}
+
+export function deriveChatScrollIntent(scrollTop, scrollHeight, clientHeight, observedTop, following) {
+  const floor = Math.max(0, scrollHeight - clientHeight)
+  const movedByReader = Math.abs(scrollTop - Math.min(observedTop, floor)) > 0.5
+  return {
+    scrollTop,
+    floor,
+    movedByReader,
+    following: movedByReader ? floor - scrollTop <= 25 : following
+  }
+}
+
+export function createChatScrollIntentMachine({ commitIntent, sample, setPending, requestFrame, cancelFrame, setTimer, clearTimer, sampleInterval = 500 }) {
+  let pending = false
+  let disposed = false
+  let frame = null
+  let timer = null
+  const clearSampleTimer = () => {
+    if (timer === null) return
+    clearTimer(timer)
+    timer = null
+  }
+  const flush = (notify) => {
+    if (!pending) return false
+    pending = false
+    setPending(false)
+    clearSampleTimer()
+    sample(notify)
+    return true
+  }
+  return {
+    scroll() {
+      if (disposed) return
+      if (!pending) {
+        pending = true
+        setPending(true)
+      }
+      if (frame === null) {
+        commitIntent()
+        frame = requestFrame(() => {
+          frame = null
+        })
+      }
+      if (timer === null) timer = setTimer(() => {
+        timer = null
+        flush(true)
+      }, sampleInterval)
+    },
+    scrollEnd() {
+      if (!disposed) flush(true)
+    },
+    flush() {
+      if (!disposed) flush(false)
+    },
+    dispose() {
+      if (disposed) return
+      flush(false)
+      disposed = true
+      if (frame !== null) cancelFrame(frame)
+      frame = null
+      clearSampleTimer()
+      setPending(false)
+    },
+    get pending() {
+      return pending
+    }
+  }
 }
 
 const MCP_CLIENT_TIMEOUT_MARKER = '// Harness Desktop: bound MCP connection and initial tool discovery so one server cannot wedge Web startup.'
@@ -831,6 +900,173 @@ const CONVERSATION_SETTLE_FOLLOW_RESIZE_ORIGINAL = `if (local !== null && atBott
 const CONVERSATION_SETTLE_FOLLOW_RESIZE_PATCHED = `if (local !== null && (atBottomRef.current || stopFollowRef.current.settling)) {
 \t\t\t\t\ttoBottom(scrollerOf(local));
 \t\t\t\t}`
+const ALPHA5_CHAT_SCROLL_HELPERS_ORIGINAL = `		const SCROLL_SAMPLE_INTERVAL_MS = 500;
+		/** Active column host when present; otherwise the view-local scroller. */`
+const ALPHA5_CHAT_SCROLL_HELPERS_PATCHED = `		const SCROLL_SAMPLE_INTERVAL_MS = 500;
+		// Harness Desktop: commit cheap reader/follower intent immediately; sample semantic anchors on a bounded cadence.
+${bundleFunctionSource(deriveChatScrollIntent)}
+${bundleFunctionSource(createChatScrollIntentMachine)}
+		/** Active column host when present; otherwise the view-local scroller. */`
+const ALPHA5_CHAT_SCROLL_LAYOUT_ORIGINAL = `(0, react.useLayoutEffect)(() => {
+				if (scrollSamplePendingRef.current) return;
+				const local = listRef.current;
+				/* v8 ignore next -- ref-null guard: React attaches the ref before layout effects run. */
+				if (local === null) return;
+				const el = scrollerOf(local);`
+const ALPHA5_CHAT_SCROLL_LAYOUT_PATCHED = `(0, react.useLayoutEffect)(() => {
+				// Reader/follower intent is already current; pending only defers the heavier semantic sample.
+				const local = listRef.current;
+				/* v8 ignore next -- ref-null guard: React attaches the ref before layout effects run. */
+				if (local === null) return;
+				const el = scrollerOf(local);`
+const ALPHA5_CHAT_SCROLL_HANDLER_ORIGINAL = `			const onScrollRef = (0, react.useRef)(() => {});
+			onScrollRef.current = () => {
+				const local = listRef.current;
+				/* v8 ignore next -- ref-null guard: the handler only fires while mounted. */
+				if (local === null) return;
+				const el = scrollerOf(local);
+				const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+				const movedByReader = Math.abs(el.scrollTop - Math.min(observedTopRef.current, floor)) > .5;
+				const isAtBottom = movedByReader ? floor - el.scrollTop <= 25 : atBottomRef.current;
+				if (!movedByReader && isAtBottom) {
+					toBottom(el);
+					return;
+				}
+				atBottomRef.current = isAtBottom;
+				setAtBottom(isAtBottom);
+				const position = isAtBottom ? null : scrollPosition(local, el);
+				if (isAtBottom) anchorRef.current = null;
+				else if (anchorRef.current !== null && position !== null) anchorRef.current = {
+					key: position.anchorKey,
+					top: position.anchorTop
+				};
+				if (isAtBottom) chatScroll.save(null);
+				else if (position !== null) chatScroll.save(position);
+				observedTopRef.current = el.scrollTop;
+				scheduleActiveTurn();
+			};
+			(0, react.useEffect)(() => {
+				const local = listRef.current;
+				/* v8 ignore next -- ref-null guard: effect runs after the list node commits. */
+				if (local === null) return;
+				const el = scrollerOf(local);
+				let sampleTimer;
+				const sample = () => {
+					if (!scrollSamplePendingRef.current) return;
+					scrollSamplePendingRef.current = false;
+					if (sampleTimer !== void 0) window.clearTimeout(sampleTimer);
+					sampleTimer = void 0;
+					onScrollRef.current();
+					setScrollSampleTick((tick) => tick + 1);
+				};
+				const onScroll = () => {
+					scrollSamplePendingRef.current = true;
+					sampleTimer ??= window.setTimeout(sample, SCROLL_SAMPLE_INTERVAL_MS);
+				};
+				el.addEventListener("scroll", onScroll, { passive: true });
+				el.addEventListener("scrollend", sample, { passive: true });
+				return () => {
+					el.removeEventListener("scroll", onScroll);
+					el.removeEventListener("scrollend", sample);
+					if (sampleTimer !== void 0) window.clearTimeout(sampleTimer);
+					scrollSamplePendingRef.current = false;
+				};
+			}, []);`
+const ALPHA5_CHAT_SCROLL_HANDLER_PATCHED = `			const onScrollIntentRef = (0, react.useRef)(() => true);
+			onScrollIntentRef.current = (notify = true, fixedLocal, fixedScroller) => {
+				const local = fixedLocal ?? listRef.current;
+				/* v8 ignore next -- a pre-unmount flush passes the still-mounted list explicitly. */
+				if (local === null) return atBottomRef.current;
+				const el = fixedScroller ?? scrollerOf(local);
+				const intent = deriveChatScrollIntent(el.scrollTop, el.scrollHeight, el.clientHeight, observedTopRef.current, atBottomRef.current);
+				observedTopRef.current = intent.scrollTop;
+				atBottomRef.current = intent.following;
+				if (notify) setAtBottom((current) => current === intent.following ? current : intent.following);
+				if (intent.following) {
+					anchorRef.current = null;
+					chatScroll.save(null);
+				}
+				return intent.following;
+			};
+			const onScrollRef = (0, react.useRef)(() => {});
+			onScrollRef.current = (notify = true, fixedLocal, fixedScroller) => {
+				const local = fixedLocal ?? listRef.current;
+				/* v8 ignore next -- a pre-unmount flush passes the still-mounted list explicitly. */
+				if (local === null) return;
+				const el = fixedScroller ?? scrollerOf(local);
+				const isAtBottom = onScrollIntentRef.current(notify, local, el);
+				if (!isAtBottom) {
+					const position = scrollPosition(local, el);
+					if (anchorRef.current !== null && position !== null) anchorRef.current = {
+						key: position.anchorKey,
+						top: position.anchorTop
+					};
+					if (position !== null) chatScroll.save(position);
+				}
+				if (notify) scheduleActiveTurn();
+			};
+			(0, react.useLayoutEffect)(() => {
+				const local = listRef.current;
+				/* v8 ignore next -- ref-null guard: layout effect runs after the list node commits. */
+				if (local === null) return;
+				const el = scrollerOf(local);
+				const machine = createChatScrollIntentMachine({
+					commitIntent: () => onScrollIntentRef.current(true, local, el),
+					sample: (notify) => {
+						onScrollRef.current(notify, local, el);
+						if (notify) setScrollSampleTick((tick) => tick + 1);
+					},
+					setPending: (pending) => {
+						scrollSamplePendingRef.current = pending;
+					},
+					requestFrame: (callback) => typeof requestAnimationFrame === "undefined" ? null : requestAnimationFrame(callback),
+					cancelFrame: (frame) => {
+						if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(frame);
+					},
+					setTimer: (callback, delay) => window.setTimeout(callback, delay),
+					clearTimer: (timer) => window.clearTimeout(timer),
+					sampleInterval: SCROLL_SAMPLE_INTERVAL_MS
+				});
+				const onScroll = () => machine.scroll();
+				const onScrollEnd = () => machine.scrollEnd();
+				el.addEventListener("scroll", onScroll, { passive: true });
+				el.addEventListener("scrollend", onScrollEnd, { passive: true });
+				return () => {
+					// Layout cleanup runs while the old session DOM is still readable.
+					machine.dispose();
+					el.removeEventListener("scroll", onScroll);
+					el.removeEventListener("scrollend", onScrollEnd);
+				};
+			}, []);`
+const ALPHA5_CHAT_SCROLL_FOLLOW_ORIGINAL = `			const followRef = (0, react.useRef)(null);
+			followRef.current = () => {
+				if (scrollSamplePendingRef.current) return;
+				const local = listRef.current;`
+const ALPHA5_CHAT_SCROLL_FOLLOW_PATCHED = `			const followRef = (0, react.useRef)(null);
+			followRef.current = () => {
+				// Pending means only that the semantic anchor is deferred; the follow intent is already current.
+				const local = listRef.current;`
+const ALPHA5_CHAT_SCROLL_COMPLETE = Object.freeze([
+  ALPHA5_CHAT_SCROLL_HELPERS_PATCHED,
+  ALPHA5_CHAT_SCROLL_LAYOUT_PATCHED,
+  ALPHA5_CHAT_SCROLL_HANDLER_PATCHED,
+  ALPHA5_CHAT_SCROLL_FOLLOW_PATCHED
+])
+const ALPHA5_CHAT_SCROLL_MARKERS = Object.freeze([
+  'function deriveChatScrollIntent(',
+  'function createChatScrollIntentMachine(',
+  'const onScrollIntentRef = (0, react.useRef)',
+  'machine.dispose();',
+  'pending only defers the heavier semantic sample'
+])
+const ALPHA5_CHAT_TURN_ERROR_TITLE_ORIGINAL = 'children: t("message.turnError")'
+const ALPHA5_CHAT_TURN_ERROR_TITLE_PATCHED = 'children: t("message.turnError") + " · " + t("message.sentTimeSnapshot")'
+const ALPHA5_CHAT_TURN_ERROR_ZH_ORIGINAL = '\t\t\t"message.turnError": "本轮运行失败",'
+const ALPHA5_CHAT_TURN_ERROR_ZH_PATCHED = `${ALPHA5_CHAT_TURN_ERROR_ZH_ORIGINAL}\n\t\t\t"message.sentTimeSnapshot": "发送时快照",`
+const ALPHA5_CHAT_TURN_ERROR_EN_ORIGINAL = '\t\t\t"message.turnError": "This turn failed",'
+const ALPHA5_CHAT_TURN_ERROR_EN_PATCHED = `${ALPHA5_CHAT_TURN_ERROR_EN_ORIGINAL}\n\t\t\t"message.sentTimeSnapshot": "Sent-time snapshot",`
+const ALPHA5_CHAT_TURN_ERROR_COMPLETE = Object.freeze([ALPHA5_CHAT_TURN_ERROR_TITLE_PATCHED, ALPHA5_CHAT_TURN_ERROR_ZH_PATCHED, ALPHA5_CHAT_TURN_ERROR_EN_PATCHED])
+
 const CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL = 'const composerBlock = useComposerBlock((block) => block);'
 const CONVERSATION_ROOT_SLOT_MEMO_PATCHED = `${CONVERSATION_ROOT_SLOT_MEMO_ORIGINAL}
 			const sessionHeader = (0, react.useMemo)(() => renderSlot("conversation.session.header", {}), [renderSlot]);
@@ -1025,6 +1261,72 @@ const SUBAGENT_CHANGE_OPEN_PATCHED = String(`\t\t\tconst changeOpen = (next, res
 \t\t\t};`)
 const SUBAGENT_EXTERNAL_OPEN_EFFECT_ANCHOR = '\t\t\tconst closeBranch = (root) => {'
 const SUBAGENT_EXTERNAL_OPEN_EFFECT_MARKER = 'harness-desktop:open-subagent-catalog'
+const SUBAGENT_TEAM_LIVE_STATE_ANCHOR = '\t\t\tconst [now, setNow] = (0, react.useState)(() => Date.now());'
+const SUBAGENT_TEAM_LIVE_STATE_MARKER = 'harness-desktop:agent-team-live-status'
+const SUBAGENT_TEAM_LIVE_STATE_PATCH = String(`\t\t\tconst [teamLiveStatus, setTeamLiveStatus] = (0, react.useState)(() => typeof window === "undefined" ? null : window.__DSH_AGENT_TEAM_LIVE_STATUS__ ?? null);
+\t\t\t(0, react.useEffect)(() => {
+\t\t\t\tif (typeof window === "undefined") return;
+\t\t\t\tconst updateTeamLiveStatus = (event) => setTeamLiveStatus(event?.detail ?? null);
+\t\t\t\twindow.addEventListener("harness-desktop:agent-team-live-status", updateTeamLiveStatus);
+\t\t\t\treturn () => window.removeEventListener("harness-desktop:agent-team-live-status", updateTeamLiveStatus);
+\t\t\t}, []);
+`)
+const SUBAGENT_TEAM_LIVE_COUNT_ANCHOR = '\t\t\tconst descendantCount = Math.max(healthy.length, descendants.count);'
+const SUBAGENT_TEAM_LIVE_COUNT_PATCH_V1 = String(`\t\t\tconst teamLiveCounts = teamLiveStatus?.counts ?? {};
+\t\t\tconst teamLiveActiveCount = Math.max(0, Number(teamLiveCounts.registering) || 0) + Math.max(0, Number(teamLiveCounts.queued) || 0) + Math.max(0, Number(teamLiveCounts.running) || 0) + Math.max(0, Number(teamLiveCounts.continuable) || 0);
+\t\t\tconst descendantCount = Math.max(healthy.length, descendants.count, teamLiveActiveCount);`)
+const SUBAGENT_TEAM_LIVE_COUNT_PATCH = String(`\t\t\tconst teamLiveCounts = teamLiveStatus?.counts ?? {};
+\t\t\tconst safeTeamLiveCount = (value) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, 1e3) : 0;
+\t\t\tconst teamLiveActiveCount = safeTeamLiveCount(teamLiveCounts.registering) + safeTeamLiveCount(teamLiveCounts.queued) + safeTeamLiveCount(teamLiveCounts.running) + safeTeamLiveCount(teamLiveCounts.continuable);
+\t\t\tconst descendantCount = Math.max(healthy.length, descendants.count, teamLiveActiveCount);`)
+const SUBAGENT_TEAM_LIVE_RUNNING_KEY_ORIGINAL = '\t\t\tconst runningCountKey = descendants.runningCount === 1 ? "count.running.one" : "count.running.other";'
+const SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED_V1 = String(`\t\t\tconst effectiveRunningCount = Math.max(descendants.runningCount, Math.max(0, Number(teamLiveCounts.registering) || 0) + Math.max(0, Number(teamLiveCounts.running) || 0));
+\t\t\tconst runningCountKey = effectiveRunningCount === 1 ? "count.running.one" : "count.running.other";`)
+const SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED = String(`\t\t\tconst effectiveRunningCount = Math.max(descendants.runningCount, safeTeamLiveCount(teamLiveCounts.registering) + safeTeamLiveCount(teamLiveCounts.running));
+\t\t\tconst runningCountKey = effectiveRunningCount === 1 ? "count.running.one" : "count.running.other";`)
+const SUBAGENT_TEAM_LIVE_ARIA_ORIGINAL = '"aria-label": t(descendants.runningCount > 0 ? runningCountKey : totalCountKey, { count: descendants.runningCount > 0 ? descendants.runningCount : descendantCount }),'
+const SUBAGENT_TEAM_LIVE_ARIA_PATCHED = '"aria-label": t(effectiveRunningCount > 0 ? runningCountKey : totalCountKey, { count: effectiveRunningCount > 0 ? effectiveRunningCount : descendantCount }),'
+const SUBAGENT_DISCLOSURE_TOUCH_ORIGINAL = '.ZKlsPq_trigger,.ZKlsPq_switcherTrigger{min-height:28px;'
+const SUBAGENT_DISCLOSURE_TOUCH_PATCHED = '.ZKlsPq_trigger,.ZKlsPq_switcherTrigger{min-width:44px;min-height:44px;'
+const SUBAGENT_DISCLOSURE_SWITCHER_WIDTH_ORIGINAL = '.ZKlsPq_switcherTrigger{min-width:0;max-width:244px;'
+const SUBAGENT_DISCLOSURE_SWITCHER_WIDTH_PATCHED = '.ZKlsPq_switcherTrigger{min-width:44px;max-width:244px;'
+const SUBAGENT_DISCLOSURE_FOCUS_ORIGINAL = '.ZKlsPq_ancestorSwitcherTrigger:hover,.ZKlsPq_ancestorSwitcherTrigger:focus-visible{color:var(--dsw-alias-label-tertiary)}.ZKlsPq_trigger svg'
+const SUBAGENT_DISCLOSURE_FOCUS_PATCHED = '.ZKlsPq_ancestorSwitcherTrigger:hover,.ZKlsPq_ancestorSwitcherTrigger:focus-visible{color:var(--dsw-alias-label-tertiary)}.ZKlsPq_trigger:focus-visible,.ZKlsPq_switcherTrigger:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.ZKlsPq_trigger svg'
+const SUBAGENT_DISCLOSURE_MOTION_ORIGINAL = '.ZKlsPq_triggerOpen{transform:rotate(180deg)}.ZKlsPq_menu{'
+const SUBAGENT_DISCLOSURE_MOTION_PATCHED = '.ZKlsPq_triggerOpen{transform:rotate(180deg)}@media(prefers-reduced-motion:reduce){.ZKlsPq_trigger svg,.ZKlsPq_switcherTrigger svg{transition:none}}.ZKlsPq_menu{'
+const SUBAGENT_DISCLOSURE_ID_ORIGINAL = String(`\t\t\tconst [open, setOpen] = (0, react.useState)(false);
+\t\t\tconst [menuPosition, setMenuPosition] = (0, react.useState)();`)
+const SUBAGENT_DISCLOSURE_ID_PATCHED = String(`\t\t\tconst [open, setOpen] = (0, react.useState)(false);
+\t\t\tconst menuId = (0, react.useId)();
+\t\t\tconst [menuPosition, setMenuPosition] = (0, react.useState)();`)
+const SUBAGENT_DISCLOSURE_EXPANDED_ORIGINAL = String(`\t\t\t\t\t\t"aria-expanded": open,
+\t\t\t\t\t\t"aria-label":`)
+const SUBAGENT_DISCLOSURE_EXPANDED_PATCHED = String(`\t\t\t\t\t\t"aria-expanded": open,
+\t\t\t\t\t\t"aria-controls": menuId,
+\t\t\t\t\t\t"aria-label":`)
+const SUBAGENT_DISCLOSURE_CLICK_ORIGINAL = String(`\t\t\t\t\t\tonClick: openTitle === void 0 ? void 0 : () => {
+\t\t\t\t\t\t\tcancelHoverOpen();
+\t\t\t\t\t\t\tif (open) changeOpen(false);
+\t\t\t\t\t\t\topenTitle();
+\t\t\t\t\t\t},`)
+const SUBAGENT_DISCLOSURE_CLICK_V1_PATCHED = String(`\t\t\t\t\t\tonClick: () => {
+\t\t\t\t\t\t\tcancelHoverOpen();
+\t\t\t\t\t\t\tif (openTitle !== void 0) {
+\t\t\t\t\t\t\t\tif (open) changeOpen(false);
+\t\t\t\t\t\t\t\topenTitle();
+\t\t\t\t\t\t\t\treturn;
+\t\t\t\t\t\t\t}
+\t\t\t\t\t\t\tchangeOpen(!open);
+\t\t\t\t\t\t},`)
+const SUBAGENT_DISCLOSURE_CLICK_PATCHED = String(`\t\t\t\t\t\tonClick: () => {
+\t\t\t\t\t\t\tcancelHoverOpen();
+\t\t\t\t\t\t\tchangeOpen(!open);
+\t\t\t\t\t\t},`)
+const SUBAGENT_DISCLOSURE_MENU_ORIGINAL = String(`\t\t\t\t\topen && (0, react_dom.createPortal)((0, react_jsx_runtime.jsx)("div", {
+\t\t\t\t\t\tref: menuRef,`)
+const SUBAGENT_DISCLOSURE_MENU_PATCHED = String(`\t\t\t\t\topen && (0, react_dom.createPortal)((0, react_jsx_runtime.jsx)("div", {
+\t\t\t\t\t\tid: menuId,
+\t\t\t\t\t\tref: menuRef,`)
 const SUBAGENT_EXTERNAL_OPEN_EFFECT_PATCH = String(`\t\t\t(0, react.useEffect)(() => {
 \t\t\t\tif (typeof window === "undefined") return;
 \t\t\t\tconst openRequestedCatalog = (event) => {
@@ -1483,6 +1785,86 @@ export function patchAlpha2ConversationSources(conversationSource, chatSource) {
   return { conversationSource: conversation, chatSource: chat, changed: conversationChanged || chatChanged }
 }
 
+function replaceAlpha5ChatScrollFragment(source, original, patched, label) {
+  const first = source.indexOf(original)
+  if (first < 0 || source.indexOf(original, first + original.length) >= 0) {
+    throw new Error(`Pinned DSH alpha.5 chat ${label} changed; refusing an unsafe scroll-state patch.`)
+  }
+  return source.slice(0, first) + patched + source.slice(first + original.length)
+}
+
+export function patchAlpha5ChatScrollSource(source) {
+  if (ALPHA5_CHAT_SCROLL_COMPLETE.every(fragment => source.includes(fragment))) return { source, changed: false }
+  if (ALPHA5_CHAT_SCROLL_MARKERS.some(marker => source.includes(marker))) {
+    throw new Error('Pinned DSH alpha.5 chat scroll-state patch is incomplete; refusing an unsafe repair.')
+  }
+  let output = source
+  for (const [original, patched, label] of [
+    [ALPHA5_CHAT_SCROLL_HELPERS_ORIGINAL, ALPHA5_CHAT_SCROLL_HELPERS_PATCHED, 'helper anchor'],
+    [ALPHA5_CHAT_SCROLL_LAYOUT_ORIGINAL, ALPHA5_CHAT_SCROLL_LAYOUT_PATCHED, 'layout follow guard'],
+    [ALPHA5_CHAT_SCROLL_HANDLER_ORIGINAL, ALPHA5_CHAT_SCROLL_HANDLER_PATCHED, 'scroll sampling lifecycle'],
+    [ALPHA5_CHAT_SCROLL_FOLLOW_ORIGINAL, ALPHA5_CHAT_SCROLL_FOLLOW_PATCHED, 'resize follow guard']
+  ]) output = replaceAlpha5ChatScrollFragment(output, original, patched, label)
+  if (!ALPHA5_CHAT_SCROLL_COMPLETE.every(fragment => output.includes(fragment))) {
+    throw new Error('Pinned DSH alpha.5 chat scroll-state patch did not compose completely.')
+  }
+  return { source: output, changed: true }
+}
+
+export function patchAlpha5ChatSentTimeSnapshotSource(source) {
+  if (ALPHA5_CHAT_TURN_ERROR_COMPLETE.every(fragment => source.includes(fragment))) return { source, changed: false }
+  if (ALPHA5_CHAT_TURN_ERROR_COMPLETE.some(fragment => source.includes(fragment))) throw new Error('Pinned DSH alpha.5 chat sent-time snapshot patch is incomplete; refusing an unsafe repair.')
+  let output = source
+  for (const [original, patched, label] of [
+    [ALPHA5_CHAT_TURN_ERROR_TITLE_ORIGINAL, ALPHA5_CHAT_TURN_ERROR_TITLE_PATCHED, 'turn-error title'],
+    [ALPHA5_CHAT_TURN_ERROR_ZH_ORIGINAL, ALPHA5_CHAT_TURN_ERROR_ZH_PATCHED, 'Chinese sent-time label'],
+    [ALPHA5_CHAT_TURN_ERROR_EN_ORIGINAL, ALPHA5_CHAT_TURN_ERROR_EN_PATCHED, 'English sent-time label']
+  ]) {
+    const first = output.indexOf(original)
+    if (first < 0 || output.indexOf(original, first + original.length) >= 0) throw new Error(`Pinned DSH alpha.5 chat ${label} changed; refusing an unsafe sent-time snapshot patch.`)
+    output = output.slice(0, first) + patched + output.slice(first + original.length)
+  }
+  if (!ALPHA5_CHAT_TURN_ERROR_COMPLETE.every(fragment => output.includes(fragment))) throw new Error('Pinned DSH alpha.5 chat sent-time snapshot patch did not compose completely.')
+  return { source: output, changed: true }
+}
+
+export function restoreAlpha5ChatSentTimeSnapshotSource(source) {
+  const completeCount = ALPHA5_CHAT_TURN_ERROR_COMPLETE.filter(fragment => source.includes(fragment)).length
+  if (completeCount === 0) return source
+  if (completeCount !== ALPHA5_CHAT_TURN_ERROR_COMPLETE.length) throw new Error('Pinned DSH alpha.5 chat sent-time snapshot patch is incomplete; refusing an unsafe restore.')
+  let output = source
+  for (const [patched, original] of [
+    [ALPHA5_CHAT_TURN_ERROR_TITLE_PATCHED, ALPHA5_CHAT_TURN_ERROR_TITLE_ORIGINAL],
+    [ALPHA5_CHAT_TURN_ERROR_ZH_PATCHED, ALPHA5_CHAT_TURN_ERROR_ZH_ORIGINAL],
+    [ALPHA5_CHAT_TURN_ERROR_EN_PATCHED, ALPHA5_CHAT_TURN_ERROR_EN_ORIGINAL]
+  ]) output = output.replace(patched, original)
+  return output
+}
+
+export function restoreAlpha5ChatScrollSource(source) {
+  const completeCount = ALPHA5_CHAT_SCROLL_COMPLETE.filter(fragment => source.includes(fragment)).length
+  if (completeCount === 0) {
+    if (ALPHA5_CHAT_SCROLL_MARKERS.some(marker => source.includes(marker))) {
+      throw new Error('Pinned DSH alpha.5 chat scroll-state patch is incomplete; refusing an unsafe restore.')
+    }
+    return source
+  }
+  if (completeCount !== ALPHA5_CHAT_SCROLL_COMPLETE.length) {
+    throw new Error('Pinned DSH alpha.5 chat scroll-state patch is incomplete; refusing an unsafe restore.')
+  }
+  let output = source
+  for (const [patched, original, label] of [
+    [ALPHA5_CHAT_SCROLL_FOLLOW_PATCHED, ALPHA5_CHAT_SCROLL_FOLLOW_ORIGINAL, 'resize follow guard'],
+    [ALPHA5_CHAT_SCROLL_HANDLER_PATCHED, ALPHA5_CHAT_SCROLL_HANDLER_ORIGINAL, 'scroll sampling lifecycle'],
+    [ALPHA5_CHAT_SCROLL_LAYOUT_PATCHED, ALPHA5_CHAT_SCROLL_LAYOUT_ORIGINAL, 'layout follow guard'],
+    [ALPHA5_CHAT_SCROLL_HELPERS_PATCHED, ALPHA5_CHAT_SCROLL_HELPERS_ORIGINAL, 'helper anchor']
+  ]) output = replaceAlpha5ChatScrollFragment(output, patched, original, label)
+  if (ALPHA5_CHAT_SCROLL_MARKERS.some(marker => output.includes(marker))) {
+    throw new Error('Pinned DSH alpha.5 chat scroll-state restore left patch markers behind.')
+  }
+  return output
+}
+
 function restoreModernConversationComposerVisibilitySource(source) {
   let output = source
   if (output.includes(CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_PATCHED)) {
@@ -1707,6 +2089,266 @@ const SUBAGENT_SETTLEMENT_PATCHED = String(`\t\t\t\tif (!settling.settling) {
 \t\t\t\t\tif (agent.status !== "running") await poked;
 \t\t\t\t\tcontinue;
 \t\t\t\t}`)
+const SUBAGENT_TERMINAL_DIAGNOSTIC_ANCHOR = 'function createLifecycleEmitter(ctx, carrier) {'
+const SUBAGENT_TERMINAL_DIAGNOSTIC_MARKER = 'function boundedSubagentTerminalDiagnostic(stopReason, source, partialOutputPresent) {'
+const SUBAGENT_TERMINAL_DIAGNOSTIC_PATCH_V1 = String(`function boundedSubagentTerminalDiagnostic(stopReason, source, partialOutputPresent) {
+\tif (stopReason === "completed") return;
+\tlet code = "SUBAGENT_ABNORMAL_END";
+\tlet category = "internal";
+\tlet retryable = false;
+\tswitch (stopReason) {
+\t\tcase "aborted":
+\t\t\tcode = "SUBAGENT_ABORTED";
+\t\t\tcategory = "cancellation";
+\t\t\tretryable = true;
+\t\t\tbreak;
+\t\tcase "max-tokens":
+\t\t\tcode = "SUBAGENT_MAX_TOKENS";
+\t\t\tcategory = "resource_limit";
+\t\t\tretryable = true;
+\t\t\tbreak;
+\t\tcase "refusal":
+\t\t\tcode = "SUBAGENT_REFUSAL";
+\t\t\tcategory = "policy";
+\t\t\tbreak;
+\t\tcase "error": {
+\t\t\tlet hint = "";
+\t\t\ttry {
+\t\t\t\tif (typeof source === "string") hint = source.slice(0, 512).toLowerCase();
+\t\t\t\telse if (source !== null && typeof source === "object") {
+\t\t\t\t\tconst descriptor = Object.getOwnPropertyDescriptor(source, "code");
+\t\t\t\t\tif (descriptor !== void 0 && "value" in descriptor && typeof descriptor.value === "string") hint = descriptor.value.slice(0, 128).toLowerCase();
+\t\t\t\t}
+\t\t\t} catch {}
+\t\t\tif (hint.includes("activation_teardown_failed")) {
+\t\t\t\tcode = "SUBAGENT_ACTIVATION_TEARDOWN_FAILED";
+\t\t\t\tcategory = "teardown";
+\t\t\t} else if (hint.includes("timeout") || hint.includes("timed out")) {
+\t\t\t\tcode = "SUBAGENT_TIMEOUT";
+\t\t\t\tcategory = "transient";
+\t\t\t\tretryable = true;
+\t\t\t} else if (hint.includes("rate_limit") || hint.includes("rate limit") || hint.includes("overload") || hint.includes("unavailable")) {
+\t\t\t\tcode = "SUBAGENT_PROVIDER_UNAVAILABLE";
+\t\t\t\tcategory = "transient";
+\t\t\t\tretryable = true;
+\t\t\t} else code = "SUBAGENT_ERROR";
+\t\t\tbreak;
+\t\t}
+\t}
+\treturn {
+\t\tcode,
+\t\tcategory,
+\t\tretryable,
+\t\tpartialOutputPresent: partialOutputPresent === true
+\t};
+}
+`)
+const SUBAGENT_TERMINAL_DIAGNOSTIC_PATCH = String(`function boundedSubagentTerminalDiagnostic(stopReason, source, partialOutputPresent) {
+\tif (stopReason === "completed") return;
+\tlet code = "SUBAGENT_ABNORMAL_END";
+\tlet category = "internal";
+\tlet stage = "work_followup";
+\tlet retryable = false;
+\tlet nextAction = "view_live_status";
+\tconst ownString = (value, key, limit) => {
+\t\tif (value === null || typeof value !== "object") return "";
+\t\ttry {
+\t\t\tconst descriptor = Object.getOwnPropertyDescriptor(value, key);
+\t\t\treturn descriptor !== void 0 && "value" in descriptor && typeof descriptor.value === "string" ? descriptor.value.slice(0, limit) : "";
+\t\t} catch { return ""; }
+\t};
+\tswitch (stopReason) {
+\t\tcase "aborted":
+\t\t\tcode = "SUBAGENT_ABORTED";
+\t\t\tcategory = "cancellation";
+\t\t\tstage = "retirement";
+\t\t\tretryable = true;
+\t\t\tnextAction = "retry_current_task";
+\t\t\tbreak;
+\t\tcase "max-tokens":
+\t\t\tcode = "SUBAGENT_MAX_TOKENS";
+\t\t\tcategory = "resource_limit";
+\t\t\tretryable = true;
+\t\t\tnextAction = "retry_current_task";
+\t\t\tbreak;
+\t\tcase "refusal":
+\t\t\tcode = "SUBAGENT_REFUSAL";
+\t\t\tcategory = "policy";
+\t\t\tbreak;
+\t\tcase "error": {
+\t\t\tconst rawCode = ownString(source, "code", 128).toLowerCase();
+\t\t\tconst rawMessage = (typeof source === "string" ? source.slice(0, 512) : ownString(source, "message", 512)).toLowerCase();
+\t\t\tconst hint = rawCode + " " + rawMessage;
+\t\t\tif (hint.includes("activation_teardown_failed")) {
+\t\t\t\tcode = "SUBAGENT_ACTIVATION_TEARDOWN_FAILED";
+\t\t\t\tcategory = "teardown";
+\t\t\t\tstage = "retirement";
+\t\t\t} else if (rawCode === "pi_ai_error" && (rawMessage.includes("not found") || rawMessage.length === 0)) {
+\t\t\t\tcode = "PI_AI_ERROR";
+\t\t\t\tcategory = "provider_transient";
+\t\t\t\tstage = "provider_dispatch";
+\t\t\t\tretryable = true;
+\t\t\t\tnextAction = "retry_current_task";
+\t\t\t} else if (hint.includes("timeout") || hint.includes("timed out")) {
+\t\t\t\tcode = "SUBAGENT_TIMEOUT";
+\t\t\t\tcategory = "lifecycle_timeout";
+\t\t\t\tretryable = true;
+\t\t\t\tnextAction = "retry_current_task";
+\t\t\t} else if (hint.includes("rate_limit") || hint.includes("rate limit") || hint.includes("overload") || hint.includes("unavailable") || rawCode === "pi_ai_error") {
+\t\t\t\tcode = rawCode === "pi_ai_error" ? "PI_AI_ERROR" : "SUBAGENT_PROVIDER_UNAVAILABLE";
+\t\t\t\tcategory = "provider_transient";
+\t\t\t\tstage = "provider_dispatch";
+\t\t\t\tretryable = true;
+\t\t\t\tnextAction = "retry_current_task";
+\t\t\t} else code = "SUBAGENT_ERROR";
+\t\t\tbreak;
+\t\t}
+\t}
+\treturn {
+\t\tcode,
+\t\tcategory,
+\t\tstage,
+\t\tretryable,
+\t\tpartialOutputPresent: partialOutputPresent === true,
+\t\tnextAction
+\t};
+}
+`)
+const SUBAGENT_ONE_SHOT_TERMINAL_ORIGINAL = String(`\trun.result.then((result) => {
+\t\temit("subagent/end", {
+\t\t\t...identity,
+\t\t\tstopReason: result.stopReason,
+\t\t\t...result.output.length === 0 ? {} : { lastAssistantMessage: result.output }
+\t\t}, parent);
+\t}, () => {
+\t\temit("subagent/end", {
+\t\t\t...identity,
+\t\t\tstopReason: "error"
+\t\t}, parent);
+\t});`)
+const SUBAGENT_ONE_SHOT_TERMINAL_PATCHED = String(`\trun.result.then((result) => {
+\t\tconst terminalDiagnostic = boundedSubagentTerminalDiagnostic(result.stopReason, result.diagnostic, result.output.length > 0);
+\t\temit("subagent/end", {
+\t\t\t...identity,
+\t\t\tstopReason: result.stopReason,
+\t\t\t...terminalDiagnostic === void 0 ? {} : { terminalDiagnostic },
+\t\t\t...result.output.length === 0 ? {} : { lastAssistantMessage: result.output }
+\t\t}, parent);
+\t}, (failure) => {
+\t\temit("subagent/end", {
+\t\t\t...identity,
+\t\t\tstopReason: "error",
+\t\t\tterminalDiagnostic: boundedSubagentTerminalDiagnostic("error", failure, false)
+\t\t}, parent);
+\t});`)
+const SUBAGENT_ACTIVATION_TERMINAL_ORIGINAL = '\tconst terminal = (failure) => failure === void 0 ? captured : { stopReason: "error" };'
+const SUBAGENT_ACTIVATION_TERMINAL_PATCHED_V1 = String(`\tconst terminal = (failure) => {
+\t\tconst outcome = failure === void 0 ? captured : { stopReason: "error" };
+\t\tconst terminalDiagnostic = boundedSubagentTerminalDiagnostic(outcome.stopReason, failure, outcome.output !== void 0);
+\t\treturn terminalDiagnostic === void 0 ? outcome : { ...outcome, terminalDiagnostic };
+\t};`)
+const SUBAGENT_ACTIVATION_TERMINAL_PATCHED = String(`\tconst terminal = (failure) => {
+\t\tconst outcome = failure === void 0 ? captured : { stopReason: "error" };
+\t\tconst partialOutputPresent = failure === void 0 ? outcome.output !== void 0 : captured.output !== void 0;
+\t\tconst terminalDiagnostic = boundedSubagentTerminalDiagnostic(outcome.stopReason, failure, partialOutputPresent);
+\t\treturn terminalDiagnostic === void 0 ? outcome : { ...outcome, terminalDiagnostic };
+\t};`)
+const SUBAGENT_ACTIVATION_OBSERVER_ORIGINAL = String(`\treturn {
+\t\tstart: (child) => {`)
+const SUBAGENT_ACTIVATION_OBSERVER_PATCHED = String(`\treturn {
+\t\trunId: identity.runId,
+\t\tstart: (child) => {`)
+const SUBAGENT_ACTIVATION_ACCEPT_ORIGINAL = String(`\t\tterminal,
+\t\tsettle: (failure) => {`)
+const SUBAGENT_ACTIVATION_ACCEPT_PATCHED = String(`\t\tterminal,
+\t\taccept: (messageId) => {
+\t\t\temit("subagent/accepted", {
+\t\t\t\t...identity,
+\t\t\t\tmessageId
+\t\t\t}, parent);
+\t\t},
+\t\tsettle: (failure) => {`)
+const SUBAGENT_ACTIVATION_SETTLE_ORIGINAL = String(`\t\t\tconst { stopReason, output } = terminal(failure);
+\t\t\temit("subagent/end", {
+\t\t\t\t...identity,
+\t\t\t\tstopReason,
+\t\t\t\t...output === void 0 ? {} : { lastAssistantMessage: output }
+\t\t\t}, parent);`)
+const SUBAGENT_ACTIVATION_SETTLE_PATCHED = String(`\t\t\tconst { stopReason, output, terminalDiagnostic } = terminal(failure);
+\t\t\temit("subagent/end", {
+\t\t\t\t...identity,
+\t\t\t\tstopReason,
+\t\t\t\t...terminalDiagnostic === void 0 ? {} : { terminalDiagnostic },
+\t\t\t\t...output === void 0 ? {} : { lastAssistantMessage: output }
+\t\t\t}, parent);`)
+const SUBAGENT_START_ACCEPTANCE_ORIGINAL = String(`\t\treturn {
+\t\t\tchildId,
+\t\t\tmessageId: await this.locks.run(childId, async () => {
+\t\t\t\tspec.signal.throwIfAborted();`)
+const SUBAGENT_START_ACCEPTANCE_PATCHED = String(`\t\tconst activationAcceptance = await this.locks.run(childId, async () => {
+\t\t\tspec.signal.throwIfAborted();`)
+const SUBAGENT_START_RETURN_ORIGINAL = String(`\t\t\t\t\tsignal: spec.signal,
+\t\t\t\t\tdelivery: "queue"
+\t\t\t\t}, parent);
+\t\t\t})
+\t\t};`)
+const SUBAGENT_START_RETURN_PATCHED = String(`\t\t\t\t\tsignal: spec.signal,
+\t\t\t\t\tdelivery: "queue",
+\t\t\t\t\tactivationReceipt: true
+\t\t\t\t}, parent);
+\t\t});
+\t\treturn {
+\t\t\tchildId,
+\t\t\t...activationAcceptance
+\t\t};`)
+const SUBAGENT_QUEUE_RECEIPT_SYMBOL_ORIGINAL = 'const queueSubagentPrompt = Symbol.for("dsh.subagent.queuePrompt");'
+const SUBAGENT_QUEUE_RECEIPT_SYMBOL_PATCHED = String(`const queueSubagentPrompt = Symbol.for("dsh.subagent.queuePrompt");
+const queueSubagentPromptWithActivation = Symbol.for("dsh.subagent.queuePromptWithActivation");`)
+const SUBAGENT_QUEUE_RECEIPT_MANAGER_ORIGINAL = String(`\tasync queuePrompt(parent, childId, content, source, signal) {
+\t\treturn this.deliverToChild(parent, childId, content, {
+\t\t\tsource,
+\t\t\tsignal,
+\t\t\tdelivery: "queue"
+\t\t});
+\t}
+\t/** Route one parent-originated delivery through residency and cold resume. */`)
+const SUBAGENT_QUEUE_RECEIPT_MANAGER_PATCHED = String(`\tasync queuePrompt(parent, childId, content, source, signal) {
+\t\treturn this.deliverToChild(parent, childId, content, {
+\t\t\tsource,
+\t\t\tsignal,
+\t\t\tdelivery: "queue"
+\t\t});
+\t}
+\tasync queuePromptWithActivation(parent, childId, content, source, signal) {
+\t\treturn this.deliverToChild(parent, childId, content, {
+\t\t\tsource,
+\t\t\tsignal,
+\t\t\tdelivery: "queue",
+\t\t\tactivationReceipt: true
+\t\t});
+\t}
+\t/** Route one parent-originated delivery through residency and cold resume. */`)
+const SUBAGENT_ACCEPTANCE_RETURN_ORIGINAL = String(`\t\tactivation.announced = true;
+\t\treturn accepted;`)
+const SUBAGENT_ACCEPTANCE_RETURN_PATCHED = String(`\t\tactivation.observer.accept(accepted);
+\t\tactivation.announced = true;
+\t\treturn options.activationReceipt === true ? {
+\t\t\tmessageId: accepted,
+\t\t\trunId: activation.observer.runId
+\t\t} : accepted;`)
+const SUBAGENT_QUEUE_RECEIPT_SERVICE_ORIGINAL = String(`\t\t[queueSubagentPrompt](parent, childId, content, source, signal) {
+\t\t\treturn this.requireContinuations().queuePrompt(parent, childId, content, source, signal);
+\t\t}
+\t\t/**
+\t\t* Interrupt one live continuable child's current turn`)
+const SUBAGENT_QUEUE_RECEIPT_SERVICE_PATCHED = String(`\t\t[queueSubagentPrompt](parent, childId, content, source, signal) {
+\t\t\treturn this.requireContinuations().queuePrompt(parent, childId, content, source, signal);
+\t\t}
+\t\t[queueSubagentPromptWithActivation](parent, childId, content, source, signal) {
+\t\t\treturn this.requireContinuations().queuePromptWithActivation(parent, childId, content, source, signal);
+\t\t}
+\t\t/**
+\t\t* Interrupt one live continuable child's current turn`)
 
 export function patchToolPwshSource(source) {
   let output = source
@@ -1746,9 +2388,60 @@ export function patchWindowsAclSource(source) {
   return { source: output, changed }
 }
 
+function patchOfficialSubagentLiveSource(source) {
+  let output = source
+  let changed = false
+  if (!output.includes(SUBAGENT_TEAM_LIVE_STATE_MARKER) && !output.includes(SUBAGENT_TEAM_LIVE_STATE_ANCHOR)) return { source, changed: false }
+  if (!output.includes(SUBAGENT_TEAM_LIVE_STATE_MARKER)) {
+    output = output.replace(SUBAGENT_TEAM_LIVE_STATE_ANCHOR, `${SUBAGENT_TEAM_LIVE_STATE_ANCHOR}\n${SUBAGENT_TEAM_LIVE_STATE_PATCH}`)
+    changed = true
+  }
+  if (!output.includes(SUBAGENT_TEAM_LIVE_COUNT_PATCH) && output.includes(SUBAGENT_TEAM_LIVE_COUNT_PATCH_V1)) {
+    output = output.replace(SUBAGENT_TEAM_LIVE_COUNT_PATCH_V1, SUBAGENT_TEAM_LIVE_COUNT_PATCH)
+    changed = true
+  }
+  if (!output.includes(SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED) && output.includes(SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED_V1)) {
+    output = output.replace(SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED_V1, SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED)
+    changed = true
+  }
+  if (!output.includes('const teamLiveActiveCount =')) {
+    if (!output.includes(SUBAGENT_TEAM_LIVE_COUNT_ANCHOR)) throw new Error('Pinned DSH subagent live-count anchor changed; refusing an unsafe realtime catalog patch.')
+    output = output.replace(SUBAGENT_TEAM_LIVE_COUNT_ANCHOR, SUBAGENT_TEAM_LIVE_COUNT_PATCH)
+    changed = true
+  }
+  if (output.includes(SUBAGENT_TEAM_LIVE_RUNNING_KEY_ORIGINAL) && !output.includes(SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED)) {
+    output = output.replace(SUBAGENT_TEAM_LIVE_RUNNING_KEY_ORIGINAL, SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED)
+    changed = true
+  }
+  if (output.includes(SUBAGENT_TEAM_LIVE_ARIA_ORIGINAL) && !output.includes(SUBAGENT_TEAM_LIVE_ARIA_PATCHED)) {
+    output = output.replace(SUBAGENT_TEAM_LIVE_ARIA_ORIGINAL, SUBAGENT_TEAM_LIVE_ARIA_PATCHED)
+    changed = true
+  }
+  if (!output.includes(SUBAGENT_DISCLOSURE_CLICK_PATCHED) && output.includes(SUBAGENT_DISCLOSURE_CLICK_V1_PATCHED)) {
+    output = output.replace(SUBAGENT_DISCLOSURE_CLICK_V1_PATCHED, SUBAGENT_DISCLOSURE_CLICK_PATCHED)
+    changed = true
+  }
+  for (const [original, patched, label] of [
+    [SUBAGENT_DISCLOSURE_TOUCH_ORIGINAL, SUBAGENT_DISCLOSURE_TOUCH_PATCHED, '44px trigger height'],
+    [SUBAGENT_DISCLOSURE_SWITCHER_WIDTH_ORIGINAL, SUBAGENT_DISCLOSURE_SWITCHER_WIDTH_PATCHED, '44px switcher width'],
+    [SUBAGENT_DISCLOSURE_FOCUS_ORIGINAL, SUBAGENT_DISCLOSURE_FOCUS_PATCHED, 'visible trigger focus'],
+    [SUBAGENT_DISCLOSURE_MOTION_ORIGINAL, SUBAGENT_DISCLOSURE_MOTION_PATCHED, 'reduced-motion trigger'],
+    [SUBAGENT_DISCLOSURE_ID_ORIGINAL, SUBAGENT_DISCLOSURE_ID_PATCHED, 'stable disclosure controls id'],
+    [SUBAGENT_DISCLOSURE_EXPANDED_ORIGINAL, SUBAGENT_DISCLOSURE_EXPANDED_PATCHED, 'disclosure ARIA relationship'],
+    [SUBAGENT_DISCLOSURE_CLICK_ORIGINAL, SUBAGENT_DISCLOSURE_CLICK_PATCHED, 'whole-chip disclosure click'],
+    [SUBAGENT_DISCLOSURE_MENU_ORIGINAL, SUBAGENT_DISCLOSURE_MENU_PATCHED, 'controlled catalog menu id']
+  ]) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH subagent ${label} changed; refusing an unsafe whole-chip disclosure patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
+}
+
 export function patchSubagentSource(source) {
   const officialLineage = ['function SubagentHeaderLineage(', 'conversation.session.header.lineage', 'function CatalogDropdown(']
-  if (officialLineage.every(marker => source.includes(marker))) return { source, changed: false }
+  if (officialLineage.every(marker => source.includes(marker))) return patchOfficialSubagentLiveSource(source)
   let output = source
   let changed = false
   const migrations = [
@@ -1815,7 +2508,8 @@ export function patchSubagentSource(source) {
     output = output.replace(original, patched)
     changed = true
   }
-  return { source: output, changed }
+  const live = patchOfficialSubagentLiveSource(output)
+  return { source: live.source, changed: changed || live.changed }
 }
 
 export function patchAgentLoopCancellationSource(source) {
@@ -1839,6 +2533,44 @@ export function patchSubagentContinuationSource(source) {
     throw new Error('Pinned DSH subagent settlement implementation changed; refusing an unsafe continuation recovery patch.')
   }
   return { source: source.replace(SUBAGENT_SETTLEMENT_ORIGINAL, SUBAGENT_SETTLEMENT_PATCHED), changed: true }
+}
+
+export function patchAlpha5SubagentLifecycleSource(source) {
+  const continuation = patchSubagentContinuationSource(source)
+  let output = continuation.source
+  let changed = continuation.changed
+  if (!output.includes(SUBAGENT_TERMINAL_DIAGNOSTIC_PATCH)) {
+    if (output.includes(SUBAGENT_TERMINAL_DIAGNOSTIC_PATCH_V1)) {
+      output = output.replace(SUBAGENT_TERMINAL_DIAGNOSTIC_PATCH_V1, SUBAGENT_TERMINAL_DIAGNOSTIC_PATCH)
+    } else {
+      if (output.includes(SUBAGENT_TERMINAL_DIAGNOSTIC_MARKER) || !output.includes(SUBAGENT_TERMINAL_DIAGNOSTIC_ANCHOR)) throw new Error('Pinned DSH alpha.5 subagent terminal diagnostic helper changed; refusing an unsafe lifecycle patch.')
+      output = output.replace(SUBAGENT_TERMINAL_DIAGNOSTIC_ANCHOR, `${SUBAGENT_TERMINAL_DIAGNOSTIC_PATCH}${SUBAGENT_TERMINAL_DIAGNOSTIC_ANCHOR}`)
+    }
+    changed = true
+  }
+  if (!output.includes(SUBAGENT_ACTIVATION_TERMINAL_PATCHED) && output.includes(SUBAGENT_ACTIVATION_TERMINAL_PATCHED_V1)) {
+    output = output.replace(SUBAGENT_ACTIVATION_TERMINAL_PATCHED_V1, SUBAGENT_ACTIVATION_TERMINAL_PATCHED)
+    changed = true
+  }
+  for (const [original, patched, label] of [
+    [SUBAGENT_ONE_SHOT_TERMINAL_ORIGINAL, SUBAGENT_ONE_SHOT_TERMINAL_PATCHED, 'one-shot terminal lifecycle'],
+    [SUBAGENT_ACTIVATION_TERMINAL_ORIGINAL, SUBAGENT_ACTIVATION_TERMINAL_PATCHED, 'activation terminal outcome'],
+    [SUBAGENT_ACTIVATION_OBSERVER_ORIGINAL, SUBAGENT_ACTIVATION_OBSERVER_PATCHED, 'activation run identity'],
+    [SUBAGENT_ACTIVATION_ACCEPT_ORIGINAL, SUBAGENT_ACTIVATION_ACCEPT_PATCHED, 'activation acceptance event'],
+    [SUBAGENT_ACTIVATION_SETTLE_ORIGINAL, SUBAGENT_ACTIVATION_SETTLE_PATCHED, 'activation terminal lifecycle'],
+    [SUBAGENT_START_ACCEPTANCE_ORIGINAL, SUBAGENT_START_ACCEPTANCE_PATCHED, 'continuable start acceptance'],
+    [SUBAGENT_START_RETURN_ORIGINAL, SUBAGENT_START_RETURN_PATCHED, 'continuable start receipt'],
+    [SUBAGENT_QUEUE_RECEIPT_SYMBOL_ORIGINAL, SUBAGENT_QUEUE_RECEIPT_SYMBOL_PATCHED, 'Host queue receipt symbol'],
+    [SUBAGENT_QUEUE_RECEIPT_MANAGER_ORIGINAL, SUBAGENT_QUEUE_RECEIPT_MANAGER_PATCHED, 'Host queue receipt manager'],
+    [SUBAGENT_ACCEPTANCE_RETURN_ORIGINAL, SUBAGENT_ACCEPTANCE_RETURN_PATCHED, 'activation acceptance receipt'],
+    [SUBAGENT_QUEUE_RECEIPT_SERVICE_ORIGINAL, SUBAGENT_QUEUE_RECEIPT_SERVICE_PATCHED, 'Host queue receipt service']
+  ]) {
+    if (output.includes(patched)) continue
+    if (!output.includes(original)) throw new Error(`Pinned DSH alpha.5 subagent ${label} changed; refusing an unsafe lifecycle patch.`)
+    output = output.replace(original, patched)
+    changed = true
+  }
+  return { source: output, changed }
 }
 
 export function patchFsSearchSource(source) {
@@ -1879,6 +2611,7 @@ const OFFICIAL_RC2_VERSION = '0.1.1-rc.2'
 const OFFICIAL_ALPHA2_VERSION = '0.1.2-alpha.2'
 const OFFICIAL_ALPHA3_VERSION = '0.1.2-alpha.3'
 const OFFICIAL_ALPHA4_VERSION = '0.1.2-alpha.4'
+const OFFICIAL_ALPHA5_VERSION = '0.1.2-alpha.5'
 const OFFICIAL_ALPHA2_SESSION_CONTROLLER_CLIENT_HASH = 'D309F8E61F958A0D751A6D4A7C2E94F5C5A54E1313B3FCB2988A988C703F239C'
 const OFFICIAL_ALPHA2_SESSION_CONTROLLER_HOST_HASH = 'A28FA9A5FFAD5D2E7AF427C0410E973A5E14A36BC070EECF8735B77B95A17CEA'
 const OFFICIAL_ALPHA2_WORKSPACE_PATCHED_HASH = 'B47D4AD32FF91ACDC7B27BE85AA184E4579B1973DF2DB04FB8E58A30590FDE0D'
@@ -1897,9 +2630,46 @@ function sourceSha256(source) {
   return createHash('sha256').update(source).digest('hex').toUpperCase()
 }
 
+const OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES = Object.freeze({
+  official: '9C9874C57B7D3E5A71222A72E0F19ED8D884C40F895D898640C882D49BD1B231',
+  scrollPatched: '4C05AE99A177B83E9F32F5D0459F5BBA595D2701A02B6B635CE14FD0416BFF06',
+  patched: '27439B98CFB2A8DA1C4CD3E1CEF17088CFF3DEF636676BDF93939C8E7753D018',
+  anchors: Object.freeze([
+    'const SCROLL_SAMPLE_INTERVAL_MS = 500;',
+    'function ChatView({ useSession, useChat, useChatNode, useChatNodeProcess, useSessions',
+    'const followRef = (0, react.useRef)(null);',
+    'const observer = new ResizeObserver(() => {'
+  ])
+})
+
+const OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES = Object.freeze({
+  official: 'B1C5D6F2F26FD7BA5A8764D75D1043BCAC0C79CC950DC22044BAE23D6BEC8C2B',
+  liveV1Patched: 'BBE21207F5987054A874047926044FD09BD38C0D3ACCD4C24D546BFD11720F2E',
+  liveV2Patched: '455FD647BD0385C331A4411E474B245E66030C463BD50AFE48949837084FC8CD',
+  disclosureV1Patched: 'B406852F572DF14EE6C7A8BCD00B811151B2064D2E6D73EF1940DDEED4FF7E21',
+  wholeChipV1Patched: '89F332378BEF2003B32EAA1471E93BED2DA34A176C42E0F8DE8293E7BA735C50',
+  disclosureV2Patched: 'AC873867529F46E75117157016A43614C2182C455611D23D3D98ED05A4263137',
+  patched: '035C0B528D341F031886BEF5B4910E83BF502748CE6D0633126590A7DB68372D',
+  anchors: Object.freeze(['function CatalogDropdown(', 'conversation.session.header.lineage', '.ZKlsPq_trigger,.ZKlsPq_switcherTrigger{'])
+})
+
+const OFFICIAL_ALPHA5_SUBAGENT_HASHES = Object.freeze({
+  official: '14346BC6470E7BDB35F08E364C0DEE70A76CF94A3E1A3F851A07C68CA5C15348',
+  continuationPatched: '4A3AD49966355AFD3F04C6A30D4EF95E598DFE5AD5EFB85B3BA73F3BF0D2373D',
+  diagnosticsV1Patched: '1243B64CC34361B6824044EB2840B86A127171527DC722162C4ADF86B2616A49',
+  diagnosticsV2Patched: '32EF91316A6C8D1AF15F37AB49A6DF823A4FD3F8978957AF0C403D0C7D7BA564',
+  patched: '875D76C0F97E32F7D5CE8EA2A025CCDA7DDC1E80DAF903AD4D7C090CBCB4C837',
+  anchors: Object.freeze([
+    'function createLifecycleEmitter(ctx, carrier) {',
+    'async startContinuable(spec) {',
+    'const queueSubagentPrompt = Symbol.for("dsh.subagent.queuePrompt");'
+  ])
+})
+
 const OFFICIAL_MCP_CLIENT_HASHES = Object.freeze({
   [OFFICIAL_ALPHA3_VERSION]: Object.freeze({ official: 'C561C3DD99DFCDA1B79EB68801232F521583474EC8F35231253DB259E7A3A75B', patched: '58254A778587C06DBAE6BC2B811C9D3DA5AE4EB2565A371B960C3CA27A273A18', anchors: Object.freeze(['const GENERATION_CLOSE_TIMEOUT_MS = 5e3;', 'function startConnection(ctx, config, policy) {']) }),
-  [OFFICIAL_ALPHA4_VERSION]: Object.freeze({ official: 'C561C3DD99DFCDA1B79EB68801232F521583474EC8F35231253DB259E7A3A75B', patched: '58254A778587C06DBAE6BC2B811C9D3DA5AE4EB2565A371B960C3CA27A273A18', anchors: Object.freeze(['const GENERATION_CLOSE_TIMEOUT_MS = 5e3;', 'function startConnection(ctx, config, policy) {']) })
+  [OFFICIAL_ALPHA4_VERSION]: Object.freeze({ official: 'C561C3DD99DFCDA1B79EB68801232F521583474EC8F35231253DB259E7A3A75B', patched: '58254A778587C06DBAE6BC2B811C9D3DA5AE4EB2565A371B960C3CA27A273A18', anchors: Object.freeze(['const GENERATION_CLOSE_TIMEOUT_MS = 5e3;', 'function startConnection(ctx, config, policy) {']) }),
+  [OFFICIAL_ALPHA5_VERSION]: Object.freeze({ official: 'C561C3DD99DFCDA1B79EB68801232F521583474EC8F35231253DB259E7A3A75B', patched: '58254A778587C06DBAE6BC2B811C9D3DA5AE4EB2565A371B960C3CA27A273A18', anchors: Object.freeze(['const GENERATION_CLOSE_TIMEOUT_MS = 5e3;', 'function startConnection(ctx, config, policy) {']) })
 })
 
 export async function patchInstalledMcpClient(file = mcpClientRuntime) {
@@ -1925,7 +2695,8 @@ export async function patchInstalledMcpClient(file = mcpClientRuntime) {
 
 const OFFICIAL_GOAL_TOOL_HASHES = Object.freeze({
   [OFFICIAL_ALPHA3_VERSION]: Object.freeze({ official: '63812392EFA834341A2136D7BBA0C2B72E83FBA3A4C9D16EC5BD3115222149F1', patched: 'D8D054E734EEB30495E85AD900FC38111FDB1A25C8F6595F066087463400E9A3', anchors: Object.freeze(['const events = agent.session.events;', 'function someOpenTurnEvent(execution, predicate)']) }),
-  [OFFICIAL_ALPHA4_VERSION]: Object.freeze({ official: 'BC8B5AFF4ADAC62BAF244D26847567BF71640A42092F60F98767D15A2E554C5C', patched: '742551EB41DDF0FC96D736A888454FCA5801EEA5C5A89800EA774DF12EB7EB23', anchors: Object.freeze(['const events = agent.session.snapshotEvents();', 'function someOpenTurnEvent(execution, predicate)']) })
+  [OFFICIAL_ALPHA4_VERSION]: Object.freeze({ official: 'BC8B5AFF4ADAC62BAF244D26847567BF71640A42092F60F98767D15A2E554C5C', patched: '742551EB41DDF0FC96D736A888454FCA5801EEA5C5A89800EA774DF12EB7EB23', anchors: Object.freeze(['const events = agent.session.snapshotEvents();', 'function someOpenTurnEvent(execution, predicate)']) }),
+  [OFFICIAL_ALPHA5_VERSION]: Object.freeze({ official: 'BC8B5AFF4ADAC62BAF244D26847567BF71640A42092F60F98767D15A2E554C5C', patched: '742551EB41DDF0FC96D736A888454FCA5801EEA5C5A89800EA774DF12EB7EB23', anchors: Object.freeze(['const events = agent.session.snapshotEvents();', 'function someOpenTurnEvent(execution, predicate)']) })
 })
 
 export async function patchInstalledGoalTool(file = goalToolRuntime) {
@@ -1947,6 +2718,30 @@ export async function patchInstalledGoalTool(file = goalToolRuntime) {
   }
   if (patched.changed) await writeFile(file, patched.source, 'utf8')
   return patched.changed
+}
+
+export async function patchInstalledAlpha5ChatScroll(file = chatRuntime) {
+  const packageRoot = path.resolve(path.dirname(file), '..')
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+  if (manifest.version !== OFFICIAL_ALPHA5_VERSION) return false
+  if (manifest.name !== '@deepseek-ai/dsh-client-ui-chat') {
+    throw new Error(`Pinned DSH chat identity changed (${manifest.name || '<missing>'}@${manifest.version || '<missing>'}); refusing an unsafe scroll-state patch.`)
+  }
+  const source = await readFile(file, 'utf8')
+  const sourceHash = sourceSha256(source)
+  if (![OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES.official, OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES.scrollPatched, OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES.patched].includes(sourceHash)) {
+    throw new Error('Pinned DSH alpha.5 chat source is neither exact official nor an exact complete Desktop chat artifact; refusing an unsafe patch.')
+  }
+  for (const anchor of OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES.anchors) if (!source.includes(anchor)) {
+    throw new Error(`Pinned DSH alpha.5 chat anchor changed (${anchor}); refusing an unsafe scroll-state patch.`)
+  }
+  const scrolled = patchAlpha5ChatScrollSource(source)
+  const patched = patchAlpha5ChatSentTimeSnapshotSource(scrolled.source)
+  if (sourceSha256(patched.source) !== OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES.patched) {
+    throw new Error('Pinned DSH alpha.5 chat composed scroll-state/sent-time-snapshot output hash changed; refusing an unsafe patch.')
+  }
+  if (scrolled.changed || patched.changed) await writeFile(file, patched.source, 'utf8')
+  return scrolled.changed || patched.changed
 }
 
 async function officialAlpha2Package(file, expectedName) {
@@ -2093,7 +2888,21 @@ export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {
 
 export async function patchInstalledSubagent(file = subagentRuntime) {
   const source = await readFile(file, 'utf8')
+  const packageRoot = path.resolve(path.dirname(file), '..')
+  let manifest = null
+  try { manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8')) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+  const alpha5 = manifest?.name === '@deepseek-ai/dsh-client-ui-subagent' && manifest.version === OFFICIAL_ALPHA5_VERSION
+  if (alpha5) {
+    const sourceHash = sourceSha256(source)
+    if (![OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.official, OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.liveV1Patched, OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.liveV2Patched, OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.disclosureV1Patched, OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.wholeChipV1Patched, OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.disclosureV2Patched, OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.patched].includes(sourceHash)) {
+      throw new Error('Pinned DSH alpha.5 subagent UI source is neither exact official nor an exact complete Desktop catalog artifact; refusing an unsafe disclosure patch.')
+    }
+    for (const anchor of OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.anchors) if (!source.includes(anchor)) throw new Error(`Pinned DSH alpha.5 subagent UI anchor changed (${anchor}); refusing an unsafe disclosure patch.`)
+  }
   const patched = patchSubagentSource(source)
+  if (alpha5 && sourceSha256(patched.source) !== OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.patched) {
+    throw new Error('Pinned DSH alpha.5 subagent UI disclosure patch output hash changed; refusing an unsafe patch.')
+  }
   if (patched.changed) await writeFile(file, patched.source, 'utf8')
   return patched.changed
 }
@@ -2107,7 +2916,25 @@ export async function patchInstalledAgentLoop(file = agentLoopRuntime) {
 
 export async function patchInstalledSubagentContinuation(file = subagentContinuationRuntime) {
   const source = await readFile(file, 'utf8')
-  const patched = patchSubagentContinuationSource(source)
+  const packageRoot = path.resolve(path.dirname(file), '..')
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+  if (manifest.version !== OFFICIAL_ALPHA5_VERSION) {
+    const patched = patchSubagentContinuationSource(source)
+    if (patched.changed) await writeFile(file, patched.source, 'utf8')
+    return patched.changed
+  }
+  if (manifest.name !== '@deepseek-ai/dsh-subagent') {
+    throw new Error(`Pinned DSH subagent identity changed (${manifest.name || '<missing>'}@${manifest.version || '<missing>'}); refusing an unsafe lifecycle patch.`)
+  }
+  const sourceHash = sourceSha256(source)
+  if (![OFFICIAL_ALPHA5_SUBAGENT_HASHES.official, OFFICIAL_ALPHA5_SUBAGENT_HASHES.continuationPatched, OFFICIAL_ALPHA5_SUBAGENT_HASHES.diagnosticsV1Patched, OFFICIAL_ALPHA5_SUBAGENT_HASHES.diagnosticsV2Patched, OFFICIAL_ALPHA5_SUBAGENT_HASHES.patched].includes(sourceHash)) {
+    throw new Error('Pinned DSH alpha.5 subagent source is neither exact official nor exact complete patched artifact; refusing an unsafe lifecycle patch.')
+  }
+  for (const anchor of OFFICIAL_ALPHA5_SUBAGENT_HASHES.anchors) if (!source.includes(anchor)) throw new Error(`Pinned DSH alpha.5 subagent anchor changed (${anchor}); refusing an unsafe lifecycle patch.`)
+  const patched = patchAlpha5SubagentLifecycleSource(source)
+  if (sourceSha256(patched.source) !== OFFICIAL_ALPHA5_SUBAGENT_HASHES.patched) {
+    throw new Error('Pinned DSH alpha.5 subagent lifecycle patch output hash changed; refusing an unsafe patch.')
+  }
   if (patched.changed) await writeFile(file, patched.source, 'utf8')
   return patched.changed
 }
@@ -2257,6 +3084,13 @@ const OFFICIAL_ALPHA4_CAPABILITY_ARTIFACTS = Object.freeze([
   ['@deepseek-ai/dsh-session', sessionRuntime, 'BE25B05FFD1403908796935EF11A61D4C002F7FF3D12F83EF82A8C9976984342', ['function SessionSeq(value) {', 'inheritedEventCount;', 'ownEvents() {', 'return this.snapshotEvents(this.inheritedEventCount);']]
 ])
 
+const OFFICIAL_ALPHA5_CAPABILITY_ARTIFACTS = Object.freeze([
+  ...OFFICIAL_ALPHA4_CAPABILITY_ARTIFACTS,
+  ['@deepseek-ai/dsh-session-projection-cache', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-projection-cache', 'lib', 'index.js'), '95BC052F468A99F101A2EE81B41FCFF1D845145329A37C830CB2EC7DC025966B', ['compatibleVersions: [3, 4]', 'invalidRecords: "backup-and-skip"', 'isSeeded: z$1.boolean().optional()']],
+  ['@deepseek-ai/dsh-storage-domain', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-storage-domain', 'lib', 'index.js'), 'E536BA09B7CCC0F10BB54818DFE44454374E5CBF7AEBA140B216BA1CA2E87517', ['spec.compatibleVersions ?? []', 'spec.invalidRecords !== "backup-and-skip" || unit.backupRecord === void 0', 'const moved = await unit.backupRecord(table, key);']],
+  ['@deepseek-ai/dsh-storage-json', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-storage-json', 'lib', 'index.js'), 'DE4CF45C829EDD70C71C4EF4682A467B888F0A187D91923111930B00FBA22D85', ['function acceptedStamps(descriptor) {', 'async backupRecord(table, key) {', 'await this.tracked(rename(path, moved));']]
+])
+
 async function assertInstalledNativeCapabilities(version, artifacts) {
   for (const [packageName, file, expectedHash, anchors] of artifacts) {
     const packageRoot = path.resolve(path.dirname(file), '..')
@@ -2265,7 +3099,9 @@ async function assertInstalledNativeCapabilities(version, artifacts) {
     const source = await readFile(file, 'utf8')
     const officialSource = packageName === '@deepseek-ai/dsh-client-ui-conversation'
       ? restoreModernConversationComposerVisibilitySource(source)
-      : source
+      : version === OFFICIAL_ALPHA5_VERSION && packageName === '@deepseek-ai/dsh-client-ui-chat'
+        ? restoreAlpha5ChatSentTimeSnapshotSource(restoreAlpha5ChatScrollSource(source))
+        : source
     if (sourceSha256(officialSource) !== expectedHash) throw new Error(`Pinned DSH ${packageName}@${version} source hash changed; refusing an unsafe official-first decision.`)
     for (const anchor of anchors) if (!officialSource.includes(anchor)) throw new Error(`Pinned DSH ${packageName}@${version} capability anchor changed (${anchor}); refusing an unsafe official-first decision.`)
   }
@@ -2286,6 +3122,10 @@ export async function assertInstalledAlpha3NativeCapabilities() {
 
 export async function assertInstalledAlpha4NativeCapabilities() {
   return assertInstalledNativeCapabilities(OFFICIAL_ALPHA4_VERSION, OFFICIAL_ALPHA4_CAPABILITY_ARTIFACTS)
+}
+
+export async function assertInstalledAlpha5NativeCapabilities() {
+  return assertInstalledNativeCapabilities(OFFICIAL_ALPHA5_VERSION, OFFICIAL_ALPHA5_CAPABILITY_ARTIFACTS)
 }
 
 export async function patchInstalledSessionPersistence(file = sessionPersistenceRuntime) {
@@ -2340,6 +3180,7 @@ const OFFICIAL_ALPHA2_PACKAGING_PEERS = new Set([
   '@deepseek-ai/dsh-util-time'
 ])
 const OFFICIAL_GRAPH_PROOFS = Object.freeze({
+  alpha5: Object.freeze({ version: OFFICIAL_ALPHA5_VERSION, selectedCount: 215, selectedNames: 214, selectedBytes: 62091, selectedSha256: '141dc8a269f3db41901e5598254c6eed6b71d8a86e4dd75ab9081fc822964ff3', rootCount: 26, rootBytes: 1492, rootSha256: '9c4deae0f816b92fda3381d6510dee5969c4e75e23de433bb4824ca1a13032d9' }),
   alpha4: Object.freeze({ version: OFFICIAL_ALPHA4_VERSION, selectedCount: 215, selectedNames: 214, selectedBytes: 62951, selectedSha256: '6cc4ef2fc080669225e3a00258f9c028b40ca04cf5023f4da791e23b867904b5', rootCount: 26, rootBytes: 1492, rootSha256: 'bddfff84ff6fbd251cf3df5b1c6eaccdd2c4a946b9719797b5b4416b7404c9a6' }),
   alpha3: Object.freeze({ version: OFFICIAL_ALPHA3_VERSION, selectedCount: 216, selectedNames: 215, selectedBytes: 63264, selectedSha256: '076516110777c7550d80eb44472ae67c43e4996b3ee2f2956b026199e89fd07a', rootCount: 26, rootBytes: 1492, rootSha256: 'e616f53142ff182dc78237de2db7ce3a33f6ff65c078619495a0a257fc6c272d' }),
   alpha2: Object.freeze({ version: OFFICIAL_ALPHA2_VERSION, selectedCount: 216, selectedNames: 215, selectedBytes: 62384, selectedSha256: '2fe4b564bd064447752eac205304dd39130a717236e85e8d5aaed822530c770c', rootCount: 20, rootBytes: 1111, rootSha256: '90e7639317bff29214acb13396966ba0b8cf22a9ef7c8d2a2f5a0a2bcbeda064' }),
@@ -2405,9 +3246,9 @@ export function classifyOfficialRuntimeGraph(manifest, lock, installedCoreManife
     throw new Error('Official DSH package and lock root graphs differ; refusing an unsafe runtime patch.')
   }
   const rootVersions = new Set(manifestRootRecords.map(record => record.slice(record.lastIndexOf('\0') + 1, -1)))
-  if (rootVersions.size !== 1 || ![OFFICIAL_RC2_VERSION, OFFICIAL_ALPHA2_VERSION, OFFICIAL_ALPHA3_VERSION, OFFICIAL_ALPHA4_VERSION].includes([...rootVersions][0])) throw new Error('Official DSH direct roots are mixed or unproved; refusing an unsafe runtime patch.')
+  if (rootVersions.size !== 1 || ![OFFICIAL_RC2_VERSION, OFFICIAL_ALPHA2_VERSION, OFFICIAL_ALPHA3_VERSION, OFFICIAL_ALPHA4_VERSION, OFFICIAL_ALPHA5_VERSION].includes([...rootVersions][0])) throw new Error('Official DSH direct roots are mixed or unproved; refusing an unsafe runtime patch.')
   const version = [...rootVersions][0]
-  const mode = version === OFFICIAL_ALPHA4_VERSION ? 'alpha4' : version === OFFICIAL_ALPHA3_VERSION ? 'alpha3' : version === OFFICIAL_ALPHA2_VERSION ? 'alpha2' : 'rc2'
+  const mode = version === OFFICIAL_ALPHA5_VERSION ? 'alpha5' : version === OFFICIAL_ALPHA4_VERSION ? 'alpha4' : version === OFFICIAL_ALPHA3_VERSION ? 'alpha3' : version === OFFICIAL_ALPHA2_VERSION ? 'alpha2' : 'rc2'
   const proof = OFFICIAL_GRAPH_PROOFS[mode]
   if (manifestRoot.count !== proof.rootCount || manifestRoot.bytes !== proof.rootBytes || manifestRoot.sha256 !== proof.rootSha256) throw new Error('Official DSH exact root graph changed; refusing an unsafe runtime patch.')
   if (installedCoreManifest?.name !== '@deepseek-ai/dsh' || installedCoreManifest?.version !== version) throw new Error('Installed @deepseek-ai/dsh identity/version does not match the exact root graph; refusing an unsafe runtime patch.')
@@ -2423,7 +3264,9 @@ export function classifyOfficialRuntimeGraph(manifest, lock, installedCoreManife
     const resolved = assertOfficialGraphField(entry?.resolved, 'selected resolved URL')
     const integrity = assertOfficialGraphField(entry?.integrity, 'selected integrity')
     if (selectedVersion !== version) throw new Error(`Official DSH selected lock version mismatch: ${location}; refusing an unsafe runtime patch.`)
-    const knownRegistry = ['https://registry.npmjs.org/@deepseek-ai/', 'https://registry.npmmirror.com/@deepseek-ai/'].some(prefix => resolved.startsWith(prefix))
+    const knownRegistry = version === OFFICIAL_ALPHA5_VERSION
+      ? resolved.startsWith('https://registry.npmjs.org/@deepseek-ai/')
+      : ['https://registry.npmjs.org/@deepseek-ai/', 'https://registry.npmmirror.com/@deepseek-ai/'].some(prefix => resolved.startsWith(prefix))
     if (!knownRegistry || !/^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(integrity)) throw new Error(`Official DSH selected lock artifact is not canonical: ${location}; refusing an unsafe runtime patch.`)
     selectedRecords.push(`${location}\0${name}\0${selectedVersion}\0${resolved}\0${integrity}\n`)
   }
@@ -2475,16 +3318,21 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const targetsAlpha2 = officialGraph.mode === 'alpha2'
   const targetsAlpha3 = officialGraph.mode === 'alpha3'
   const targetsAlpha4 = officialGraph.mode === 'alpha4'
-  const targetsModernAlpha = targetsAlpha3 || targetsAlpha4
+  const targetsAlpha5 = officialGraph.mode === 'alpha5'
+  const targetsCurrentAlpha = targetsAlpha4 || targetsAlpha5
+  const currentAlphaLabel = targetsAlpha5 ? 'alpha.5' : 'alpha.4'
+  const targetsModernAlpha = targetsAlpha3 || targetsCurrentAlpha
   if (targetsAlpha2) await assertOfficialAlpha2RemovedArtifactsAbsent()
   if (targetsAlpha3) await assertInstalledAlpha3NativeCapabilities()
   if (targetsAlpha4) await assertInstalledAlpha4NativeCapabilities()
-  const sessionChanged = targetsAlpha3 ? false : targetsAlpha4 ? false : targetsAlpha2 ? await patchInstalledAlpha2SessionController() : await patchInstalledRuntime()
+  if (targetsAlpha5) await assertInstalledAlpha5NativeCapabilities()
+  const sessionChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : targetsAlpha2 ? await patchInstalledAlpha2SessionController() : await patchInstalledRuntime()
+  const alpha5ChatScrollChanged = targetsAlpha5 ? await patchInstalledAlpha5ChatScroll() : false
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
   const pickerChanged = await patchInstalledDirectoryPicker()
   const modernConversationComposerChanged = targetsModernAlpha ? await patchInstalledModernConversationComposerVisibility() : false
-  const conversationChanged = targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledConversation()
-  const attachmentInputChanged = targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledAttachmentInput()
+  const conversationChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledConversation()
+  const attachmentInputChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledAttachmentInput()
   const toolResultImagesChanged = await patchInstalledToolResultImages()
   const tokenMeterChanged = await patchInstalledTokenMeter()
   const subagentChanged = await patchInstalledSubagent()
@@ -2496,12 +3344,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const pwshSandboxChanged = await patchInstalledPwshSandbox()
   const bashSandboxChanged = await patchInstalledBashSandbox()
   const windowsAclChanged = await patchInstalledWindowsAcl(await resolveInstalledWindowsAclRuntime())
-  const modelSelectionChanged = targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledModelSelection()
-  const modelSettingsChanged = targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledModelSettings()
+  const modelSelectionChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledModelSelection()
+  const modelSettingsChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledModelSettings()
   const deepSeekDiscoveryChanged = await patchInstalledDeepSeekModelDiscovery()
-  const workspaceUiChanged = targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledWorkspaceUi()
+  const workspaceUiChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledWorkspaceUi()
   const sessionPersistenceChanged = await patchInstalledSessionPersistence()
-  const hostApiProxyChanged = targetsAlpha3 ? false : targetsAlpha4 ? false : targetsAlpha2 ? await assertInstalledAlpha2NativeSessionList() : await patchInstalledHostApiProxy()
+  const hostApiProxyChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : targetsAlpha2 ? await assertInstalledAlpha2NativeSessionList() : await patchInstalledHostApiProxy()
   const fsSearchChanged = await patchInstalledFsSearch()
   const toolFsChanged = await patchInstalledToolFs()
   const subprocessChanged = await patchInstalledSubprocess()
@@ -2509,28 +3357,29 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const goalToolChanged = targetsModernAlpha ? await patchInstalledGoalTool() : false
   const webAppChanged = await patchInstalledWebApp()
   const codexParityChanged = await patchCodexParityRuntime(path.join(root, 'node_modules'))
-  process.stdout.write(targetsAlpha4 ? 'Verified official alpha.4 SessionSeq lineage, inherited-event ownership, session jump loading, and connection-generation recovery.\n' : targetsAlpha3 ? 'Verified official alpha.3 session jump loading and connection-generation recovery.\n' : targetsAlpha2 ? (sessionChanged ? 'Patched alpha.2 SessionManager rendering performance.\n' : 'Alpha.2 SessionManager rendering performance patch already applied.\n') : (sessionChanged ? 'Patched desktop New Session behavior and SessionManager rendering performance.\n' : 'Desktop New Session and SessionManager rendering performance patches already applied.\n'))
+  process.stdout.write(targetsCurrentAlpha ? `Verified official ${currentAlphaLabel} SessionSeq lineage, inherited-event ownership, session jump loading, and connection-generation recovery.\n` : targetsAlpha3 ? 'Verified official alpha.3 session jump loading and connection-generation recovery.\n' : targetsAlpha2 ? (sessionChanged ? 'Patched alpha.2 SessionManager rendering performance.\n' : 'Alpha.2 SessionManager rendering performance patch already applied.\n') : (sessionChanged ? 'Patched desktop New Session behavior and SessionManager rendering performance.\n' : 'Desktop New Session and SessionManager rendering performance patches already applied.\n'))
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
-  process.stdout.write(targetsAlpha4 ? 'Adopted official alpha.4 conversation split and whole-session Turn rail without Desktop overlay patches.\n' : targetsAlpha3 ? 'Adopted official alpha.3 conversation split and whole-session Turn rail without Desktop overlay patches.\n' : conversationChanged ? 'Patched conversation telemetry, view navigation, labels, and sticky response copy.\n' : 'Conversation telemetry, view navigation, labels, and sticky response copy already patched.\n')
+  process.stdout.write(targetsCurrentAlpha ? `Adopted official ${currentAlphaLabel} conversation split and whole-session Turn rail without Desktop overlay patches.\n` : targetsAlpha3 ? 'Adopted official alpha.3 conversation split and whole-session Turn rail without Desktop overlay patches.\n' : conversationChanged ? 'Patched conversation telemetry, view navigation, labels, and sticky response copy.\n' : 'Conversation telemetry, view navigation, labels, and sticky response copy already patched.\n')
+  if (targetsAlpha5) process.stdout.write(alpha5ChatScrollChanged ? 'Patched alpha.5 bounded conversation scroll-intent restoration.\n' : 'Alpha.5 bounded conversation scroll-intent restoration already patched.\n')
   if (targetsModernAlpha) process.stdout.write(modernConversationComposerChanged ? 'Restricted the official composer to the chat view.\n' : 'Official composer visibility is already restricted to the chat view.\n')
-  process.stdout.write(targetsAlpha4 ? 'Adopted official alpha.4 queued-image and pending-submission UI without Desktop attachment overrides.\n' : targetsAlpha3 ? 'Adopted official alpha.3 queued-image and pending-submission UI without Desktop attachment overrides.\n' : attachmentInputChanged ? 'Patched recoverable image dragging and draft image transfer.\n' : 'Recoverable image dragging and draft image transfer already patched.\n')
+  process.stdout.write(targetsCurrentAlpha ? `Adopted official ${currentAlphaLabel} queued-image and pending-submission UI without Desktop attachment overrides.\n` : targetsAlpha3 ? 'Adopted official alpha.3 queued-image and pending-submission UI without Desktop attachment overrides.\n' : attachmentInputChanged ? 'Patched recoverable image dragging and draft image transfer.\n' : 'Recoverable image dragging and draft image transfer already patched.\n')
   process.stdout.write(toolResultImagesChanged ? 'Patched durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation.\n' : 'Durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
   process.stdout.write(agentLoopChanged ? 'Patched abortable streams and queued-turn recovery.\n' : 'Abortable streams and queued-turn recovery already patched.\n')
-  process.stdout.write(subagentContinuationChanged ? 'Patched continuable subagent idle-inbox recovery.\n' : 'Continuable subagent idle-inbox recovery already patched.\n')
+  process.stdout.write(subagentContinuationChanged ? 'Patched continuable subagent lifecycle diagnostics, exact activation receipts, and idle-inbox recovery.\n' : 'Continuable subagent lifecycle diagnostics, exact activation receipts, and idle-inbox recovery already patched.\n')
   process.stdout.write(sandboxChanged ? 'Patched never-policy sandbox escalation guard.\n' : 'Never-policy sandbox escalation guard already applied.\n')
   process.stdout.write(pwshLocalChanged ? 'Patched Read Only PowerShell startup preamble.\n' : 'Read Only PowerShell startup preamble already applied.\n')
   process.stdout.write(toolPwshChanged ? 'Patched confined PowerShell workdir mapping.\n' : 'Confined PowerShell workdir mapping already applied.\n')
   process.stdout.write(pwshSandboxChanged || bashSandboxChanged ? 'Patched confined nested-pipe denial classification.\n' : 'Confined nested-pipe denial classification already applied.\n')
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
-  process.stdout.write(targetsAlpha4 ? 'Verified official alpha.4 model-selection behavior.\n' : targetsAlpha3 ? 'Verified official alpha.3 model-selection behavior.\n' : modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
-  process.stdout.write(targetsAlpha4 ? 'Verified official alpha.4 model credential settings.\n' : targetsAlpha3 ? 'Verified official alpha.3 model credential settings.\n' : modelSettingsChanged ? 'Patched safe model API-key overrides and provider validation.\n' : 'Safe model API-key overrides and provider validation already applied.\n')
+  process.stdout.write(targetsCurrentAlpha ? `Verified official ${currentAlphaLabel} model-selection behavior.\n` : targetsAlpha3 ? 'Verified official alpha.3 model-selection behavior.\n' : modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
+  process.stdout.write(targetsCurrentAlpha ? `Verified official ${currentAlphaLabel} model credential settings.\n` : targetsAlpha3 ? 'Verified official alpha.3 model credential settings.\n' : modelSettingsChanged ? 'Patched safe model API-key overrides and provider validation.\n' : 'Safe model API-key overrides and provider validation already applied.\n')
   process.stdout.write(deepSeekDiscoveryChanged ? 'Patched DeepSeek credential validation discovery.\n' : 'DeepSeek credential validation discovery already applied.\n')
-  process.stdout.write(targetsAlpha4 ? 'Adopted official alpha.4 workspace and conversation-view selection behavior.\n' : targetsAlpha3 ? 'Adopted official alpha.3 workspace and conversation-view selection behavior.\n' : targetsAlpha2 ? (workspaceUiChanged ? 'Patched alpha.2 force-new workspace session behavior; native session menus retained.\n' : 'Alpha.2 force-new workspace session patch already applied; native session menus retained.\n') : (workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n'))
+  process.stdout.write(targetsCurrentAlpha ? `Adopted official ${currentAlphaLabel} workspace and conversation-view selection behavior.\n` : targetsAlpha3 ? 'Adopted official alpha.3 workspace and conversation-view selection behavior.\n' : targetsAlpha2 ? (workspaceUiChanged ? 'Patched alpha.2 force-new workspace session behavior; native session menus retained.\n' : 'Alpha.2 force-new workspace session patch already applied; native session menus retained.\n') : (workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n'))
   process.stdout.write(sessionPersistenceChanged ? 'Patched bounded concurrent JSONL session metadata listing.\n' : 'Bounded concurrent JSONL session metadata listing already applied.\n')
-  process.stdout.write(targetsAlpha4 ? 'Verified alpha.4 JSONL-only persistence and Gateway-owned Remote streams; retired compatibility packages remain absent.\n' : targetsAlpha3 ? 'Verified alpha.3 JSONL-only persistence and Gateway-owned Remote streams; retired compatibility packages remain absent.\n' : targetsAlpha2 ? 'Verified native alpha.2 Session list metadata and bounded cold-summary batching.\n' : (hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n'))
+  process.stdout.write(targetsCurrentAlpha ? `Verified ${currentAlphaLabel} JSONL-only persistence and Gateway-owned Remote streams; retired compatibility packages remain absent.\n` : targetsAlpha3 ? 'Verified alpha.3 JSONL-only persistence and Gateway-owned Remote streams; retired compatibility packages remain absent.\n' : targetsAlpha2 ? 'Verified native alpha.2 Session list metadata and bounded cold-summary batching.\n' : (hostApiProxyChanged ? 'Patched live session-list metadata projection reuse.\n' : 'Live session-list metadata projection reuse already applied.\n'))
   process.stdout.write(fsSearchChanged ? 'Patched search exit-2 recovery guidance.\n' : 'Search exit-2 recovery guidance already applied.\n')
   process.stdout.write(toolFsChanged ? 'Patched literal edit not-found recovery guidance.\n' : 'Literal edit not-found recovery guidance already applied.\n')
   process.stdout.write(subprocessChanged ? 'Patched hidden Windows command and cleanup processes.\n' : 'Hidden Windows command and cleanup process patch already applied.\n')

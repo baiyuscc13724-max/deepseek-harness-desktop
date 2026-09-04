@@ -127,34 +127,109 @@ test('MCP startup patch bounds connect plus first tool sync and leaves optional 
   assert.throws(() => patchMcpClientStartupTimeoutSource(mcpStartupFixture.replace('await generation.connect(createTransport(config));', 'await generation.connect(changedTransport);')), /connection attempt changed/u)
 })
 
-test('installed alpha.4 MCP client is the exact complete bounded startup artifact', async () => {
-  const { patchInstalledMcpClient } = await import('../scripts/patch-official-runtime.mjs')
-  const file = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-mcp-client', 'lib', 'index.js')
-  assert.equal(await patchInstalledMcpClient(file), false)
-  assert.equal(createHash('sha256').update(readFileSync(file)).digest('hex').toUpperCase(), '58254A778587C06DBAE6BC2B811C9D3DA5AE4EB2565A371B960C3CA27A273A18')
+test('installed alpha.5 MCP client and Goal tool are exact complete patched artifacts', async () => {
+  const { patchInstalledMcpClient, patchInstalledGoalTool } = await import('../scripts/patch-official-runtime.mjs')
+  const mcpFile = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-mcp-client', 'lib', 'index.js')
+  const goalFile = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-tool-goal', 'lib', 'index.js')
+  assert.equal(await patchInstalledMcpClient(mcpFile), false)
+  assert.equal(await patchInstalledGoalTool(goalFile), false)
+  assert.equal(createHash('sha256').update(readFileSync(mcpFile)).digest('hex').toUpperCase(), '58254A778587C06DBAE6BC2B811C9D3DA5AE4EB2565A371B960C3CA27A273A18')
+  assert.equal(createHash('sha256').update(readFileSync(goalFile)).digest('hex').toUpperCase(), '742551EB41DDF0FC96D736A888454FCA5801EEA5C5A89800EA774DF12EB7EB23')
 })
 
-test('alpha.4 root and selected official dependency graphs are exact and unmixed', async () => {
+test('alpha.5 chat scroll-state patch is exact-hash bound, fail-closed, idempotent, and leaves alpha.4 untouched', async () => {
+  const {
+    patchAlpha5ChatScrollSource,
+    patchAlpha5ChatSentTimeSnapshotSource,
+    patchInstalledAlpha5ChatScroll,
+    restoreAlpha5ChatScrollSource,
+    restoreAlpha5ChatSentTimeSnapshotSource
+  } = await import('../scripts/patch-official-runtime.mjs')
+  const installedFile = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'client.js')
+  const installed = readFileSync(installedFile, 'utf8')
+  const official = restoreAlpha5ChatSentTimeSnapshotSource(restoreAlpha5ChatScrollSource(installed))
+  assert.equal(createHash('sha256').update(official).digest('hex').toUpperCase(), '9C9874C57B7D3E5A71222A72E0F19ED8D884C40F895D898640C882D49BD1B231')
+  const scrollExpected = patchAlpha5ChatScrollSource(official)
+  assert.equal(scrollExpected.changed, true)
+  assert.equal(createHash('sha256').update(scrollExpected.source).digest('hex').toUpperCase(), '4C05AE99A177B83E9F32F5D0459F5BBA595D2701A02B6B635CE14FD0416BFF06')
+  const expected = patchAlpha5ChatSentTimeSnapshotSource(scrollExpected.source)
+  assert.equal(expected.changed, true)
+  assert.equal(createHash('sha256').update(expected.source).digest('hex').toUpperCase(), '27439B98CFB2A8DA1C4CD3E1CEF17088CFF3DEF636676BDF93939C8E7753D018')
+  assert.equal(patchAlpha5ChatScrollSource(expected.source).changed, false)
+  assert.equal(patchAlpha5ChatSentTimeSnapshotSource(expected.source).changed, false)
+  assert.equal(restoreAlpha5ChatSentTimeSnapshotSource(restoreAlpha5ChatScrollSource(expected.source)), official)
+  for (const marker of [
+    'function deriveChatScrollIntent(',
+    'function createChatScrollIntentMachine(',
+    'const onScrollIntentRef = (0, react.useRef)',
+    'Reader/follower intent is already current',
+    'machine.dispose();',
+    '"message.sentTimeSnapshot": "发送时快照"',
+    '"message.sentTimeSnapshot": "Sent-time snapshot"'
+  ]) assert.equal(expected.source.split(marker).length - 1, 1, `${marker} must occur exactly once`)
+  assert.match(expected.source, /children: t\("message\.turnError"\) \+ " · " \+ t\("message\.sentTimeSnapshot"\)/u)
+  assert.match(expected.source, /commitIntent: \(\) => onScrollIntentRef\.current\(true, local, el\)/u)
+  assert.match(expected.source, /\(0, react\.useLayoutEffect\)\(\(\) => \{[\s\S]*?const machine = createChatScrollIntentMachine/u)
+  assert.doesNotMatch(expected.source, /Reader\/follower intent is already current;[\s\S]{0,160}scrollSamplePendingRef\.current/u)
+
+  const temporary = mkdtempSync(path.join(os.tmpdir(), 'dsh-alpha5-chat-scroll-'))
+  const packageRoot = path.join(temporary, 'dsh-client-ui-chat')
+  const file = path.join(packageRoot, 'lib', 'client.js')
+  mkdirSync(path.dirname(file), { recursive: true })
+  try {
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-chat', version: '0.1.2-alpha.5' }))
+    writeFileSync(file, official)
+    assert.equal(await patchInstalledAlpha5ChatScroll(file), true)
+    assert.equal(readFileSync(file, 'utf8'), expected.source)
+    assert.equal(await patchInstalledAlpha5ChatScroll(file), false)
+
+    writeFileSync(file, expected.source.replace('machine.dispose();', 'machine.dispose /* drift */;'))
+    await assert.rejects(patchInstalledAlpha5ChatScroll(file), /neither exact official nor an exact complete Desktop chat artifact/u)
+
+    writeFileSync(file, official)
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@example/forged-chat', version: '0.1.2-alpha.5' }))
+    await assert.rejects(patchInstalledAlpha5ChatScroll(file), /Pinned DSH chat identity changed/u)
+
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-chat', version: '0.1.2-alpha.4' }))
+    assert.equal(await patchInstalledAlpha5ChatScroll(file), false)
+    assert.equal(readFileSync(file, 'utf8'), official)
+  } finally {
+    rmSync(temporary, { recursive: true, force: true })
+  }
+})
+
+test('alpha.5 root and selected official dependency graphs are exact, registry-backed, and unmixed', async () => {
   const root = path.resolve(__dirname, '..')
   const manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
   const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
   const installedCore = JSON.parse(readFileSync(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))
   const { classifyOfficialRuntimeGraph } = await import('../scripts/patch-official-runtime.mjs')
   assert.deepEqual(classifyOfficialRuntimeGraph(manifest, lock, installedCore), {
-    mode: 'alpha4',
-    version: '0.1.2-alpha.4',
+    mode: 'alpha5',
+    version: '0.1.2-alpha.5',
     directRootCount: 26,
     selectedPackageCount: 215
   })
   const roots = [...Object.entries(manifest.dependencies), ...Object.entries(manifest.optionalDependencies || {})]
     .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'))
   assert.equal(roots.length, 26)
-  assert.ok(roots.every(([, version]) => version === '0.1.2-alpha.4'))
+  assert.ok(roots.every(([, version]) => version === '0.1.2-alpha.5'))
   const selected = Object.entries(lock.packages)
     .filter(([location]) => location.split('node_modules/').at(-1)?.startsWith('@deepseek-ai/dsh'))
   assert.equal(selected.length, 215)
-  assert.ok(selected.every(([, entry]) => entry.version === '0.1.2-alpha.4'))
+  assert.equal(new Set(selected.map(([location, entry]) => entry.name || location.split('node_modules/').at(-1))).size, 214)
+  assert.ok(selected.every(([, entry]) => entry.version === '0.1.2-alpha.5'))
+  assert.ok(selected.every(([, entry]) => entry.resolved.startsWith('https://registry.npmjs.org/@deepseek-ai/')))
+  assert.ok(selected.every(([, entry]) => /^sha512-[A-Za-z0-9+/]+={0,2}$/u.test(entry.integrity)))
   assert.equal(lock.packages['node_modules/@deepseek-ai/dsh-tool-subagent-report'], undefined)
+
+  const [sampleLocation] = selected[0]
+  const mirrorLock = structuredClone(lock)
+  mirrorLock.packages[sampleLocation].resolved = mirrorLock.packages[sampleLocation].resolved.replace('registry.npmjs.org', 'registry.npmmirror.com')
+  assert.throws(() => classifyOfficialRuntimeGraph(manifest, mirrorLock, installedCore), /selected lock artifact is not canonical/u)
+  const mixedLock = structuredClone(lock)
+  mixedLock.packages[sampleLocation].version = '0.1.2-alpha.4'
+  assert.throws(() => classifyOfficialRuntimeGraph(manifest, mixedLock, installedCore), /selected lock version mismatch/u)
 })
 
 alpha2FixtureTest('alpha.2 installed workspace wrapper enforces the exact transformed output guard', async () => {
@@ -331,8 +406,8 @@ test('the on-demand browser launcher does not flash a Node console window', asyn
   assert.throws(() => patchWebAppSource(drifted), /Pinned DSH browser launcher implementation changed/u)
 })
 
-test('alpha.4 keeps native turn navigation, queue images, reconnect, schedule catalog, and session lineage behavior without Desktop overrides', async () => {
-  const { assertInstalledAlpha4NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
+test('alpha.5 keeps native turn navigation, queue images, reconnect, schedule catalog, and session lineage behavior without Desktop overrides', async () => {
+  const { assertInstalledAlpha5NativeCapabilities } = await import('../scripts/patch-official-runtime.mjs')
   const base = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai')
   const chat = readFileSync(path.join(base, 'dsh-client-ui-chat', 'lib', 'client.js'), 'utf8')
   const conversation = readFileSync(path.join(base, 'dsh-client-ui-conversation', 'lib', 'client.js'), 'utf8')
@@ -350,8 +425,25 @@ test('alpha.4 keeps native turn navigation, queue images, reconnect, schedule ca
   assert.match(session, /function SessionSeq\(value\) \{/u)
   assert.match(session, /inheritedEventCount;/u)
   assert.match(session, /ownEvents\(\) \{\s*return this\.snapshotEvents\(this\.inheritedEventCount\);/u)
-  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false)
-  assert.equal(await assertInstalledAlpha4NativeCapabilities(), false, 'native capability verification must be idempotent')
+  assert.equal(await assertInstalledAlpha5NativeCapabilities(), false)
+  assert.equal(await assertInstalledAlpha5NativeCapabilities(), false, 'native capability verification must be idempotent')
+})
+
+test('alpha.5 exposes the audited cross-version projection-cache recovery API', () => {
+  const base = path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai')
+  const projectionCache = readFileSync(path.join(base, 'dsh-session-projection-cache', 'lib', 'index.js'), 'utf8')
+  const storageTypes = readFileSync(path.join(base, 'dsh-storage', 'lib', 'types', 'backend.d.ts'), 'utf8')
+  const storageDomain = readFileSync(path.join(base, 'dsh-storage-domain', 'lib', 'index.js'), 'utf8')
+  const storageJson = readFileSync(path.join(base, 'dsh-storage-json', 'lib', 'index.js'), 'utf8')
+  assert.match(projectionCache, /version: 5,\s*compatibleVersions: \[3, 4\],\s*invalidRecords: "backup-and-skip"/u)
+  assert.match(projectionCache, /isSeeded: z\$1\.boolean\(\)\.optional\(\)/u)
+  assert.match(projectionCache, /inheritedEventCount: z\$1\.number\(\)\.int\(\)\.nonnegative\(\)\.transform\(SessionLogOffset\)\.optional\(\)/u)
+  assert.match(storageTypes, /readonly compatibleVersions\?: readonly number\[\]/u)
+  assert.match(storageTypes, /backupRecord\?\(table: string, key: string\): Promise<string>/u)
+  assert.match(storageDomain, /spec\.invalidRecords !== "backup-and-skip" \|\| unit\.backupRecord === void 0/u)
+  assert.match(storageDomain, /const moved = await unit\.backupRecord\(table, key\);/u)
+  assert.match(storageJson, /function acceptedStamps\(descriptor\) \{\s*return \[descriptor\.version, \.\.\.descriptor\.compatibleVersions \?\? \[\]\];/u)
+  assert.match(storageJson, /async backupRecord\(table, key\) \{[\s\S]{0,500}await this\.tracked\(rename\(path, moved\)\);/u)
 })
 
 test('full-response copy uses the official alpha.2 unobtrusive icon action', async () => {
@@ -449,6 +541,143 @@ test('continuable subagents self-heal an accepted inbox stranded after a failed 
   assert.equal(patchSubagentContinuationSource(first.source).changed, false)
 })
 
+test('alpha.5 subagent lifecycle exposes only bounded terminal diagnostics and exact activation receipts', async () => {
+  const { patchAlpha5SubagentLifecycleSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js'), 'utf8')
+  const first = patchAlpha5SubagentLifecycleSource(fixture)
+  assert.match(first.source, /function boundedSubagentTerminalDiagnostic\(stopReason, source, partialOutputPresent\)/u)
+  assert.match(first.source, /terminalDiagnostic: boundedSubagentTerminalDiagnostic\("error", failure, false\)/u)
+  assert.match(first.source, /emit\("subagent\/accepted", \{[\s\S]*?\.\.\.identity,[\s\S]*?messageId/u)
+  assert.match(first.source, /queueSubagentPromptWithActivation = Symbol\.for\("dsh\.subagent\.queuePromptWithActivation"\)/u)
+  assert.match(first.source, /activationReceipt: true/u)
+  assert.match(first.source, /runId: activation\.observer\.runId/u)
+  assert.match(first.source, /failure === void 0 \? captured : \{ stopReason: "error" \}/u)
+  assert.equal(patchAlpha5SubagentLifecycleSource(first.source).changed, false)
+
+  const helperStart = first.source.indexOf('function boundedSubagentTerminalDiagnostic(')
+  const helperEnd = first.source.indexOf('\n}\nfunction createLifecycleEmitter', helperStart) + 2
+  assert.ok(helperStart >= 0 && helperEnd > helperStart)
+  const boundedDiagnostic = Function(`${first.source.slice(helperStart, helperEnd)}; return boundedSubagentTerminalDiagnostic`)()
+  assert.equal(boundedDiagnostic('completed', 'ignored secret', true), undefined)
+  assert.deepEqual(boundedDiagnostic('max-tokens', undefined, true), {
+    code: 'SUBAGENT_MAX_TOKENS',
+    category: 'resource_limit',
+    stage: 'work_followup',
+    retryable: true,
+    partialOutputPresent: true,
+    nextAction: 'retry_current_task'
+  })
+  const timeout = boundedDiagnostic('error', 'provider timed out at C:\\private\\secret token=123', true)
+  assert.deepEqual(timeout, {
+    code: 'SUBAGENT_TIMEOUT',
+    category: 'lifecycle_timeout',
+    stage: 'work_followup',
+    retryable: true,
+    partialOutputPresent: true,
+    nextAction: 'retry_current_task'
+  })
+  assert.doesNotMatch(JSON.stringify(timeout), /private|secret|token|provider timed out/u)
+  const teardown = boundedDiagnostic('error', { code: 'ACTIVATION_TEARDOWN_FAILED', message: 'raw provider output' }, false)
+  assert.deepEqual(teardown, {
+    code: 'SUBAGENT_ACTIVATION_TEARDOWN_FAILED',
+    category: 'teardown',
+    stage: 'retirement',
+    retryable: false,
+    partialOutputPresent: false,
+    nextAction: 'view_live_status'
+  })
+  const piError = boundedDiagnostic('error', { code: 'PI_AI_ERROR', message: 'Not Found: private provider route C:\\secret' }, true)
+  assert.deepEqual(piError, { code: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch', retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task' })
+  assert.doesNotMatch(JSON.stringify(piError), /Not Found|private provider|secret/u)
+  let getterReads = 0
+  const hostile = {}
+  Object.defineProperty(hostile, 'code', { get() { getterReads += 1; throw new Error('must not escape') } })
+  Object.defineProperty(hostile, 'message', { get() { getterReads += 1; throw new Error('must not escape') } })
+  assert.deepEqual(boundedDiagnostic('error', hostile, false), {
+    code: 'SUBAGENT_ERROR',
+    category: 'internal',
+    stage: 'work_followup',
+    retryable: false,
+    partialOutputPresent: false,
+    nextAction: 'view_live_status'
+  })
+  assert.equal(getterReads, 0)
+
+  const observerStart = first.source.indexOf('function createActivationObserver(')
+  const observerEnd = first.source.indexOf('\n}\n/**\n* Why this child', observerStart) + 2
+  assert.ok(observerStart >= 0 && observerEnd > observerStart)
+  const partial = [{ type: 'text', text: 'failed turn text is lifecycle-only' }]
+  const createObserver = Function('SubagentRunId', 'randomUUID', 'SessionLogOffset', 'finalAssistantOutput', 'epochStopReason', 'boundedSubagentTerminalDiagnostic', `${first.source.slice(observerStart, observerEnd)}; return createActivationObserver`)(
+    value => value,
+    () => 'exact-run-id',
+    value => value,
+    () => partial,
+    () => 'refusal',
+    boundedDiagnostic
+  )
+  const events = []
+  const observer = createObserver((name, info, parent) => events.push({ name, info, parent }), 'spawn', 'exact-child-id', 'exact-parent')
+  const child = { session: { seq: 7, snapshotEvents: () => [] } }
+  assert.equal(observer.runId, 'exact-run-id')
+  observer.start(child)
+  observer.accept('accepted-message-id')
+  observer.capture(child)
+  observer.settle()
+  assert.deepEqual(events.map(event => event.name), ['subagent/start', 'subagent/accepted', 'subagent/end'])
+  assert.deepEqual(events[1].info, { runId: 'exact-run-id', provider: 'spawn', id: 'exact-child-id', local: true, messageId: 'accepted-message-id' })
+  assert.equal(events[2].info.stopReason, 'refusal')
+  assert.deepEqual(events[2].info.terminalDiagnostic, { code: 'SUBAGENT_REFUSAL', category: 'policy', stage: 'work_followup', retryable: false, partialOutputPresent: true, nextAction: 'view_live_status' })
+  assert.equal(events[2].info.lastAssistantMessage, partial)
+  assert.doesNotMatch(JSON.stringify(events[2].info.terminalDiagnostic), /failed turn text/u)
+
+  const teardownEvents = []
+  const teardownObserver = createObserver((name, info) => teardownEvents.push({ name, info }), 'spawn', 'teardown-child', 'exact-parent')
+  teardownObserver.start(child)
+  teardownObserver.capture(child)
+  teardownObserver.settle({ code: 'ACTIVATION_TEARDOWN_FAILED', message: 'raw provider output and path' })
+  const teardownEnd = teardownEvents.at(-1).info
+  assert.equal(teardownEnd.stopReason, 'error')
+  assert.equal(teardownEnd.lastAssistantMessage, undefined, 'teardown failure wins and withholds captured output')
+  assert.deepEqual(teardownEnd.terminalDiagnostic, { code: 'SUBAGENT_ACTIVATION_TEARDOWN_FAILED', category: 'teardown', stage: 'retirement', retryable: false, partialOutputPresent: true, nextAction: 'view_live_status' })
+  assert.doesNotMatch(JSON.stringify(teardownEnd), /raw provider|path|failed turn text/u)
+})
+
+test('alpha.5 installed subagent lifecycle patch is exact-hash bound, repeatable, and preserves alpha.4 behavior', async () => {
+  const { patchAlpha5SubagentLifecycleSource, patchInstalledSubagentContinuation } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js'), 'utf8')
+  const expected = patchAlpha5SubagentLifecycleSource(fixture).source
+  const temp = mkdtempSync(path.join(os.tmpdir(), 'dsh-alpha5-subagent-patch-'))
+  const packageRoot = path.join(temp, 'dsh-subagent')
+  const file = path.join(packageRoot, 'lib', 'index.js')
+  mkdirSync(path.dirname(file), { recursive: true })
+  try {
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-subagent', version: '0.1.2-alpha.5' }))
+    writeFileSync(file, fixture)
+    assert.equal(await patchInstalledSubagentContinuation(file), fixture !== expected)
+    assert.equal(readFileSync(file, 'utf8'), expected)
+    assert.equal(await patchInstalledSubagentContinuation(file), false)
+
+    writeFileSync(file, `${expected}\n// raw-provider-secret C:\\private\\prompt`)
+    await assert.rejects(
+      patchInstalledSubagentContinuation(file),
+      error => error?.message === 'Pinned DSH alpha.5 subagent source is neither exact official nor exact complete patched artifact; refusing an unsafe lifecycle patch.'
+    )
+
+    writeFileSync(file, expected)
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@example/forged-subagent', version: '0.1.2-alpha.5' }))
+    await assert.rejects(patchInstalledSubagentContinuation(file), /Pinned DSH subagent identity changed/u)
+
+    const alpha4Original = `prefix\n\t\t\t\tif (!settling.settling) {\n\t\t\t\t\tif (activation.handle.agent.status !== "running") await poked;\n\t\t\t\t\tcontinue;\n\t\t\t\t}\nsuffix`
+    writeFileSync(file, alpha4Original)
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-subagent', version: '0.1.2-alpha.4' }))
+    assert.equal(await patchInstalledSubagentContinuation(file), true)
+    assert.match(readFileSync(file, 'utf8'), /activation\.accepted\.size > 0 && agent\.inbox\.hasPending/u)
+    assert.equal(await patchInstalledSubagentContinuation(file), false)
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
+  }
+})
+
 test('search exit-2 path/permission failures get do-not-repeat and glob-first guidance, fail-closed', async () => {
   const { patchFsSearchSource } = await import('../scripts/patch-official-runtime.mjs')
   const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-tool-fs-search', 'lib', 'index.js'), 'utf8')
@@ -543,13 +772,30 @@ test('subagent catalog separates current work from retained history without dele
   const first = patchSubagentSource(fixture)
   const officialLineage = ['function SubagentHeaderLineage(', 'conversation.session.header.lineage', 'function CatalogDropdown(']
   if (officialLineage.every(marker => fixture.includes(marker))) {
-    assert.equal(first.changed, false, 'rc.2 lineage navigation is official and must not be overpatched')
-    assert.equal(first.source, fixture)
+    const complete = ['harness-desktop:agent-team-live-status', 'const safeTeamLiveCount =', 'const menuId = (0, react.useId)();', 'changeOpen(!open);'].every(marker => fixture.includes(marker)) && !fixture.includes('openTitle();')
+    assert.equal(first.changed, !complete, 'official lineage receives the bounded realtime bridge and whole-chip disclosure exactly once')
+    assert.equal(createHash('sha256').update(first.source).digest('hex').toUpperCase(), '035C0B528D341F031886BEF5B4910E83BF502748CE6D0633126590A7DB68372D')
     assert.match(first.source, /"switcher\.aria": "切换子代理：\{title\}"/)
     assert.match(first.source, /name: "conversation\.session\.header\.lineage"/)
     assert.match(first.source, /openChild\(\{/)
+    assert.match(first.source, /harness-desktop:agent-team-live-status/u)
+    assert.match(first.source, /window\.__DSH_AGENT_TEAM_LIVE_STATUS__/u)
+    assert.match(first.source, /const safeTeamLiveCount = \(value\) => Number\.isSafeInteger\(value\)/u)
+    assert.match(first.source, /const teamLiveActiveCount =/u)
+    assert.doesNotMatch(first.source, /Number\(teamLiveCounts\./u)
+    assert.match(first.source, /Math\.max\(healthy\.length, descendants\.count, teamLiveActiveCount\)/u)
+    assert.match(first.source, /removeEventListener\("harness-desktop:agent-team-live-status", updateTeamLiveStatus\)/u)
+    assert.match(first.source, /const menuId = \(0, react\.useId\)\(\);/u)
+    assert.match(first.source, /"aria-expanded": open,\s*"aria-controls": menuId,/u)
+    assert.match(first.source, /onClick: \(\) => \{\s*cancelHoverOpen\(\);\s*changeOpen\(!open\);\s*\},/u)
+    assert.doesNotMatch(first.source, /openTitle\(\);/u)
+    assert.match(first.source, /id: menuId,\s*ref: menuRef,/u)
+    assert.match(first.source, /\.ZKlsPq_trigger,\.ZKlsPq_switcherTrigger\{min-width:44px;min-height:44px;/u)
+    assert.match(first.source, /\.ZKlsPq_trigger:focus-visible,\.ZKlsPq_switcherTrigger:focus-visible\{outline:2px solid/u)
+    assert.match(first.source, /@media\(prefers-reduced-motion:reduce\)\{\.ZKlsPq_trigger svg,\.ZKlsPq_switcherTrigger svg\{transition:none\}\}/u)
     assert.doesNotMatch(first.source, /removeChild|deleteSubagent|archiveSubagent/)
     assert.doesNotThrow(() => new Function(first.source))
+    assert.equal(patchSubagentSource(first.source).changed, false)
     return
   }
 
@@ -631,6 +877,239 @@ test('subagent catalog separates current work from retained history without dele
   assert.equal(helpers.subagentBranchLifecycleBucket(entries[3], sortSummaries), 'running', 'a running descendant promotes its parent branch')
   assert.deepEqual(helpers.sortSubagentCatalogEntries(entries, sortSummaries).map((entry) => entry.id), ['runningNew', 'branch', 'runningOld', 'ready', 'history', 'diagnostic-a', 'diagnostic-b'])
   assert.equal(patchSubagentSource(first.source).changed, false)
+})
+
+test('alpha.5 subagent header uses one whole-chip disclosure trigger for pointer and keyboard activation', async () => {
+  const { patchSubagentSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')
+  const patched = patchSubagentSource(fixture).source
+  const instrumented = patched.replace('exports.apply = apply;', 'exports.__catalogDisclosureTest = { CatalogDropdown };\n\t\texports.apply = apply;')
+  assert.notEqual(instrumented, patched)
+
+  function harness() {
+    const state = [], refs = [], ids = [], catalogCalls = []
+    let stateCursor = 0, refCursor = 0, idCursor = 0, exports
+    const jsx = (type, props, key) => ({ type, key, props: props || {} })
+    const react = {
+      useState(initial) {
+        const index = stateCursor++
+        if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial
+        return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value }]
+      },
+      useRef(initial) { const index = refCursor++; refs[index] ||= { current: initial }; return refs[index] },
+      useMemo(work) { return work() },
+      useEffect() {},
+      useId() { const index = idCursor++; ids[index] ||= `catalog-menu-${index}`; return ids[index] }
+    }
+    const document = { querySelector() { return null }, createElement() { return { dataset: {}, textContent: '' } }, head: { appendChild() {} }, body: {} }
+    const window = {
+      innerWidth: 1200,
+      addEventListener() {},
+      removeEventListener() {},
+      __ModuleLoader__: { load(definition) { exports = definition.factory(name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx, jsxs: jsx, Fragment: 'fragment' } : name === 'react-dom' ? { createPortal: child => ({ type: 'portal', props: { children: child } }) } : name === '@deepseek-ai/dsh-client-ui-primitives' ? new Proxy({}, { get: (_target, key) => String(key) }) : (() => { throw new Error(`unexpected module ${name}`) })()) } }
+    }
+    vm.runInNewContext(instrumented, { window, document, console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask, Date, Math, Number, Object, Set, Map })
+    const store = {
+      subagentsByParent: { root: { state: 'ready', error: null, parentAvailable: true, entries: [{ kind: 'child', id: 'child', label: '可继续', activity: 'inactive', mode: 'continuable' }] } },
+      byId: { child: { id: 'child', origin: 'subagent', parentId: 'root', running: false, projectionValues: { subagent: { mode: 'continuable' } } } }
+    }
+    const render = () => {
+      stateCursor = 0; refCursor = 0; idCursor = 0
+      const root = exports.__catalogDisclosureTest.CatalogDropdown({ rootSessionId: 'root', variant: 'count', separator: true, useSessions: select => select(store), openChild() {}, refresh() {}, setCatalogOpen: (...args) => catalogCalls.push(args), t: (key, values) => `${key}:${JSON.stringify(values || {})}` })
+      const trigger = root.props.children[1]
+      trigger.props.ref.current = { getBoundingClientRect: () => ({ left: 20, bottom: 40 }), focus() {} }
+      return { root, trigger }
+    }
+    return { render, state, catalogCalls }
+  }
+
+  function nestedButtonCount(node) {
+    if (!node || typeof node !== 'object') return 0
+    const children = Array.isArray(node.props?.children) ? node.props.children : [node.props?.children]
+    return (node.type === 'button' ? 1 : 0) + children.reduce((total, child) => total + nestedButtonCount(child), 0)
+  }
+
+  for (const targetIndex of [0, 1]) {
+    const current = harness(), initial = current.render(), target = initial.trigger.props.children[targetIndex]
+    assert.equal(initial.trigger.type, 'button')
+    assert.equal(nestedButtonCount({ props: { children: initial.trigger.props.children } }), 0, 'the disclosure contains no nested button')
+    assert.equal(initial.trigger.props.type, 'button')
+    assert.equal(initial.trigger.props['aria-expanded'], false)
+    assert.equal(initial.trigger.props['aria-controls'], 'catalog-menu-0')
+    assert.equal(target.props?.onClick, undefined, 'body and caret remain children of the one native button')
+    initial.trigger.props.onClick({ target, currentTarget: initial.trigger })
+    assert.equal(current.state[0], true, targetIndex === 0 ? 'status/text body opens' : 'caret opens')
+    assert.deepEqual(current.catalogCalls, [['root', true]], 'one pointer activation changes the catalog exactly once')
+    const opened = current.render()
+    assert.equal(opened.trigger.props['aria-expanded'], true)
+    assert.equal(opened.root.props.children[2].props.children.props.id, opened.trigger.props['aria-controls'])
+    opened.trigger.props.onClick({ target: opened.trigger.props.children[targetIndex], currentTarget: opened.trigger })
+    assert.equal(current.state[0], false)
+    assert.deepEqual(current.catalogCalls, [['root', true], ['root', false]], 'one close activation closes exactly once without caret bubbling a second toggle')
+  }
+
+  for (const key of ['Enter', ' ']) {
+    const current = harness(), initial = current.render()
+    let prevented = 0
+    initial.trigger.props.onKeyDown({ key, preventDefault() { prevented += 1 } })
+    assert.equal(current.state[0], false, `${key} relies on native button activation without a second manual toggle`)
+    assert.equal(prevented, 0)
+    initial.trigger.props.onClick({ key })
+    assert.equal(current.state[0], true)
+    assert.deepEqual(current.catalogCalls, [['root', true]])
+  }
+
+  assert.match(patched, /document\.addEventListener\("pointerdown", closeOutside\)/u)
+  assert.match(patched, /openChild\(\{[\s\S]*?closeCatalog\(\);/u)
+  assert.equal(patchSubagentSource(patched).changed, false, 'HMR/repeated patching never nests another trigger or handler')
+})
+
+test('alpha.5 switcher variants toggle one dropdown from every chip point without invoking openTitle', async () => {
+  const { patchSubagentSource } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')
+  const patched = patchSubagentSource(fixture).source
+  const instrumented = patched.replace('exports.apply = apply;', 'exports.__catalogDisclosureTest = { CatalogDropdown };\n\t\texports.apply = apply;')
+  assert.notEqual(instrumented, patched)
+
+  function harness({ ancestor = false, initiallyOpen = false } = {}) {
+    const state = initiallyOpen ? [true] : [], refs = [], ids = [], catalogCalls = [], openTitleCalls = []
+    let stateCursor = 0, refCursor = 0, idCursor = 0, exports
+    const jsx = (type, props, key) => ({ type, key, props: props || {} })
+    const react = {
+      useState(initial) {
+        const index = stateCursor++
+        if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial
+        return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value }]
+      },
+      useRef(initial) { const index = refCursor++; refs[index] ||= { current: initial }; return refs[index] },
+      useMemo(work) { return work() },
+      useEffect() {},
+      useId() { const index = idCursor++; ids[index] ||= `switcher-menu-${index}`; return ids[index] }
+    }
+    const document = { querySelector() { return null }, createElement() { return { dataset: {}, textContent: '' } }, head: { appendChild() {} }, body: {} }
+    const window = {
+      innerWidth: 1200,
+      addEventListener() {},
+      removeEventListener() {},
+      __ModuleLoader__: { load(definition) { exports = definition.factory(name => name === 'react' ? react : name === 'react/jsx-runtime' ? { jsx, jsxs: jsx, Fragment: 'fragment' } : name === 'react-dom' ? { createPortal: child => ({ type: 'portal', props: { children: child } }) } : name === '@deepseek-ai/dsh-client-ui-primitives' ? new Proxy({}, { get: (_target, key) => String(key) }) : (() => { throw new Error(`unexpected module ${name}`) })()) } }
+    }
+    vm.runInNewContext(instrumented, { window, document, console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask, Date, Math, Number, Object, Set, Map })
+    const store = {
+      subagentsByParent: { root: { state: 'ready', error: null, parentAvailable: true, entries: [{ kind: 'child', id: 'child', label: '当前子代理', activity: 'inactive', mode: 'continuable' }] } },
+      byId: { child: { id: 'child', origin: 'subagent', parentId: 'root', running: false, projectionValues: { subagent: { mode: 'continuable' } } } }
+    }
+    const render = () => {
+      stateCursor = 0; refCursor = 0; idCursor = 0
+      const props = { rootSessionId: 'root', currentSessionId: 'child', displayTitle: 'fallback title', variant: 'switcher', separator: false, useSessions: select => select(store), openChild() {}, refresh() {}, setCatalogOpen: (...args) => catalogCalls.push(args), t: (key, values) => `${key}:${JSON.stringify(values || {})}` }
+      if (ancestor) props.openTitle = () => openTitleCalls.push('open-title')
+      const root = exports.__catalogDisclosureTest.CatalogDropdown(props)
+      const trigger = root.props.children[1]
+      trigger.props.ref.current = { getBoundingClientRect: () => ({ left: 20, bottom: 40 }), focus() {} }
+      return { root, trigger }
+    }
+    return { render, state, catalogCalls, openTitleCalls }
+  }
+
+  function nestedButtonCount(node) {
+    if (!node || typeof node !== 'object') return 0
+    const children = Array.isArray(node.props?.children) ? node.props.children : [node.props?.children]
+    return (node.type === 'button' ? 1 : 0) + children.reduce((total, child) => total + nestedButtonCount(child), 0)
+  }
+
+  for (const targetIndex of [0, 1]) {
+    const current = harness(), initial = current.render(), target = initial.trigger.props.children[targetIndex]
+    assert.equal(initial.trigger.type, 'button')
+    assert.equal(initial.trigger.props.type, 'button')
+    assert.equal(initial.trigger.props['aria-expanded'], false)
+    assert.equal(initial.trigger.props['aria-controls'], 'switcher-menu-0')
+    assert.match(initial.trigger.props['aria-label'], /^switcher\.aria:/u)
+    assert.equal(initial.trigger.props.children[0].props.children, '当前子代理')
+    assert.equal(nestedButtonCount({ props: { children: initial.trigger.props.children } }), 0)
+    assert.equal(target.props?.onClick, undefined, 'switcher title and icon stay inside one native disclosure button')
+    initial.trigger.props.onClick({ target, currentTarget: initial.trigger })
+    assert.equal(current.state[0], true, targetIndex === 0 ? 'current subagent title opens' : 'current subagent icon opens')
+    assert.deepEqual(current.catalogCalls, [['root', true]], 'one switcher pointer activation toggles exactly once')
+    const opened = current.render()
+    assert.equal(opened.trigger.props['aria-expanded'], true)
+    assert.equal(opened.root.props.children[2].props.children.props.id, opened.trigger.props['aria-controls'])
+    opened.trigger.props.onClick({ target: opened.trigger.props.children[targetIndex], currentTarget: opened.trigger })
+    assert.equal(current.state[0], false)
+    assert.deepEqual(current.catalogCalls, [['root', true], ['root', false]], 'one switcher close does not bubble into a second toggle')
+  }
+
+  for (const key of ['Enter', ' ']) {
+    const current = harness(), initial = current.render()
+    let prevented = 0
+    initial.trigger.props.onKeyDown({ key, preventDefault() { prevented += 1 } })
+    assert.equal(current.state[0], false, `${key} has no manual switcher toggle`)
+    assert.equal(prevented, 0)
+    initial.trigger.props.onClick({ key })
+    assert.equal(current.state[0], true)
+    assert.deepEqual(current.catalogCalls, [['root', true]], `${key} relies on the native button click exactly once`)
+  }
+
+  for (const targetIndex of [0, 1]) {
+    const ancestor = harness({ ancestor: true }), initial = ancestor.render(), target = initial.trigger.props.children[targetIndex]
+    assert.equal(initial.trigger.props['aria-expanded'], false)
+    assert.equal(target.props?.onClick, undefined)
+    initial.trigger.props.onClick({ target, currentTarget: initial.trigger })
+    assert.equal(ancestor.state[0], true, 'ancestor title or icon opens the dropdown exactly once')
+    assert.deepEqual(ancestor.openTitleCalls, [], 'ancestor trigger points never navigate through openTitle')
+    assert.deepEqual(ancestor.catalogCalls, [['root', true]], 'ancestor disclosure reports exactly one open')
+    const opened = ancestor.render()
+    opened.trigger.props.onClick({ target: opened.trigger.props.children[targetIndex], currentTarget: opened.trigger })
+    assert.equal(ancestor.state[0], false, 'ancestor title or icon closes the dropdown exactly once')
+    assert.deepEqual(ancestor.catalogCalls, [['root', true], ['root', false]], 'ancestor close does not double-toggle')
+    assert.deepEqual(ancestor.openTitleCalls, [], 'ancestor close never navigates through openTitle')
+  }
+
+  for (const key of ['Enter', ' ']) {
+    const ancestor = harness({ ancestor: true }), initial = ancestor.render()
+    let prevented = 0
+    initial.trigger.props.onKeyDown({ key, preventDefault() { prevented += 1 } })
+    initial.trigger.props.onClick({ key })
+    assert.equal(prevented, 0)
+    assert.equal(ancestor.state[0], true)
+    assert.deepEqual(ancestor.catalogCalls, [['root', true]], `ancestor ${key} relies on one native disclosure click`)
+    assert.deepEqual(ancestor.openTitleCalls, [], `ancestor ${key} activation never invokes openTitle`)
+  }
+})
+
+test('alpha.5 installed subagent header disclosure is exact-hash bound and repeatable', async () => {
+  const { patchInstalledSubagent } = await import('../scripts/patch-official-runtime.mjs')
+  const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')
+  const temp = mkdtempSync(path.join(os.tmpdir(), 'dsh-alpha5-subagent-ui-patch-'))
+  const root = path.join(temp, 'dsh-client-ui-subagent'), file = path.join(root, 'lib', 'client.js')
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-subagent', version: '0.1.2-alpha.5' }))
+  try {
+    writeFileSync(file, fixture)
+    assert.equal(await patchInstalledSubagent(file), true)
+    const once = readFileSync(file, 'utf8')
+    assert.equal(createHash('sha256').update(once).digest('hex').toUpperCase(), '035C0B528D341F031886BEF5B4910E83BF502748CE6D0633126590A7DB68372D')
+    assert.equal(await patchInstalledSubagent(file), false)
+    assert.equal(readFileSync(file, 'utf8'), once)
+    const wholeChipV1 = once.replace(`\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tcancelHoverOpen();\n\t\t\t\t\t\t\tchangeOpen(!open);\n\t\t\t\t\t\t},`, `\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tcancelHoverOpen();\n\t\t\t\t\t\t\tif (openTitle !== void 0) {\n\t\t\t\t\t\t\t\tif (open) changeOpen(false);\n\t\t\t\t\t\t\t\topenTitle();\n\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tchangeOpen(!open);\n\t\t\t\t\t\t},`)
+    assert.notEqual(wholeChipV1, once)
+    assert.equal(createHash('sha256').update(wholeChipV1).digest('hex').toUpperCase(), '89F332378BEF2003B32EAA1471E93BED2DA34A176C42E0F8DE8293E7BA735C50')
+    writeFileSync(file, wholeChipV1)
+    assert.equal(await patchInstalledSubagent(file), true, 'the exact prior whole-chip branch migrates once without navigation')
+    assert.equal(readFileSync(file, 'utf8'), once)
+    const disclosureV1 = wholeChipV1.replace('@media(prefers-reduced-motion:reduce){.ZKlsPq_trigger svg,.ZKlsPq_switcherTrigger svg{transition:none}}', '')
+    assert.equal(createHash('sha256').update(disclosureV1).digest('hex').toUpperCase(), 'B406852F572DF14EE6C7A8BCD00B811151B2064D2E6D73EF1940DDEED4FF7E21')
+    writeFileSync(file, disclosureV1)
+    assert.equal(await patchInstalledSubagent(file), true, 'the exact first disclosure composition migrates once')
+    assert.equal(readFileSync(file, 'utf8'), once)
+    const disclosureV2 = once.replace('@media(prefers-reduced-motion:reduce){.ZKlsPq_trigger svg,.ZKlsPq_switcherTrigger svg{transition:none}}', '')
+    assert.equal(createHash('sha256').update(disclosureV2).digest('hex').toUpperCase(), 'AC873867529F46E75117157016A43614C2182C455611D23D3D98ED05A4263137')
+    writeFileSync(file, disclosureV2)
+    assert.equal(await patchInstalledSubagent(file), true, 'the exact prior disclosure composition migrates once')
+    assert.equal(readFileSync(file, 'utf8'), once)
+    writeFileSync(file, `${fixture}\n/* drift */`)
+    await assert.rejects(() => patchInstalledSubagent(file), /neither exact official nor an exact complete Desktop catalog artifact/u)
+  } finally {
+    rmSync(temp, { recursive: true, force: true })
+  }
 })
 
 test('patched Windows directory picker returns the selected existing project path', async () => {

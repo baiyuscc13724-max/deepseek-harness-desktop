@@ -14,9 +14,11 @@
  * the sibling tool modules use.
  * @module @zseven-w/dsh-android/tool-support
  */
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ANDROID_BUTTONS } from './android-host.js';
+import { screenshotDir } from './stream-access.js';
 import { imageInputActive, saveScreenshotAttachment, } from './vision.js';
 /**
  * Resolve the optional image attachment for one captured PNG: only on an
@@ -119,28 +121,58 @@ export async function resolveTarget(host, tool, serial) {
     return { device, summary: deviceSummary(device, details) };
 }
 /**
- * Per-device screenshot paths inside the SHARED cache directory
- * (`<tmp>/dsh-android/screenshots/screenshot-<serial>-<n>.png`, the exact
- * directory the signed screenshot route serves).
+ * Per-device screenshot paths inside the EVIDENCE cache directory
+ * (`<DSH_HOME>/cache/dsh-android/evidence/screenshots/…`, one of the exact
+ * roots the signed screenshot route serves). Live preview never writes here.
  *
- * Three independent counters write into that directory — this store, the UI
- * tools' twin, and the panel capture route — so each scans the directory once
- * and their counters collide. Skipping names that already exist on disk is
- * what keeps a later write from overwriting an earlier capture whose signed
- * URL is still live.
+ * Explicit tool captures and the panel's explicit screenshot action may share
+ * this evidence namespace, so each counter scans once and skips existing names.
+ * That keeps a later capture from overwriting history whose signed URL is live;
+ * the legacy continuous-preview rollback has its own bounded preview namespace.
  */
+const EVIDENCE_FILE = /^screenshot-[A-Za-z0-9_-]+-\d+\.png$/;
+const EVIDENCE_INDEX_MAX_BYTES = 16 * 1024 * 1024;
+const EVIDENCE_REFERENCE_KINDS = new Set(['attachment', 'tool-card', 'history', 'token']);
+function normalizeEvidenceReference(value) {
+    if (typeof value !== 'object' || value === null || !EVIDENCE_REFERENCE_KINDS.has(value.kind))
+        throw new Error('dsh-android: unknown evidence reference kind');
+    const id = String(value.id || '');
+    if (id.length === 0 || id.length > 256)
+        throw new Error('dsh-android: invalid evidence reference id');
+    if (value.kind !== 'token')
+        return { kind: value.kind, id };
+    const expiresAt = Math.trunc(Number(value.expiresAt));
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0)
+        throw new Error('dsh-android: invalid evidence token expiry');
+    return { kind: value.kind, id, expiresAt };
+}
 export class ScreenshotStore {
     #root;
     #next = new Map();
+    #indexPath;
     constructor(root) {
-        this.#root = root;
+        const requested = resolve(root);
+        // Older tool factories still pass the former shared tmp root. Redirect
+        // only that exact default to the durable evidence namespace; arbitrary
+        // caller-provided fixture roots keep working, and legacy stays read-only.
+        this.#root = requested === resolve(join(tmpdir(), 'dsh-android')) ? resolve(screenshotDir()) : requested;
+        this.#indexPath = join(dirname(this.#root), 'reference-index.json');
     }
     /** The directory captures land in (shared with the screenshot route). */
     get root() {
         return this.#root;
     }
+    #assertRoot() {
+        if (!existsSync(this.#root))
+            return;
+        const info = lstatSync(this.#root);
+        if (info.isSymbolicLink() || !info.isDirectory())
+            throw new Error('dsh-android: evidence screenshot root is not a regular directory');
+    }
     nextPath(serial) {
+        this.#assertRoot();
         mkdirSync(this.#root, { recursive: true, mode: 0o700 });
+        this.#assertRoot();
         const safe = serial.replace(/[^A-Za-z0-9_-]/g, '_');
         let next = this.#next.get(safe);
         if (next === undefined) {
@@ -162,6 +194,127 @@ export class ScreenshotStore {
         this.#next.set(safe, next + 1);
         return path;
     }
+    #name(path) {
+        const absolute = resolve(path);
+        const rel = relative(this.#root, absolute);
+        if (rel === '' || rel.startsWith(`..${sep}`) || isAbsolute(rel) || rel.includes(sep) || !EVIDENCE_FILE.test(rel))
+            throw new Error('dsh-android: evidence reference escaped the screenshot directory');
+        return rel;
+    }
+    #scan() {
+        this.#assertRoot();
+        if (!existsSync(this.#root))
+            return [];
+        const rows = [];
+        for (const name of readdirSync(this.#root)) {
+            if (!EVIDENCE_FILE.test(name))
+                continue;
+            const path = join(this.#root, name);
+            const info = lstatSync(path);
+            if (info.isSymbolicLink() || !info.isFile())
+                throw new Error('dsh-android: evidence index found a non-regular screenshot');
+            rows.push({ name, bytes: info.size, modifiedAt: Math.trunc(info.mtimeMs), ino: String(info.ino ?? 0) });
+        }
+        return rows;
+    }
+    #validate(value) {
+        if (typeof value !== 'object' || value === null || value.version !== 1 || !Number.isSafeInteger(value.revision)
+            || value.revision < 0 || typeof value.files !== 'object' || value.files === null || Array.isArray(value.files))
+            throw new Error('dsh-android: evidence reference index is invalid');
+        const files = {};
+        let referenceCount = 0;
+        for (const [name, row] of Object.entries(value.files)) {
+            if (!EVIDENCE_FILE.test(name) || typeof row !== 'object' || row === null || !Number.isSafeInteger(row.bytes) || row.bytes < 0
+                || !Number.isSafeInteger(row.modifiedAt) || row.modifiedAt < 0 || typeof row.ino !== 'string' || !Array.isArray(row.references))
+                throw new Error('dsh-android: evidence reference index contains an invalid row');
+            referenceCount += row.references.length;
+            if (referenceCount > 10_000)
+                throw new Error('dsh-android: evidence reference count exceeded its safety budget');
+            files[name] = { bytes: row.bytes, modifiedAt: row.modifiedAt, ino: row.ino, references: row.references.map(normalizeEvidenceReference) };
+        }
+        return { version: 1, revision: value.revision, files };
+    }
+    #load() {
+        if (!existsSync(this.#indexPath))
+            return { version: 1, revision: 0, files: {} };
+        const info = lstatSync(this.#indexPath);
+        if (info.isSymbolicLink() || !info.isFile() || info.size <= 0 || info.size > EVIDENCE_INDEX_MAX_BYTES)
+            throw new Error('dsh-android: evidence reference index size or type is invalid');
+        return this.#validate(JSON.parse(readFileSync(this.#indexPath, 'utf8')));
+    }
+    #save(state) {
+        const next = this.#validate({ ...state, revision: state.revision + 1 });
+        const indexRoot = dirname(this.#indexPath);
+        mkdirSync(indexRoot, { recursive: true, mode: 0o700 });
+        const rootInfo = lstatSync(indexRoot);
+        if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory())
+            throw new Error('dsh-android: evidence index root is not a regular directory');
+        const temporary = `${this.#indexPath}.tmp-${process.pid}-${Date.now()}`;
+        try {
+            writeFileSync(temporary, `${JSON.stringify(next)}\n`, { flag: 'wx', mode: 0o600 });
+            renameSync(temporary, this.#indexPath);
+        }
+        finally {
+            if (existsSync(temporary))
+                unlinkSync(temporary);
+        }
+        return next;
+    }
+    /** Recompute the complete authoritative evidence view from isolated inputs. */
+    rebuildReferenceIndex(references = []) {
+        if (!Array.isArray(references))
+            throw new Error('dsh-android: evidence reference snapshot must be an array');
+        const state = { version: 1, revision: 0, files: {} };
+        for (const file of this.#scan())
+            state.files[file.name] = { ...file, references: [] };
+        for (const row of references) {
+            if (typeof row !== 'object' || row === null)
+                throw new Error('dsh-android: invalid evidence reference snapshot row');
+            const name = this.#name(row.path);
+            if (state.files[name] === undefined)
+                throw Object.assign(new Error(`dsh-android: dangling evidence reference ${name}`), { code: 'android-evidence-reference-dangling' });
+            const reference = normalizeEvidenceReference(row);
+            const existing = state.files[name].references.find(value => value.kind === reference.kind && value.id === reference.id);
+            if (existing && reference.kind === 'token')
+                existing.expiresAt = Math.max(existing.expiresAt, reference.expiresAt);
+            else if (!existing)
+                state.files[name].references.push(reference);
+        }
+        const saved = this.#save(state);
+        return { rebuilt: true, authoritative: true, revision: saved.revision, files: Object.keys(saved.files).length,
+            references: Object.values(saved.files).reduce((sum, row) => sum + row.references.length, 0), danglingReferences: 0 };
+    }
+    /** Persist one tool-card/attachment/history/token reference without GC. */
+    recordReference(path, reference) {
+        const name = this.#name(path);
+        const normalized = normalizeEvidenceReference(reference);
+        const state = this.#load();
+        const disk = this.#scan();
+        const diskByName = new Map(disk.map(row => [row.name, row]));
+        for (const [savedName, row] of Object.entries(state.files)) {
+            const current = diskByName.get(savedName);
+            if (!current || current.bytes !== row.bytes || current.modifiedAt !== row.modifiedAt || current.ino !== row.ino)
+                throw new Error('dsh-android: evidence identity changed; reference index update stopped');
+        }
+        for (const file of disk)
+            state.files[file.name] ??= { ...file, references: [] };
+        if (state.files[name] === undefined)
+            throw Object.assign(new Error(`dsh-android: dangling evidence reference ${name}`), { code: 'android-evidence-reference-dangling' });
+        const found = state.files[name].references.find(value => value.kind === normalized.kind && value.id === normalized.id);
+        if (found && normalized.kind === 'token')
+            found.expiresAt = Math.max(found.expiresAt, normalized.expiresAt);
+        else if (!found)
+            state.files[name].references.push(normalized);
+        const saved = this.#save(state);
+        return { recorded: true, authoritative: true, revision: saved.revision, danglingReferences: 0 };
+    }
+    referenceStatus() {
+        const state = this.#load();
+        const disk = new Set(this.#scan().map(row => row.name));
+        const dangling = Object.keys(state.files).filter(name => !disk.has(name));
+        return { authoritative: true, files: disk.size, references: Object.values(state.files).reduce((sum, row) => sum + row.references.length, 0),
+            danglingReferences: dangling.length, dangling };
+    }
 }
 /** Capture one PNG into the store and summarize it (never image bytes). */
 export async function captureScreenshot(host, store, tool, device, summary, vision) {
@@ -182,6 +335,15 @@ export async function captureScreenshot(host, store, tool, device, summary, visi
     }
     const bytes = statSync(path).size;
     const image = await screenshotImageRef(vision, shot.png, basename(path));
+    try {
+        store.recordReference(path, { kind: 'tool-card', id: `capture:${basename(path)}` });
+        if (image !== undefined)
+            store.recordReference(path, { kind: 'attachment', id: `attachment:${basename(path)}` });
+    }
+    catch {
+        // Evidence remains authoritative and non-GC even when a damaged index
+        // deliberately fails closed; capture must not be turned into data loss.
+    }
     return {
         path,
         bytes,

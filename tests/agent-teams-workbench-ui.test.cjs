@@ -19,6 +19,12 @@ function componentSource(source, names) {
   assert.fail(`missing component: ${names.join(' / ')}`)
 }
 
+function teamStateLifecycleSource(source) {
+  return ['taskId', 'teamId', 'safeLiveInteger', 'teamScopedSemanticMarker', 'teamsFromSnapshot', 'teamSnapshotClock', 'olderTeamSnapshot', 'streamSnapshotEnvelope', 'useTeamState']
+    .map(name => componentSource(source, [name]))
+    .join('\n')
+}
+
 function deferred() {
   let resolve
   let reject
@@ -64,8 +70,8 @@ function createLifecycleHarness(hookSource, options = {}) {
       this.namedListeners.set(name, entries)
     }
 
-    emit(name, snapshot) {
-      const event = { data: JSON.stringify(snapshot) }
+    emit(name, snapshot, lastEventId = '') {
+      const event = { type: name, data: JSON.stringify(snapshot), lastEventId }
       if (name === 'message') this.onmessage?.(event)
       for (const listener of this.namedListeners.get(name) || []) listener(event)
     }
@@ -116,7 +122,7 @@ function createLifecycleHarness(hookSource, options = {}) {
   })
   const useTeamState = Function(
     'useState', 'useRef', 'useEffect', 'startTransition', 'fetchState', 'eventsUrl',
-    'teamSnapshotVersion', 'errorText', 'document', 'EventSource', 'setTimeout',
+    'teamSnapshotVersion', 'publishSafeTeamLiveStatus', 'errorText', 'document', 'EventSource', 'setTimeout',
     'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame',
     `${hookSource}\nreturn useTeamState`
   )(
@@ -131,6 +137,7 @@ function createLifecycleHarness(hookSource, options = {}) {
     },
     (sessionId, teamId) => `/events?sessionId=${sessionId}&teamId=${teamId}`,
     (snapshot) => String(snapshot?.revision || ''),
+    () => {},
     (error) => String(error?.message || error),
     document,
     FakeEventSource,
@@ -165,11 +172,12 @@ function createLifecycleHarness(hookSource, options = {}) {
         for (const [, callback] of pending) callback()
       }
     },
-    runTimeout(delay) {
-      const entry = [...timeouts.entries()].find(([, timer]) => timer.delay === delay)
-      assert.ok(entry, `missing timeout with delay ${delay}`)
+    runSparseTimeout() {
+      const entry = [...timeouts.entries()].find(([, timer]) => timer.delay >= 12_000 && timer.delay <= 18_000)
+      assert.ok(entry, 'missing first sparse fallback timeout in the 12-18s jitter window')
       timeouts.delete(entry[0])
       entry[1].callback()
+      return entry[1].delay
     }
   }
 }
@@ -549,13 +557,13 @@ test('selected board task becomes the visual focus with a truthful live workflow
   assert.match(workflow, /runtimeWorkflow\.events/u)
   assert.match(workflow, /runtimeEvents\.slice\(\)\.reverse\(\)/u)
   assert.match(workflow, /className: "dat-task-block-branch", "data-active": "true"/u)
-  assert.match(board, /useTaskDetailState\(props\.sessionId, team && teamId\(team\), selectedTaskId\)/u)
-  assert.match(detailHook, /new EventSource\(taskDetailEventsUrl/u)
-  assert.match(detailHook, /source\.addEventListener\("snapshot", update\)/u)
+  assert.match(board, /useTaskDetailState\(props\.sessionId, team && teamId\(team\), selectedTaskId, props\.snapshotVersion\)/u)
+  assert.doesNotMatch(detailHook, /new EventSource|taskDetailEventsUrl|source\.addEventListener/u)
+  assert.match(detailHook, /var identity = \[sessionId \|\| "", selectedTeamId \|\| "", selectedTaskId \|\| ""\]\.join/u)
   assert.match(detailHook, /String\(next\.taskId \|\| ""\) !== String\(selectedTaskId\)/u)
   assert.match(detailHook, /fetchTaskDetail\(sessionId, selectedTeamId, selectedTaskId\)/u)
-  assert.match(detailHook, /source && typeof source\.close === "function"/u)
-  assert.match(detailHook, /\[sessionId, selectedTeamId, selectedTaskId\]/u)
+  assert.match(detailHook, /return function \(\) \{ alive = false; \};/u)
+  assert.match(detailHook, /\[sessionId, selectedTeamId, selectedTaskId, snapshotVersion\]/u)
   assert.match(source, /\/api\/agent-teams\/task-detail\/events/u)
   assert.match(source, /\.dat-task-focus\{min-height:clamp\(460px,62vh,760px\)/u)
   assert.match(source, /\.dat-task-focus-grid\{grid-template-columns:minmax\(0,1\.55fr\) minmax\(280px,\.72fr\)/u)
@@ -944,19 +952,30 @@ test('adapted task-board UI keeps its upstream provenance visible in source', as
 
 test('team-state lifecycle does not let an older HTTP fallback overwrite a newer SSE snapshot', async () => {
   const source = await clientSource()
-  const hook = componentSource(source, ['useTeamState'])
+  const hook = teamStateLifecycleSource(source)
   const harness = createLifecycleHarness(hook)
+  const stream = harness.eventSources[0]
 
+  assert.match(hook, /Math\.min\(60000, 15000 \* Math\.pow/u)
+  assert.match(hook, /base \* \(0\.8 \+ Math\.random\(\) \* 0\.4\)/u)
   assert.equal(harness.eventSources.length, 1)
   assert.equal(harness.fetchCalls.length, 0, 'SSE is the primary source while it is available')
-  harness.runTimeout(3000)
-  assert.equal(harness.fetchCalls.length, 1, 'HTTP starts only after the initial SSE snapshot timeout')
+  assert.equal(harness.timeouts.size, 0, 'an unopened EventSource must not eagerly start the old 3s HTTP fallback')
 
-  harness.eventSources[0].emit('snapshot', { enabled: true, team: { id: 'team-1' }, revision: 2 })
+  stream.onerror()
+  assert.equal(harness.timeouts.size, 1, 'SSE failure schedules one sparse polling safety net')
+  const sparseDelay = harness.runSparseTimeout()
+  assert.equal(sparseDelay >= 12_000 && sparseDelay <= 18_000, true)
+  assert.equal(harness.fetchCalls.length, 1, 'HTTP starts only after the first sparse fallback delay')
+
+  stream.onopen()
+  assert.equal([...harness.timeouts.values()][0]?.delay, 3000, 'an opened stream gets one bounded authoritative-snapshot watchdog')
+  stream.emit('snapshot', { enabled: true, team: { id: 'team-1', revision: 2 }, revision: 2 }, '2')
   harness.runFrames()
   assert.equal(harness.stateSlots[0].value.revision, 2)
+  assert.equal(harness.timeouts.size, 0, 'the authoritative snapshot cancels its HTTP watchdog')
 
-  harness.fetchCalls[0].resolve({ enabled: true, team: { id: 'team-1' }, revision: 1 })
+  harness.fetchCalls[0].resolve({ enabled: true, team: { id: 'team-1', revision: 1 }, revision: 1 })
   await drainPromises()
   harness.runFrames()
   assert.equal(harness.stateSlots[0].value.revision, 2, 'the stream epoch must invalidate an older in-flight GET')
@@ -966,18 +985,20 @@ test('team-state lifecycle does not let an older HTTP fallback overwrite a newer
 
 test('team-state lifecycle keeps at most one EventSource through repeated hide and resume cycles', async () => {
   const source = await clientSource()
-  const hook = componentSource(source, ['useTeamState'])
+  const hook = teamStateLifecycleSource(source)
   const harness = createLifecycleHarness(hook)
 
   assert.equal(harness.listenerCount('visibilitychange'), 1)
   for (let index = 0; index < 20; index += 1) {
     const previous = harness.eventSources.at(-1)
+    previous.onerror()
+    assert.equal(harness.timeouts.size, 1, 'each visible failed stream has exactly one sparse fallback timer')
     harness.dispatchVisibility('hidden')
     assert.equal(previous.closed, true)
     assert.equal(harness.eventSources.filter((source) => !source.closed).length, 0)
     assert.equal(harness.timeouts.size, 0, 'hiding must clear fallback and polling timers')
 
-    previous.emit('snapshot', { enabled: true, team: { id: 'team-1' }, revision: 100 + index })
+    previous.emit('snapshot', { enabled: true, team: { id: 'team-1', revision: 100 + index }, revision: 100 + index })
     assert.equal(harness.frames.size, 0, 'a closed source must not publish queued events')
 
     harness.dispatchVisibility('visible')
@@ -985,7 +1006,7 @@ test('team-state lifecycle keeps at most one EventSource through repeated hide a
   }
 
   assert.equal(harness.eventSources.length, 21)
-  assert.equal(harness.fetchCalls.length, 0, 'rapid resume must not duplicate HTTP snapshots before the SSE timeout')
+  assert.equal(harness.fetchCalls.length, 0, 'rapid resume must not run HTTP before any sparse timer elapses')
   harness.cleanup()
   assert.equal(harness.eventSources.filter((source) => !source.closed).length, 0)
   assert.equal(harness.listenerCount('visibilitychange'), 0)
@@ -994,14 +1015,16 @@ test('team-state lifecycle keeps at most one EventSource through repeated hide a
 
 test('team-state lifecycle cleanup closes the stream and cancels every queued callback', async () => {
   const source = await clientSource()
-  const hook = componentSource(source, ['useTeamState'])
+  const hook = teamStateLifecycleSource(source)
   const harness = createLifecycleHarness(hook)
   const stream = harness.eventSources[0]
 
-  stream.emit('snapshot', { enabled: true, team: { id: 'team-1' }, revision: 1 })
+  stream.emit('snapshot', { enabled: true, team: { id: 'team-1', revision: 1 }, revision: 1 }, '1')
   stream.onerror()
   assert.equal(harness.frames.size, 1)
   assert.equal(harness.timeouts.size, 1, 'SSE failure should have one sparse polling safety-net timer')
+  const sparseDelay = [...harness.timeouts.values()][0]?.delay
+  assert.equal(sparseDelay >= 12_000 && sparseDelay <= 18_000, true)
 
   harness.cleanup()
   assert.equal(stream.closed, true)
@@ -1009,7 +1032,7 @@ test('team-state lifecycle cleanup closes the stream and cancels every queued ca
   assert.equal(harness.timeouts.size, 0)
   assert.equal(harness.listenerCount('visibilitychange'), 0)
 
-  stream.emit('snapshot', { enabled: true, team: { id: 'team-1' }, revision: 2 })
+  stream.emit('snapshot', { enabled: true, team: { id: 'team-1', revision: 2 }, revision: 2 }, '2')
   harness.runFrames()
   await drainPromises()
   assert.equal(harness.stateSlots[0].value, null, 'callbacks from a disposed hook must not mutate React state')

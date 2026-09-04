@@ -20,6 +20,8 @@
   let schedulesQuery = ''
   let filesSnapshot = null
   let schedulesSnapshot = null
+  let schedulesValidator = null
+  let schedulesRequestRevision = 0
   let requestedBrowserContentVisible = null
   let browserRestorePending = true
   let browserIntentLane = Promise.resolve()
@@ -569,16 +571,74 @@
     applyDataScroll('schedules', hasScheduleList)
   }
 
+  function scheduleValidatorsEnabled() {
+    return window.__DSH_DESKTOP_SCHEDULES_VALIDATORS__ !== false
+  }
+
+  function validScheduleValidator(value) {
+    return Boolean(value) && typeof value.etag === 'string' && value.etag.length <= 256 &&
+      Number.isSafeInteger(value.cursor) && value.cursor >= -1 && typeof value.generation === 'string' &&
+      value.generation.length > 0 && value.generation.length <= 128
+  }
+
+  function scheduleValidatorFrom(result, sessionId) {
+    if (!scheduleValidatorsEnabled() || result?.body?.projection?.cacheable === false) return null
+    const candidate = { sessionId, etag: result?.etag, cursor: result?.cursor, generation: result?.generation }
+    return validScheduleValidator(candidate) ? candidate : null
+  }
+
+  function invalidScheduleDelta(result, previous) {
+    const projection = result?.body?.projection
+    if (!projection || projection.mode !== 'delta') return false
+    return !validScheduleValidator(previous) || projection.generation !== previous.generation ||
+      projection.since !== previous.cursor || !Number.isSafeInteger(projection.cursor) || projection.cursor < previous.cursor
+  }
+
+  function invalidScheduleResponse(result, sessionId) {
+    const body = result?.body && typeof result.body === 'object' ? result.body : result
+    if (!body || typeof body !== 'object' || (body.sessionId !== undefined && body.sessionId !== sessionId)) return true
+    const projection = body.projection
+    return Boolean(projection && result?.cursor !== undefined &&
+      (projection.cursor !== result.cursor || projection.generation !== result.generation))
+  }
+
+  async function scheduleResource(sessionId, previous) {
+    const conditional = scheduleValidatorsEnabled() && validScheduleValidator(previous) && previous.sessionId === sessionId
+    const payload = conditional
+      ? { etag: previous.etag, since: previous.cursor, generation: previous.generation }
+      : { validator: false }
+    let result = await resource('schedules', payload)
+    const invalid304 = result?.notModified && (!conditional || !validScheduleValidator({ etag: result.etag, cursor: result.cursor, generation: result.generation }) || result.generation !== previous.generation || result.cursor < previous.cursor)
+    if (invalid304 || invalidScheduleDelta(result, conditional ? previous : null) || (!result?.notModified && invalidScheduleResponse(result, sessionId))) {
+      result = await resource('schedules', { validator: false })
+      if (result?.notModified || invalidScheduleDelta(result, null) || invalidScheduleResponse(result, sessionId)) throw new Error('Schedule full fallback was not authoritative')
+    }
+    return result
+  }
+
   async function loadSchedules(opts = {}) {
-    // On a preserve refresh keep the current list on screen until the request
-    // resolves (same semantics as loadFiles).
-    if (!opts.preserve) {
+    const sessionId = activeSessionId()
+    const revision = ++schedulesRequestRevision
+    const preserve = Boolean(opts.preserve || schedulesSnapshot)
+    if (!preserve) {
       schedulesSnapshot = null
       renderSchedules()
     }
-    try { schedulesSnapshot = await resource('schedules') }
-    catch (error) { schedulesSnapshot = { error: error.message || String(error), schedules: [] } }
-    renderSchedules(opts.preserve ? { preserve: true } : {})
+    try {
+      const result = await scheduleResource(sessionId, schedulesValidator)
+      if (revision !== schedulesRequestRevision || sessionId !== activeSessionId()) return
+      if (result?.notModified) {
+        schedulesValidator = scheduleValidatorFrom(result, sessionId) || schedulesValidator
+        return
+      }
+      schedulesSnapshot = result?.body && typeof result.body === 'object' ? result.body : result
+      schedulesValidator = scheduleValidatorFrom(result, sessionId)
+    } catch (error) {
+      if (revision !== schedulesRequestRevision || sessionId !== activeSessionId()) return
+      schedulesValidator = null
+      schedulesSnapshot = { error: error.message || String(error), schedules: [] }
+    }
+    renderSchedules(preserve ? { preserve: true } : {})
   }
 
   let chromeState = null
@@ -727,6 +787,8 @@
     context = { sessionId }
     filesSnapshot = null
     schedulesSnapshot = null
+    schedulesValidator = null
+    schedulesRequestRevision += 1
     if (!controller.isOpen()) return
     if (controller.getActiveModeId() === 'files') loadFiles()
     if (controller.getActiveModeId() === 'schedules') loadSchedules()

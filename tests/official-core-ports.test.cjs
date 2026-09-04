@@ -45,11 +45,11 @@ async function customProvider(overrides = {}) {
   return createCustomOfficialCoreProvider(adapters(overrides))
 }
 
-test('pins alpha.2 only as source evidence and keeps custom as the sole primary', async () => {
+test('pins alpha.5 only as source evidence and keeps custom as the sole primary', async () => {
   const { OFFICIAL_CORE_BASELINE, createOfficialCorePorts } = await subject()
   assert.deepEqual(OFFICIAL_CORE_BASELINE, {
-    tag: 'dsh-v0.1.2-alpha.2',
-    commit: '0a53fb55bea101816fa226bb964ae2bed71c343b',
+    tag: 'dsh-v0.1.2-alpha.5',
+    commit: 'db6bdc3576c2d4e7c965e8e3ed0c2a731eed87f5',
     license: 'MIT',
     runtimeEquivalent: false,
   })
@@ -71,8 +71,8 @@ test('fails closed for undeclared, accessor-backed, incomplete, official, and mu
   assert.equal(getterRan, false)
   assert.throws(() => createCustomOfficialCoreProvider({ ...adapters(), task: {} }), { code: 'OFFICIAL_CORE_PROVIDER_INCOMPLETE' })
   assert.throws(() => createOfficialCorePorts({ providers: [{
-    id: 'official-alpha2', kind: 'official', role: 'primary', schemaVersion: 12, storageMode: 'sqlite-wal',
-    baseline: { tag: 'dsh-v0.1.2-alpha.2', commit: '0a53fb55bea101816fa226bb964ae2bed71c343b', license: 'MIT', runtimeEquivalent: true },
+    id: 'official-alpha5', kind: 'official', role: 'primary', schemaVersion: 12, storageMode: 'sqlite-wal',
+    baseline: { tag: 'dsh-v0.1.2-alpha.5', commit: 'db6bdc3576c2d4e7c965e8e3ed0c2a731eed87f5', license: 'MIT', runtimeEquivalent: true },
     capabilities: { projectIdentity: true, task: true, collaboration: true, projection: true, recovery: true },
     adapters: adapters(),
   }] }), { code: 'OFFICIAL_CORE_OFFICIAL_RUNTIME_UNVERIFIED' })

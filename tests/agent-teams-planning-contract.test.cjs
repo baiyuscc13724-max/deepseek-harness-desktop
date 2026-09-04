@@ -146,11 +146,20 @@ test('public planning tools expose every persisted safety precondition instead o
   assert.match(source, /name: "team_task_update"[\s\S]*?claim_id:[\s\S]*?lease_epoch:[\s\S]*?claimId: args\.claim_id[\s\S]*?leaseEpoch: args\.lease_epoch/u)
   assert.match(source, /name: "team_task_checkpoint"[\s\S]*?claim_id:[\s\S]*?lease_epoch:[\s\S]*?checkpoint:[\s\S]*?next_step:[\s\S]*?claimId: args\.claim_id[\s\S]*?leaseEpoch: args\.lease_epoch[\s\S]*?checkpoint: args\.checkpoint[\s\S]*?nextStep: args\.next_step/u)
   assert.match(source, /name: "team_resume"[\s\S]*?commit:[\s\S]*?preview_id:[\s\S]*?expected_pause_epoch:[\s\S]*?expected_team_revision:[\s\S]*?previewId: args\.preview_id[\s\S]*?expectedPauseEpoch: args\.expected_pause_epoch[\s\S]*?expectedTeamRevision: args\.expected_team_revision/u)
+  assert.match(source, /const MAX_BOOTSTRAP_TASKS = MAX_TEAM_TASKS[\s\S]*?bootstrap\.taskRefs\.length > MAX_BOOTSTRAP_TASKS/u)
+  const bootstrapRegistration = source.slice(source.indexOf('name: "team_bootstrap"'), source.indexOf('name: "team_spawn"'))
+  assert.ok(bootstrapRegistration.indexOf('preflightBootstrapTeam') < bootstrapRegistration.indexOf('recordRoutingReceipt'), 'pure Bootstrap plan/workspace preflight precedes receipt persistence')
+  assert.match(bootstrapRegistration, /root lead is not a managed-member slot/u)
+  assert.match(bootstrapRegistration, /Task count is independently bounded/u)
+  assert.match(source, /name: "team_message"[\s\S]*?queued result proves transport acceptance only[\s\S]*?never report queued as delivered/u)
 })
 
 test('handoff and adoption are direct-user, same-project, token-bound operations that retain audit identity', async () => {
   const source = await readFile(pluginFile, 'utf8')
   assert.match(source, /function projectScopeForRoot\(root\)[\s\S]*?AGENT_TEAMS_PROJECT_SCOPE_UNKNOWN/u)
+  const workspaceIdentity = source.slice(source.indexOf('function projectScopeForRoot(root)'), source.indexOf('function optionalProjectKeyForRoot(root)'))
+  assert.doesNotMatch(workspaceIdentity.slice(0, workspaceIdentity.indexOf('function projectScopeKeyForRoot(root)')), /normalize\("NFKC"\)|toLocaleLowerCase/u, 'real workspace I/O identity cannot use compatibility normalization or case folding')
+  assert.match(workspaceIdentity, /return resolve\(cwd\)[\s\S]*?function projectScopeKeyForRoot[\s\S]*?projectScopeForRoot\(root\)\.replace[\s\S]*?function projectKeyForRoot/u)
   assert.match(source, /function projectKeyForRoot[\s\S]*?sourceProjectKey !== targetProjectKey[\s\S]*?AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN/u)
   assert.match(source, /team\.state !== "paused"[\s\S]*?AGENT_TEAMS_HANDOFF_REQUIRES_PAUSE/u)
   assert.match(source, /const tokenHash = createHash\("sha256"\)\.update\(token\)\.digest\("hex"\)/u)
@@ -336,6 +345,50 @@ test('the latest unverified checkpoint survives release, a new claim, and Stop r
     const source = await readFile(pluginFile, 'utf8')
     const stopReset = source.slice(source.indexOf('function resetTaskStoppedAfter'), source.indexOf('async function pauseTeamsForUserStop'))
     assert.doesNotMatch(stopReset, /task\.(?:checkpoint|nextStep)\s*=\s*undefined/u, 'Stop must not erase recovery context')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('graceful retirement cannot strand unfinished unclaimed work after the last assignable worker leaves', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-last-worker-recovery-'))
+  const mod = await loadPlugin('last-worker-recovery')
+  const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
+  const lead = { id: 'last-worker-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: root } } }
+  const worker = { id: 'last-worker-session' }
+  const ctx = { agents: { get: id => id === lead.id ? lead : id === worker.id ? worker : undefined, roots: () => [lead] } }
+  try {
+    await store.init()
+    const team = await mod.createTeam(store, lead, { objective: 'Keep unfinished work recoverable without retirement wakes' })
+    await mod.createTask(store, lead, { teamId: team.id, title: 'Still needs an assignee' })
+    await store.mutate(document => {
+      const durable = document.teams[0]
+      durable.members.push({
+        id: 'last-worker-member', sessionId: worker.id, name: 'Worker', role: 'bounded work',
+        kind: 'worker', state: 'running', createdAt: timestamp(), updatedAt: timestamp(), publishedAt: timestamp()
+      })
+      const grantedAt = timestamp(500)
+      document.routingReceipts.push({
+        id: 'last-worker-routing', rootSessionId: lead.id, turnKey: 'last-worker-turn', projectKey: durable.projectKey,
+        level: 'level3', reasonCategory: 'explicit_user_team_request', explicitUserTeamRequest: true,
+        candidateWorkstreams: 1, creationPath: 'team_start', outcome: 'created', teamId: durable.id,
+        decisionAuthority: 'model_declared', establishmentAuthority: 'direct_human', createdAt: grantedAt, finalizedAt: grantedAt
+      })
+      durable.autopilot = {
+        version: 1, status: 'active', authority: 'direct_human', grantId: 'last-worker-grant',
+        routingReceiptId: 'last-worker-routing', authorizationEpoch: 'a'.repeat(32), rootSessionId: lead.id,
+        projectKey: durable.projectKey, goalId: 'last-worker-goal',
+        goalObjectiveHash: createHash('sha256').update(JSON.stringify(['agent-teams-autopilot-objective-v1', 'Keep the last worker recoverable'])).digest('hex'),
+        pauseEpochAtGrant: 0, planHashAtGrant: durable.plan.hash, baseMaxGoalRounds: 4, expectedMaxGoalRounds: 4,
+        maxAdditionalRounds: 200, additionalRoundsGranted: 0, wakes: [], grantedAt
+      }
+    })
+    const before = store.snapshot()
+    await assert.rejects(
+      mod.shutdownTeam(ctx, store, undefined, lead, { teamId: team.id, memberSessionId: worker.id, force: false }, new AbortController().signal),
+      error => error?.code === 'AGENT_TEAMS_UNFINISHED_TASKS' && /last assignable worker/u.test(error.message)
+    )
+    assert.deepEqual(store.snapshot(), before, 'the refusal leaves the member, task, plan, and wake eligibility unchanged')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -697,6 +750,8 @@ test('resume receipt binds request identity and lifecycle exposes committed befo
   assert.match(source, /phase: "committed"|plan\.phase = "committed"/u, 'committed must be a real lifecycle state, not an unused enum member')
   assert.match(source, /team\.resume\?\.status === "committed"[\s\S]*?requestedRequestId === team\.resume\.requestId/u, 'resume receipt replay must bind the exact request id')
   assert.match(source, /name: "team_resume"[\s\S]*?request_id:[\s\S]*?requestId: args\.request_id/u)
+  assert.match(source, /name: "team_resume"[\s\S]*?requireDirectHumanRoot[\s\S]*?exactDirectHumanAutopilotGrantIntent[\s\S]*?directHumanGrantIntent/u)
+  assert.match(source, /directHumanAutopilotGrantGroup\(ctx, document, team, lead, input\.autopilotGoal, input\.directHumanGrantIntent, \{ resumeBoundary: true \}\)/u)
 })
 
 test('canonical project ownership and adoption revoke every old worker lease without reparenting', async () => {
@@ -1098,5 +1153,86 @@ test('spawn accepts an exact parent workspace that owns the task file-scope anch
     assert.equal(starts, 1)
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('terminal routing receipt replay requires the exact outcome and team binding with a precise next action', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-terminal-routing-'))
+  const mod = await loadPlugin('terminal-routing-replay')
+  const store = new mod.AgentTeamsStore(path.join(root, 'storages', 'agent_teams.json'), { enabled: true })
+  const lead = { id: 'routing-replay-lead', session: { header: { cwd: root } } }
+  const execution = { agent: lead, turnKey: 'one-immutable-turn' }
+  const decision = { level: 'level3', reasonCategory: 'independent_sustained_workstreams', explicitUserTeamRequest: false, candidateWorkstreams: 2, creationPath: 'team_start' }
+  try {
+    await store.init()
+    const firstTeam = await mod.createTeam(store, lead, { objective: 'First routing binding' })
+    const secondTeam = await mod.createTeam(store, lead, { objective: 'Different routing binding' })
+    await mod.recordRoutingReceipt(store, execution, { ...decision, outcome: 'recorded' })
+    await mod.recordRoutingReceipt(store, execution, { ...decision, outcome: 'created', teamId: firstTeam.id })
+
+    await assert.rejects(
+      mod.recordRoutingReceipt(store, execution, { ...decision, outcome: 'created', teamId: secondTeam.id }),
+      error => error?.code === 'AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT' && /exact original terminal outcome and team binding/u.test(error.nextAction)
+    )
+    await assert.rejects(
+      mod.recordRoutingReceipt(store, execution, { ...decision, outcome: 'failed' }),
+      error => error?.code === 'AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT' && /exact original terminal outcome and team binding/u.test(error.nextAction)
+    )
+    const exact = await mod.recordRoutingReceipt(store, execution, { ...decision, outcome: 'created', teamId: firstTeam.id })
+    assert.equal(exact.reused, true)
+    assert.equal(exact.receipt.teamId, firstTeam.id)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('real workspace I/O preserves NFKC-foldable Unicode and keeps an ASCII sibling as a distinct project', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-unicode-workspace-'))
+  const unicodeRoot = path.join(parent, 'checkout，Ａ')
+  const asciiSibling = path.join(parent, 'checkout,A')
+  const mod = await loadPlugin('unicode-workspace-identity')
+  const store = new mod.AgentTeamsStore(path.join(parent, 'state', 'agent_teams.json'), { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
+  const unicodeLead = { id: 'unicode-workspace-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: unicodeRoot } } }
+  const asciiLead = { id: 'ascii-workspace-lead', options: { provider: 'test', model: 'test' }, session: { header: { cwd: asciiSibling } } }
+  let starts = 0
+  const ctx = {
+    agents: { get: id => id === unicodeLead.id ? unicodeLead : id === asciiLead.id ? asciiLead : undefined, roots: () => [unicodeLead, asciiLead] },
+    subagents: {
+      async startContinuable({ childId, request }) {
+        const prepared = store.snapshot().teams.find(candidate => candidate.bootstrap?.requestId === 'unicode-bootstrap')
+        assert.equal(prepared.tasks.length, 8, 'all eight Bootstrap tasks are durable before the first start dispatch')
+        assert.equal(prepared.plan.phase, 'committed', 'the pre-publication plan is not falsely established')
+        assert.equal(request.parent.session.header.cwd, unicodeRoot, 'the child receives the original Unicode cwd')
+        starts += 1
+        return { childId }
+      },
+      async [queueSubagentPrompt]() {},
+      async drainContinuableChildren() {}
+    }
+  }
+  const admission = { async run(_lead, _childId, _signal, work) { return work() }, abandon() {} }
+  try {
+    await mkdir(path.join(unicodeRoot, 'plugins', 'dsh-agent-teams', 'lib'), { recursive: true })
+    await store.init()
+    const bootstrapped = await mod.bootstrapTeam(ctx, store, admission, unicodeLead, {
+      requestId: 'unicode-bootstrap', objective: 'Preserve the exact Unicode workspace',
+      tasks: Array.from({ length: 8 }, (_, index) => ({ key: `unicode-${index}`, title: `Unicode task ${index + 1}`, memberKey: 'unicode', files: [`plugins/dsh-agent-teams/lib/file-${index + 1}.js`] })),
+      members: [{ key: 'unicode', name: 'Unicode', role: 'use the exact Unicode path', prompt: 'Stay inside the assigned checkout.' }]
+    }, new AbortController().signal)
+    assert.equal(bootstrapped.operation.phase, 'complete', 'the full-width comma/path must be inspected without NFKC mutation')
+    assert.equal(bootstrapped.team.tasks.length, 8)
+    assert.equal(bootstrapped.team.plan.phase, 'active')
+    assert.equal(starts, 1)
+
+    await mkdir(asciiSibling, { recursive: true })
+    const adjacent = await mod.createTeam(store, asciiLead, { objective: 'Keep the ASCII sibling separate' })
+    const snapshot = store.snapshot()
+    assert.notEqual(
+      snapshot.teams.find(candidate => candidate.id === bootstrapped.team.id).projectKey,
+      snapshot.teams.find(candidate => candidate.id === adjacent.id).projectKey,
+      'NFKC-compatible but distinct real paths must never collapse to one project identity'
+    )
+  } finally {
+    await rm(parent, { recursive: true, force: true })
   }
 })

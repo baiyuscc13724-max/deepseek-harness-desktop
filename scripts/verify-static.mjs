@@ -3,6 +3,13 @@ import { access, readFile, readdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  TIMING_SENSITIVE_TEST_BASENAMES,
+  assertSmokeTestPhases,
+  createSmokeTestPlan,
+  enumerateRootTestFiles,
+  isTimingSensitiveTestFile
+} from './run-smoke-tests.mjs'
 
 const require = createRequire(import.meta.url)
 const { readAndroidMobileVersion } = require('./mobile-release-version.cjs')
@@ -69,6 +76,9 @@ required.push(
   'docs/SECURITY-REVIEW-v1.0.56.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.57.zh-CN.md',
   'docs/SECURITY-REVIEW-v1.0.58.zh-CN.md',
+  'docs/SECURITY-REVIEW-v1.0.59.zh-CN.md',
+  'tests/conversation-scroll-restoration.test.cjs',
+  'tests/mobile-conversation-navigation.test.cjs',
   'electron/bridge/native-p2p-host.cjs',
   'electron/bridge/sync-transports/native-p2p-adapter.cjs',
   'renderer/native-p2p.html',
@@ -175,7 +185,9 @@ required.push(
 required.push(
   'electron/bridge/terminal-service.cjs',
   'tests/terminal-service.test.cjs',
-  'tests/terminal-ui.test.cjs'
+  'tests/terminal-ui.test.cjs',
+  'scripts/run-smoke-tests.mjs',
+  'tests/smoke-test-runner.test.cjs'
 )
 for (const relative of required) await access(path.join(root, relative))
 
@@ -388,8 +400,49 @@ if (themeIntegration.includes('applySessionLogDock') || themeIntegration.include
 }
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+const smokeRunnerContractTest = await readFile(path.join(root, 'tests/smoke-test-runner.test.cjs'), 'utf8')
+for (const contract of [
+  "Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'))",
+  'partitionSmokeTestFiles(files)',
+  'runSmokeTestPhases(plan.phases',
+  'error.exitCode === 23',
+  "error.signal === 'SIGTERM'"
+]) {
+  if (!smokeRunnerContractTest.includes(contract)) throw new Error(`Smoke runner executable contract test is missing: ${contract}`)
+}
+if (/\btest\.(?:skip|only|todo)\b/u.test(smokeRunnerContractTest)) throw new Error('Smoke runner contract tests must not be skipped, filtered, or marked todo.')
+if (pkg.scripts?.['test:smoke'] !== 'node scripts/run-smoke-tests.mjs') throw new Error('Smoke tests must use the deterministic two-phase Node runner.')
+const expectedTimingSensitiveTests = Object.freeze([
+  'desktop-schedules.test.cjs',
+  'mobile-sync-store.test.cjs',
+  'project-multi-project-isolation.test.cjs'
+])
+if (JSON.stringify(TIMING_SENSITIVE_TEST_BASENAMES) !== JSON.stringify(expectedTimingSensitiveTests)) throw new Error('Smoke runner timing-sensitive allowlist drifted.')
+const smokeFiles = await enumerateRootTestFiles(root)
+const directRootTests = (await readdir(path.join(root, 'tests'), { withFileTypes: true }))
+  .filter(entry => entry.name.endsWith('.test.cjs'))
+  .map(entry => {
+    if (!entry.isFile()) throw new Error(`Root smoke test must be a regular file: ${entry.name}`)
+    return `tests/${entry.name}`
+  })
+  .sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')))
+if (JSON.stringify(smokeFiles) !== JSON.stringify(directRootTests)) throw new Error('Smoke runner must enumerate every root test exactly once in UTF-8 byte order.')
+const smokePlan = createSmokeTestPlan({ repoRoot: root, files: smokeFiles, nodeExecutable: process.execPath })
+assertSmokeTestPhases(smokePlan.phases)
+const smokePhaseFiles = smokePlan.phases.flatMap(phase => phase.files).sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')))
+if (smokePhaseFiles.length !== new Set(smokePhaseFiles).size || JSON.stringify(smokePhaseFiles) !== JSON.stringify(smokeFiles)) throw new Error('Smoke phases must be exhaustive and mutually exclusive.')
+for (const file of smokeFiles) {
+  const isolated = smokePlan.partition.performance.includes(file)
+  if (isolated !== isTimingSensitiveTestFile(file)) throw new Error(`Smoke timing-sensitive partition mismatch: ${file}`)
+}
+const [ordinarySmokePhase, performanceSmokePhase] = smokePlan.phases
+if (ordinarySmokePhase.command !== process.execPath || performanceSmokePhase.command !== process.execPath || ordinarySmokePhase.options.cwd !== root || performanceSmokePhase.options.cwd !== root || ordinarySmokePhase.options.shell !== false || performanceSmokePhase.options.shell !== false || ordinarySmokePhase.options.stdio !== 'inherit' || performanceSmokePhase.options.stdio !== 'inherit') throw new Error('Smoke phases must use fresh Node processes at the exact repository root with inherited stdio and shell disabled.')
+if (JSON.stringify(ordinarySmokePhase.args) !== JSON.stringify(['--test', ...smokePlan.partition.ordinary]) || JSON.stringify(performanceSmokePhase.args) !== JSON.stringify(['--test', '--test-concurrency=1', ...smokePlan.partition.performance])) throw new Error('Smoke phases must run ordinary tests first and timing-sensitive tests serially without name filters.')
+const DESKTOP_RELEASE_CANDIDATE_VERSION = '1.0.59'
+const PREVIOUS_STABLE_DESKTOP_VERSION = '1.0.58'
 if (pkg.scripts?.['test:right-workspace-electron'] !== 'node scripts/test-right-workspace-electron.cjs') throw new Error('The real Electron right-workspace geometry gate is missing.')
 if (!/^\d+\.\d+\.\d+$/u.test(pkg.version)) throw new Error(`Expected a stable semantic package version, received ${pkg.version}`)
+if (pkg.version !== DESKTOP_RELEASE_CANDIDATE_VERSION) throw new Error(`Desktop release candidate identity must remain ${DESKTOP_RELEASE_CANDIDATE_VERSION}, received ${pkg.version}`)
 if (pkg.dependencies?.['dsh-progress-reporter']) throw new Error('dsh-progress-reporter must remain an opt-in community plugin instead of a bundled desktop dependency.')
 if (pkg.dependencies?.['@xterm/xterm'] !== '6.0.0' || pkg.dependencies?.['@xterm/addon-fit'] !== '0.11.0') {
   throw new Error('The integrated terminal must pin the audited xterm browser runtime exactly.')
@@ -511,20 +564,67 @@ for (const contract of [`CURRENT_MOBILE_VERSION = '${androidMobileVersion.versio
   if (!mobileSyncService.includes(contract)) throw new Error(`iPhone/iPad no-membership QR fallback contract missing: ${contract}`)
 }
 if (!iosProject.includes(`CURRENT_PROJECT_VERSION: ${mobileBuildNumber}`) || !iosProject.includes(`MARKETING_VERSION: ${mobileSourceVersion}`)) throw new Error('iOS/iPadOS source version must stay synchronized with the desktop integration version.')
-const publishedMobileVersion = androidMobileVersion.versionName
-const publishedMobileTag = publishedMobileVersion === pkg.version ? `v${publishedMobileVersion}` : `android-v${publishedMobileVersion}`
+const candidateMobileVersion = androidMobileVersion.versionName
+if (candidateMobileVersion !== pkg.version) throw new Error('Desktop and mobile release candidate identities must remain synchronized.')
+const stableDesktopTag = `v${PREVIOUS_STABLE_DESKTOP_VERSION}`
 const readme = await readFile(path.join(root, 'README.md'), 'utf8')
 for (const contract of [
-  `v${pkg.version}`,
-  `Harness-Desktop-${pkg.version}-win-x64.exe`,
-  `Harness-Desktop-${pkg.version}-portable-x64.exe`,
-  publishedMobileTag,
-  `Harness-Mobile-${publishedMobileVersion}-android-universal.apk`,
+  `下一发布候选：**v${pkg.version}**`,
+  `上一稳定版：**${stableDesktopTag}**`,
+  `releases/download/${stableDesktopTag}/Harness-Desktop-${PREVIOUS_STABLE_DESKTOP_VERSION}-win-x64.exe`,
+  `releases/download/${stableDesktopTag}/Harness-Desktop-${PREVIOUS_STABLE_DESKTOP_VERSION}-portable-x64.exe`,
+  `releases/download/${stableDesktopTag}/Harness-Mobile-${PREVIOUS_STABLE_DESKTOP_VERSION}-android-universal.apk`,
   'docs/assets/harness-desktop-hero.jpg',
   'releases/latest'
 ]) {
-  if (!readme.includes(contract)) throw new Error(`README release and discovery content is stale or incomplete: ${contract}`)
+  if (!readme.includes(contract)) throw new Error(`README candidate/stable discovery content is stale or incomplete: ${contract}`)
 }
+const changelog = await readFile(path.join(root, 'CHANGELOG.md'), 'utf8')
+const releaseNotes = await readFile(path.join(root, 'release-notes.md'), 'utf8')
+for (const [file, source, contract] of [
+  ['CHANGELOG.md', changelog, `## ${pkg.version}`],
+  ['release-notes.md', releaseNotes, `# Harness Desktop ${pkg.version}`],
+  ['release-notes.md', releaseNotes, `上一稳定版是不可变的 \`${stableDesktopTag}\``]
+]) {
+  if (!source.includes(contract)) throw new Error(`${file} release candidate identity is stale or incomplete: ${contract}`)
+}
+const securityReview59 = await readFile(path.join(root, 'docs/SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
+for (const contract of [
+  '# Harness Desktop v1.0.59 安全审查',
+  '候选源码',
+  '发布动态证据仍待唯一 resumable publisher',
+  '0.1.2-alpha.5',
+  'dsh-v0.1.2-alpha.5',
+  'db6bdc3576c2d4e7c965e8e3ed0c2a731eed87f5',
+  '官方 Schedule 与 Desktop `dsh-desktop-schedules` 必须同时存在',
+  '空 automatic round',
+  '全局自动接力',
+  '只有 Root 审批后',
+  'sent-time snapshot',
+  '`PI_AI_ERROR` / `Not Found`',
+  '单一 SSE',
+  '至少 44×44',
+  '整枚“子代理会话：可继续”按钮',
+  'Unicode 逐码点身份',
+  'current+4',
+  'hard watermark',
+  '*.promoted.json',
+  '`disabled | shadow | enabled`',
+  '32 MiB',
+  'fresh ACL',
+  '`path + hash + bytes + generation`',
+  '线性 predecessor',
+  '512 KiB',
+  '`.v5.bak`',
+  '`preview`、`evidence`',
+  '`outcome_unknown`',
+  '18 个不可变资产',
+  'GitHub→CNB'
+]) {
+  if (!securityReview59.includes(contract)) throw new Error(`v1.0.59 security review contract missing: ${contract}`)
+}
+if (/\b(?:TODO|TBD|FIXME)\b|<!--/u.test(securityReview59)) throw new Error('v1.0.59 security review must not contain placeholders or hidden comments.')
+// Retain the exact historical alpha.4 contract for audit-only candidate checks.
 const OFFICIAL_ALPHA4_VERSION = '0.1.2-alpha.4'
 const OFFICIAL_ALPHA4_DEPENDENCY_ROOTS = Object.freeze([
   '@deepseek-ai/dsh',
@@ -546,6 +646,7 @@ const REMOVED_DSH_ROOTS = new Set([
   '@deepseek-ai/dsh-session-persistence-sqlite'
 ])
 
+// Kept as an audit-only compatibility branch; the production package is gated below by alpha.5.
 export function assertOfficialAlpha4ReleaseContract(pkg) {
   const dependencies = pkg?.dependencies
   const optionalDependencies = pkg?.optionalDependencies
@@ -572,7 +673,50 @@ export function assertOfficialAlpha4ReleaseContract(pkg) {
   }
 }
 
-assertOfficialAlpha4ReleaseContract(pkg)
+const OFFICIAL_ALPHA5_VERSION = '0.1.2-alpha.5'
+const OFFICIAL_ALPHA5_DEPENDENCY_ROOTS = Object.freeze([
+  '@deepseek-ai/dsh',
+  '@deepseek-ai/dsh-anonymous-user-id', '@deepseek-ai/dsh-atomic-write', '@deepseek-ai/dsh-bash-local',
+  '@deepseek-ai/dsh-code-runtime', '@deepseek-ai/dsh-compaction', '@deepseek-ai/dsh-compaction-basic',
+  '@deepseek-ai/dsh-fs', '@deepseek-ai/dsh-invariants', '@deepseek-ai/dsh-output-retention',
+  '@deepseek-ai/dsh-sandbox', '@deepseek-ai/dsh-scope', '@deepseek-ai/dsh-session-telemetry',
+  '@deepseek-ai/dsh-session-title-llm', '@deepseek-ai/dsh-shell', '@deepseek-ai/dsh-spill',
+  '@deepseek-ai/dsh-subagent-in-process-driver', '@deepseek-ai/dsh-subprocess',
+  '@deepseek-ai/dsh-timeout', '@deepseek-ai/dsh-workflow'
+])
+const OFFICIAL_ALPHA5_OPTIONAL_ROOTS = Object.freeze([
+  '@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-jobs', '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-session-query', '@deepseek-ai/dsh-settings', '@deepseek-ai/dsh-util-time'
+])
+
+export function assertOfficialAlpha5ReleaseContract(pkg) {
+  const dependencies = pkg?.dependencies
+  const optionalDependencies = pkg?.optionalDependencies
+  if (!dependencies || Array.isArray(dependencies) || typeof dependencies !== 'object' || !optionalDependencies || Array.isArray(optionalDependencies) || typeof optionalDependencies !== 'object') {
+    throw new Error('Official alpha.5 release dependencies and optionalDependencies must be objects.')
+  }
+  const acceptedRoots = new Set([...OFFICIAL_ALPHA5_DEPENDENCY_ROOTS, ...OFFICIAL_ALPHA5_OPTIONAL_ROOTS])
+  if (acceptedRoots.size !== 26 || OFFICIAL_ALPHA5_DEPENDENCY_ROOTS.length !== 20 || OFFICIAL_ALPHA5_OPTIONAL_ROOTS.length !== 6) {
+    throw new Error('Official alpha.5 release root allowlist must contain exactly 26 unique roots.')
+  }
+  for (const root of OFFICIAL_ALPHA5_DEPENDENCY_ROOTS) {
+    if (dependencies[root] !== OFFICIAL_ALPHA5_VERSION) throw new Error(`Official alpha.5 DSH dependency root must be pinned exactly: ${root}`)
+  }
+  for (const root of OFFICIAL_ALPHA5_OPTIONAL_ROOTS) {
+    if (optionalDependencies[root] !== OFFICIAL_ALPHA5_VERSION) throw new Error(`Official alpha.5 DSH optional root must be pinned exactly: ${root}`)
+  }
+  for (const [section, entries] of [['dependencies', dependencies], ['optionalDependencies', optionalDependencies]]) {
+    for (const [name, version] of Object.entries(entries)) {
+      if (!name.startsWith('@deepseek-ai/dsh')) continue
+      if (REMOVED_DSH_ROOTS.has(name)) throw new Error(`Removed DSH root must not re-enter the release graph: ${name}`)
+      if (!acceptedRoots.has(name)) throw new Error(`Unexpected direct DSH root in the alpha.5 ${section} graph: ${name}`)
+      if (version !== OFFICIAL_ALPHA5_VERSION) throw new Error(`Official alpha.5 DSH root must use an exact version: ${name}`)
+    }
+  }
+}
+
+if (pkg.version === OFFICIAL_ALPHA4_VERSION) assertOfficialAlpha4ReleaseContract(pkg)
+assertOfficialAlpha5ReleaseContract(pkg)
 if (pkg.dependencies?.['@deepseek-ai/cordis-plugin-group'] !== '1.0.1') throw new Error('The DSH boot peer dependency must be pinned explicitly so electron-builder cannot prune it.')
 if (pkg.dependencies?.['@earendil-works/pi-ai'] !== '0.82.1') throw new Error('Dynamic provider model discovery must remain pinned to the official Harness catalog dependency.')
 if (pkg.dependencies?.yaml !== '2.9.0') throw new Error('Update-safe model routing requires pinned YAML document editing support.')

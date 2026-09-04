@@ -12,6 +12,11 @@ const PROJECT_TEAM_BOARD_CURSOR_VERSION = 1;
 const PROJECT_TEAM_BOARD_CURSOR_PREFIX = "ptb1";
 const DEFAULT_CURSOR_INTEGRITY_KEY = randomBytes(32);
 const TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed", "cancelled"]);
+const LIVE_STATUS_KINDS = Object.freeze(["registering", "queued", "running", "continuable", "submitted", "backpressure", "provider_transient", "lifecycle_timeout", "outcome_unknown", "paused", "closed", "idle"]);
+const LIVE_DIAGNOSTIC_CODES = Object.freeze(["PI_AI_ERROR", "SUBAGENT_ABNORMAL_END", "SUBAGENT_ABORTED", "SUBAGENT_MAX_TOKENS", "SUBAGENT_REFUSAL", "SUBAGENT_TIMEOUT", "SUBAGENT_PROVIDER_UNAVAILABLE", "SUBAGENT_ACTIVATION_TEARDOWN_FAILED", "SUBAGENT_ERROR", "AGENT_TEAMS_PROVIDER_TRANSIENT", "AGENT_TEAMS_LIFECYCLE_TIMEOUT", "AGENT_TEAMS_BACKPRESSURE", "AGENT_TEAMS_OUTCOME_UNKNOWN", "AGENT_TEAMS_RUNTIME_FAILURE"]);
+const LIVE_DIAGNOSTIC_CATEGORIES = Object.freeze(["provider_transient", "lifecycle_timeout", "backpressure", "outcome_unknown", "resource_limit", "policy", "cancellation", "teardown", "internal"]);
+const LIVE_DIAGNOSTIC_STAGES = Object.freeze(["registration", "admission", "provider_dispatch", "work_followup", "retirement", "recovery", "unknown"]);
+const LIVE_NEXT_ACTIONS = Object.freeze(["view_live_status", "wait_for_capacity", "retry_current_task", "reconcile_unknown_outcome", "review_submission", "resume_team", "none"]);
 
 function text(value, max) {
   if (typeof value !== "string") return "";
@@ -73,8 +78,101 @@ function teamAttentionCodes(team, taskFacts) {
   if (taskFacts.some((fact) => fact.blocked)) codes.add("blocked_task");
   return [...codes].sort();
 }
+function safeInteger(value, fallback = 0) { return Number.isSafeInteger(value) && value >= 0 ? value : fallback; }
+function taskEventSequence(task) {
+  return (task.lifecycleLedger ?? []).reduce((latest, event) => Math.max(latest, safeInteger(event?.sequence)), 0);
+}
+function diagnosticCategory(rawCode, rawCategory, rawMessage) {
+  const code = String(rawCode ?? "").toUpperCase(), category = String(rawCategory ?? "").toLowerCase(), message = String(rawMessage ?? "").toLowerCase();
+  if (LIVE_DIAGNOSTIC_CATEGORIES.includes(category)) return category;
+  if (code === "PI_AI_ERROR" || code.includes("PROVIDER") || message.includes("not found") || message.includes("provider")) return "provider_transient";
+  if (code.includes("TIMEOUT") || message.includes("timed out") || message.includes("timeout")) return "lifecycle_timeout";
+  if (code.includes("ADMISSION") || code.includes("QUEUE_FULL") || message.includes("capacity") || message.includes("backpressure")) return "backpressure";
+  if (code.includes("OUTCOME_UNKNOWN") || message.includes("outcome is unknown")) return "outcome_unknown";
+  return "internal";
+}
+function diagnosticStage(rawStage, category) {
+  const stage = String(rawStage ?? "").toLowerCase();
+  if (LIVE_DIAGNOSTIC_STAGES.includes(stage)) return stage;
+  if (stage.includes("register") || stage.includes("provision")) return "registration";
+  if (stage.includes("admission") || stage.includes("queue")) return "admission";
+  if (stage.includes("dispatch") || category === "provider_transient") return "provider_dispatch";
+  if (stage.includes("followup") || stage.includes("work")) return "work_followup";
+  if (stage.includes("retir") || stage.includes("shutdown") || stage.includes("stop")) return "retirement";
+  if (stage.includes("recover") || stage.includes("reconcil") || stage.includes("retry")) return "recovery";
+  return category === "backpressure" ? "admission" : category === "lifecycle_timeout" ? "work_followup" : "unknown";
+}
+function diagnosticNextAction(rawNextAction, category) {
+  const nextAction = String(rawNextAction ?? "").toLowerCase();
+  if (LIVE_NEXT_ACTIONS.includes(nextAction)) return nextAction;
+  if (category === "backpressure") return "wait_for_capacity";
+  if (category === "outcome_unknown") return "reconcile_unknown_outcome";
+  if (["provider_transient", "lifecycle_timeout"].includes(category)) return "retry_current_task";
+  return "view_live_status";
+}
+function safeLiveDiagnostic(value, fallback = {}) {
+  const source = value !== null && typeof value === "object" && !Array.isArray(value) ? value : {}, rawCode = source.errorCode ?? source.code ?? fallback.errorCode ?? fallback.code, rawMessage = source.message ?? fallback.errorMessage ?? fallback.message ?? fallback.error;
+  const category = diagnosticCategory(rawCode, source.category ?? fallback.category, rawMessage), stage = diagnosticStage(source.stage ?? source.errorStage ?? fallback.stage ?? fallback.errorStage, category);
+  const candidateCode = String(rawCode ?? "").toUpperCase(), normalizedCode = LIVE_DIAGNOSTIC_CODES.includes(candidateCode) ? candidateCode : category === "provider_transient" ? "AGENT_TEAMS_PROVIDER_TRANSIENT" : category === "lifecycle_timeout" ? "AGENT_TEAMS_LIFECYCLE_TIMEOUT" : category === "backpressure" ? "AGENT_TEAMS_BACKPRESSURE" : category === "outcome_unknown" ? "AGENT_TEAMS_OUTCOME_UNKNOWN" : "AGENT_TEAMS_RUNTIME_FAILURE";
+  return { errorCode: normalizedCode, category, stage, retryable: typeof source.retryable === "boolean" ? source.retryable : typeof fallback.retryable === "boolean" ? fallback.retryable : ["provider_transient", "lifecycle_timeout", "backpressure"].includes(category), partialOutputPresent: source.partialOutputPresent === true || fallback.partialOutputPresent === true, nextAction: diagnosticNextAction(source.nextAction ?? fallback.nextAction, category) };
+}
+function taskFailureNeedsResolution(team, task) {
+  if (!["pending", "in_progress"].includes(task.state)) return false;
+  if (task.assigneeSessionId === undefined) return task.state === "pending";
+  return (team.members ?? []).some((member) => member.sessionId === task.assigneeSessionId && member.state === "failed");
+}
+function deliveredRecoveryCoversFailure(team, member) {
+  const failedAt = Date.parse(member.updatedAt ?? "");
+  if (!Number.isFinite(failedAt)) return false;
+  return (team.memberRecoveries ?? []).some((receipt) => receipt.memberId === member.id && receipt.status === "delivered" && (Date.parse(receipt.updatedAt ?? "") || 0) >= failedAt);
+}
+function memberFailureNeedsResolution(team, member) {
+  if (member.state !== "failed") return false;
+  if (member.shutdownUnconfirmed === true || member.stopUnconfirmed === true) return true;
+  if ((team.tasks ?? []).some((task) => task.assigneeSessionId === member.sessionId && taskFailureNeedsResolution(team, task))) return true;
+  return !deliveredRecoveryCoversFailure(team, member);
+}
+function newestDiagnostic(team, { unresolvedOnly = false } = {}) {
+  const candidates = [];
+  const add = (diagnostic, fallback, at) => { if (diagnostic !== undefined || fallback !== undefined) candidates.push({ diagnostic: safeLiveDiagnostic(diagnostic, fallback), at: typeof at === "string" ? at : team.updatedAt }); };
+  for (const member of team.members ?? []) if (member.state === "failed" && (!unresolvedOnly || memberFailureNeedsResolution(team, member))) add(member.terminalDiagnostic ?? member.diagnostic, { error: member.error }, member.updatedAt);
+  for (const receipt of team.memberRecoveries ?? []) {
+    const member = (team.members ?? []).find((candidate) => candidate.id === receipt.memberId);
+    if (receipt.status === "outcome_unknown" || receipt.status === "failed" && member?.state === "failed" && (!unresolvedOnly || memberFailureNeedsResolution(team, member))) add(receipt.terminalDiagnostic, receipt, receipt.updatedAt);
+  }
+  for (const entry of team.provisioningQueue ?? []) if ((unresolvedOnly ? ["outcome_unknown"] : ["failed", "outcome_unknown"]).includes(entry.status)) add(entry.terminalDiagnostic, entry, entry.updatedAt);
+  for (const task of team.tasks ?? []) {
+    if (unresolvedOnly ? !taskFailureNeedsResolution(team, task) : task.state !== "pending" || task.assigneeSessionId !== undefined && !(team.members ?? []).some((member) => member.sessionId === task.assigneeSessionId && member.state === "failed")) continue;
+    for (const event of task.interruptionHistory ?? []) if (event.errorCode !== undefined || event.errorStage !== undefined || event.terminalDiagnostic !== undefined) add(event.terminalDiagnostic, event, event.at);
+  }
+  candidates.sort((left, right) => Date.parse(right.at ?? 0) - Date.parse(left.at ?? 0));
+  return candidates[0];
+}
+function admissionAggregate(team) {
+  const queue = team.provisioningQueue ?? [], unresolvedRecoveries = (team.memberRecoveries ?? []).filter((receipt) => ["prepared", "outcome_unknown"].includes(receipt.status)), unresolvedInterruptions = (team.tasks ?? []).filter((task) => taskFailureNeedsResolution(team, task)).flatMap((task) => task.interruptionHistory ?? []);
+  const sources = [...queue, ...unresolvedRecoveries, ...unresolvedInterruptions].filter((entry) => entry?.admission !== null && typeof entry?.admission === "object" && !Array.isArray(entry.admission));
+  sources.sort((left, right) => (Date.parse(right.updatedAt ?? right.at ?? "") || 0) - (Date.parse(left.updatedAt ?? left.at ?? "") || 0));
+  const latest = sources[0]?.admission ?? {};
+  return { active: safeInteger(latest.active), queued: Math.max(queue.filter((entry) => entry.status === "queued").length, safeInteger(latest.queued)), quarantined: safeInteger(latest.quarantined), limit: safeInteger(latest.limit), waitMs: safeInteger(latest.waitMs) };
+}
+function teamLiveStatus(team, taskFacts, state) {
+  const queue = team.provisioningQueue ?? [], diagnosticCandidate = newestDiagnostic(team, { unresolvedOnly: true }), admission = admissionAggregate(team), queuedMemberIds = new Set(queue.map((entry) => entry.memberId));
+  const counts = {
+    registering: queue.filter((entry) => ["provisioning", "dispatching"].includes(entry.status)).length + team.members.filter((member) => member.state === "provisioning" && !queuedMemberIds.has(member.id)).length,
+    queued: queue.filter((entry) => entry.status === "queued").length,
+    running: team.members.filter((member) => member.kind === "worker" && member.state === "running").length,
+    continuable: team.members.filter((member) => member.kind === "worker" && ["ready", "idle"].includes(member.state) && (member.mode === undefined || member.mode === "continuable")).length,
+    submitted: team.tasks.filter((task) => task.state === "submitted").length,
+    backpressure: admission.queued > 0 && admission.limit > 0 && admission.active >= admission.limit ? admission.queued : 0,
+    providerTransient: diagnosticCandidate?.diagnostic.category === "provider_transient" ? 1 : 0,
+    lifecycleTimeout: diagnosticCandidate?.diagnostic.category === "lifecycle_timeout" ? 1 : 0,
+    outcomeUnknown: queue.filter((entry) => entry.status === "outcome_unknown").length + (team.memberRecoveries ?? []).filter((receipt) => receipt.status === "outcome_unknown").length + team.tasks.filter((task) => (task.externalEffects ?? []).some((effect) => effect.outcome === "outcome_unknown")).length,
+  };
+  const kind = state === "paused" ? "paused" : state === "closed" ? "closed" : counts.outcomeUnknown > 0 ? "outcome_unknown" : counts.lifecycleTimeout > 0 ? "lifecycle_timeout" : counts.providerTransient > 0 ? "provider_transient" : counts.backpressure > 0 ? "backpressure" : counts.registering > 0 ? "registering" : counts.queued > 0 ? "queued" : counts.running > 0 ? "running" : counts.submitted > 0 ? "submitted" : counts.continuable > 0 ? "continuable" : "idle";
+  return { kind, counts, revision: safeInteger(team.revision, 1), pauseEpoch: safeInteger(team.pauseEpoch), eventSequence: team.tasks.reduce((latest, task) => Math.max(latest, taskEventSequence(task)), 0), updatedAt: team.updatedAt, attention: taskFacts.some((fact) => fact.attention) };
+}
 function boardRevisionCursor(projectKey, teams, teamState) {
-  const revision = teams.map((team) => [team.id, team.revision ?? 1, teamState(team), team.updatedAt]);
+  const revision = teams.map((team) => [team.id, team.revision ?? 1, team.pauseEpoch ?? 0, teamState(team), team.updatedAt, ...team.tasks.map((task) => [task.id, task.revision ?? 1, taskEventSequence(task), task.updatedAt])]);
   return `project_board_${createHash("sha256").update(JSON.stringify([projectKey, revision])).digest("hex").slice(0, 32)}`;
 }
 function cursorKeyBytes(value) {
@@ -122,9 +220,10 @@ function prepareProjectTeamBoard(projectKey, projectTeams, { teamState = (team) 
     const teamTaskStats = emptyTaskStats();
     const tasks = taskFacts.map(({ task, blocked, attention }) => {
       const stateKey = taskStateKey(task.state); teamTaskStats.total += 1; if (stateKey !== undefined) teamTaskStats[stateKey] += 1; if (task.state === "submitted") teamTaskStats.acceptanceRequired += 1; if (blocked) teamTaskStats.blocked += 1; if (attention) teamTaskStats.attention += 1;
-      return { id: task.id, title: text(task.title, UI_PROJECT_TEAM_BOARD_TASK_TITLE_CHARS), status: task.state, ownerDutyName: ownerDutyName(team, task), blocked, attention, updatedAt: task.updatedAt };
+      return { id: task.id, title: text(task.title, UI_PROJECT_TEAM_BOARD_TASK_TITLE_CHARS), status: task.state, ownerDutyName: ownerDutyName(team, task), blocked, attention, revision: safeInteger(task.revision, 1), eventSequence: taskEventSequence(task), updatedAt: task.updatedAt };
     }).sort(newestFirst);
-    teamRecords.push({ summary: { id: team.id, name: text(team.name, UI_PROJECT_TEAM_BOARD_TEAM_NAME_CHARS), status: teamState(team), planPhase: team.plan?.phase ?? "active", memberCount: team.members.filter((member) => member.state !== "retired").length, taskStats: teamTaskStats, attention: { required: attentionCodes.length > 0, codes: attentionCodes }, updatedAt: team.updatedAt }, tasks });
+    const lifecycleState = teamState(team), liveStatus = teamLiveStatus(team, taskFacts, lifecycleState);
+    teamRecords.push({ summary: { id: team.id, name: text(team.name, UI_PROJECT_TEAM_BOARD_TEAM_NAME_CHARS), status: lifecycleState, planPhase: team.plan?.phase ?? "active", revision: safeInteger(team.revision, 1), pauseEpoch: safeInteger(team.pauseEpoch), eventSequence: liveStatus.eventSequence, memberCount: team.members.filter((member) => member.state !== "retired").length, taskStats: teamTaskStats, liveStatus, attention: { required: attentionCodes.length > 0, codes: attentionCodes }, updatedAt: team.updatedAt }, tasks });
   }
   return { projectKey, cursor: boardRevisionCursor(projectKey, ordered, teamState), totalTeams: ordered.length, totalTaskStats, totalAttentionTeams, teamRecords };
 }
@@ -170,17 +269,20 @@ function paginatePreparedProjectTeamBoard(prepared, { cursor, cursorIntegrityKey
 function decorateProjectTeamBoardRecovery(board, projectTeams, sessionId, { teamState = (team) => team.state } = {}) {
   if (board === null || typeof board !== "object" || board.available !== true || !Array.isArray(board.teams)) return board;
   const teamsById = new Map(projectTeams.map((team) => [team.id, team])), projections = [];
+  let hasRootDetail = false;
   const teams = board.teams.map((summary, index) => {
     const team = teamsById.get(summary.id), state = team === undefined ? undefined : teamState(team);
     if (team === undefined || team.rootLeadSessionId !== sessionId || !["active", "paused"].includes(state)) return summary;
+    const diagnosticCandidate = newestDiagnostic(team, { unresolvedOnly: true }), liveStatus = { ...(summary.liveStatus ?? {}), admission: admissionAggregate(team), ...(diagnosticCandidate === undefined ? {} : { diagnostic: diagnosticCandidate.diagnostic, diagnosticAt: diagnosticCandidate.at }) };
+    hasRootDetail = true;
     const allUnresolved = (team.memberRecoveries ?? []).filter((receipt) => receipt.status === "outcome_unknown"), unresolvedMemberIds = new Set(allUnresolved.map((receipt) => receipt.memberId));
-    const allMembers = state === "active" ? team.members.filter((member) => member.kind === "worker" && member.state === "failed" && !unresolvedMemberIds.has(member.id) && team.tasks.some((task) => task.assigneeSessionId === member.sessionId && !["completed", "cancelled"].includes(task.state))) : [];
-    if (allUnresolved.length === 0 && allMembers.length === 0) return summary;
+    const allMembers = state === "active" ? team.members.filter((member) => member.kind === "worker" && member.state === "failed" && !unresolvedMemberIds.has(member.id) && memberFailureNeedsResolution(team, member)) : [];
+    if (allUnresolved.length === 0 && allMembers.length === 0) return { ...summary, liveStatus };
     const recovery = { teamId: team.id, expectedRevision: team.revision ?? 1, paused: state === "paused", members: [], membersTruncated: allMembers.length > 0, unresolved: [], unresolvedRemaining: allUnresolved.length, unresolvedTruncated: allUnresolved.length > 0 };
     projections.push({ index, team, recovery, allUnresolved, allMembers });
-    return { ...summary, memberRecovery: recovery };
+    return { ...summary, liveStatus, memberRecovery: recovery };
   });
-  if (projections.length === 0) return board;
+  if (!hasRootDetail) return board;
   const decorated = { ...board, teams };
   if (Buffer.byteLength(JSON.stringify(decorated)) > UI_PROJECT_TEAM_BOARD_MAX_BYTES) throw cursorError("project team board recovery metadata exceeds the page payload budget", "AGENT_TEAMS_PROJECT_BOARD_PAGE_TOO_LARGE");
   let includedReceipts = 0, receiptBudgetExhausted = false;

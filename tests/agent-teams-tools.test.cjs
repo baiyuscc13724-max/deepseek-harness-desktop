@@ -20,6 +20,13 @@ function sliceBetween(source, startMarker, endMarker) {
   return source.slice(start, end)
 }
 
+function projectKeyForDialect(value, platform = process.platform) {
+  const dialect = platform === 'win32' ? path.win32 : path.posix
+  const resolved = dialect.resolve(value)
+  const scope = platform === 'win32' ? resolved.replace(/\\/gu, '/').toLocaleLowerCase('en-US') : resolved
+  return createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', scope])).digest('hex')
+}
+
 async function invokeWebRoute(route,body,{header=true}={}) {
   const req=Readable.from([Buffer.from(JSON.stringify(body))]); req.method='POST'; req.url='/api/agent-teams/action'; req.headers={host:'127.0.0.1:14193',origin:'http://127.0.0.1:14193',...(header?{'x-harness-agent-teams':'1'}:{})}
   let status=0,text=''; const res={headersSent:false,writeHead(value){status=value;this.headersSent=true},end(chunk=''){text+=String(chunk)}}
@@ -132,16 +139,34 @@ test('real top-level project sessions use a separate confirmed Host launch plane
   assert.match(host, /args\.action==="recover_root"[\s\S]*requireDirectHumanRoot\(ctx,execution\)[\s\S]*rootFailureEvidence[\s\S]*prepareRootRecovery[\s\S]*reservePreparedProjectRootRecovery[\s\S]*continueProjectRootRecovery/u)
   assert.match(host, /new ProjectCollaborationService\(\{ store, actorResolver, earlyResolutionAuthorizer, rootFailureResolver \}\)/u)
   assert.match(launch, /createHmac\("sha256", callerSalt\)[\s\S]*agent-teams-caller-root-v1/u)
+  const workspaceIdentity = sliceBetween(launch, 'function pathDialect', 'function normalizeBoundary')
+  const resourceIdentity = sliceBetween(launch, 'function normalizeBoundary', 'function requirementsText')
+  assert.doesNotMatch(workspaceIdentity, /\.normalize\(["']NFKC["']\)/u)
+  assert.doesNotMatch(resourceIdentity, /\.normalize\(["'](?:NFC|NFD|NFKC|NFKD)["']\)/u)
+  assert.match(resourceIdentity, /segments\.includes\("\.\."\)/u)
+  assert.match(resourceIdentity, /segment !== "\."/u)
+  assert.match(resourceIdentity, /normalized\.length > 1[\s\S]*normalized\.length === 0/u)
   assert.doesNotMatch(host, /deriveCapability\("session-launch"|slot_actor_ref/u)
   assert.doesNotMatch(tool, /name: "team_spawn"|startContinuable\(|ctx\.subagents\./u)
+})
+
+test('authorization fixture project keys preserve Unicode siblings in both path dialects', () => {
+  for (const [platform, base] of [['linux', '/workspace'], ['win32', 'C:\\Workspace']]) {
+    const dialect = platform === 'win32' ? path.win32 : path.posix
+    assert.notEqual(projectKeyForDialect(dialect.join(base, 'Caf\u00e9'), platform), projectKeyForDialect(dialect.join(base, 'Cafe\u0301'), platform))
+    assert.notEqual(projectKeyForDialect(dialect.join(base, 'Project-Ａ'), platform), projectKeyForDialect(dialect.join(base, 'Project-A'), platform))
+    const noisy = platform === 'win32' ? 'C:\\Workspace\\.\\Lane\\\\' : '/workspace//./Lane/'
+    const clean = platform === 'win32' ? 'c:/workspace/lane' : '/workspace/Lane'
+    assert.equal(projectKeyForDialect(noisy, platform), projectKeyForDialect(clean, platform))
+  }
 })
 
 test('registered Host agent/error observer routes exact roots through two canonical project lanes', async () => {
   const mod=await import(`${pathToFileURL(hostFile).href}?root-error-observer=${Date.now()}`),fx=await registeredProjectToolsFixture(mod,'root-error-observer')
   const lanes=new Map()
   try {
-    const normalize=value=>{const normalized=value.trim().replace(/\\/gu,'/').replace(/\/+$/u,'').normalize('NFKC');return process.platform==='win32'?normalized.toLocaleLowerCase('en-US'):normalized},canonical=value=>createHash('sha256').update(JSON.stringify(['agent-teams-project-v1',normalize(value)])).digest('hex')
-    const selectedKeys=[];for(const [index,root] of fx.roots.slice(0,2).entries()){const cwd=path.join(fx.temporary,`Project-${index}`),canonicalProjectKey=canonical(cwd),projectRef=`project_observer_lane_${index}`,key=Buffer.alloc(32,index+11);root.session.header.cwd=cwd;lanes.set(canonicalProjectKey,{projectRef,key,databasePath:path.join(fx.temporary,`observer-${index}.sqlite`),root})}
+    const selectedKeys=[],names=['Project-Ａ','Project-A'];for(const [index,root] of fx.roots.slice(0,2).entries()){const cwd=path.join(fx.temporary,names[index]),canonicalProjectKey=projectKeyForDialect(cwd),projectRef=`project_observer_lane_${index}`,key=Buffer.alloc(32,index+11);root.session.header.cwd=cwd;lanes.set(canonicalProjectKey,{projectRef,key,databasePath:path.join(fx.temporary,`observer-${index}.sqlite`),root})}
+    assert.equal(lanes.size, 2, 'full-width and ASCII sibling projects must retain distinct authorization lanes')
     const registry={requiresCanonicalProjectKey:true,localProjectCollaborationContext:async({canonicalProjectKey})=>{selectedKeys.push(canonicalProjectKey);const lane=lanes.get(canonicalProjectKey);assert.ok(lane,'canonical lane missing');const internal=Object.freeze({}),context={projectRef:lane.projectRef,databasePath:lane.databasePath};Object.defineProperties(context,{execution:{value:internal},actorResolver:{value:(candidate,requested)=>{assert.equal(candidate,internal);assert.equal(requested,lane.projectRef);return {projectRef:requested}}},keyProvider:{value:requested=>{assert.equal(requested,lane.projectRef);return Buffer.from(lane.key)}},dispose:{value:()=>{}}});return Object.freeze(context)}}
     mod.observeProjectRootFailures(fx.ctx,registry,fx.projectSessionLaunch,Promise.resolve())
     const member={id:'member-not-root',status:'running',session:{header:{cwd:fx.temporary},events:[]}};fx.agents.push(member);await fx.emit('agent/error',{agent:member,error:new Error('private member failure')});await fx.emit('agent/error',{agent:{...fx.roots[0]},error:new Error('forged clone')});assert.equal(fx.failureObserverCalls.length,0)

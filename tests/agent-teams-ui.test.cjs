@@ -5,12 +5,27 @@ const { createHash } = require('node:crypto')
 const path = require('node:path')
 const { mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises')
 const { pathToFileURL } = require('node:url')
+const vm = require('node:vm')
 
 const clientFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'client.js')
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
+const boardFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'project-team-board.js')
 
 async function clientSource() {
   return readFile(clientFile, 'utf8')
+}
+
+async function clientLiveTestModule(React, extras = {}) {
+  const source = await clientSource()
+  const injection = '    exports.__liveTest = { teamSnapshotVersion, teamSnapshotClock, olderTeamSnapshot, safeTeamLiveStatus, useTeamState };\n    exports.apply = apply;'
+  const instrumented = source.replace('    exports.apply = apply;', injection)
+  assert.notEqual(instrumented, source, 'client test seam must inject exactly once')
+  let exports
+  const window = extras.window || {}
+  window.__ModuleLoader__ = { load(definition) { exports = definition.factory((name) => { if (name === 'react') return React; throw new Error(`unexpected module ${name}`) }) } }
+  const context = vm.createContext(Object.assign({ window, document: extras.document, EventSource: extras.EventSource, fetch: extras.fetch, requestAnimationFrame: extras.requestAnimationFrame, cancelAnimationFrame: extras.cancelAnimationFrame, setTimeout: extras.setTimeout || setTimeout, clearTimeout: extras.clearTimeout || clearTimeout, console, URL, URLSearchParams }, extras.globals || {}))
+  vm.runInContext(instrumented, context, { filename: clientFile })
+  return { hooks: exports.__liveTest, window, context }
 }
 
 test('Agent Teams owns a native conversation view without a duplicate modal or dock', async () => {
@@ -90,9 +105,21 @@ test('M5 foundation status uses human next steps and never exposes implementatio
   assert.doesNotMatch(foundationSource, /dangerouslySetInnerHTML|\.innerHTML/u)
 })
 
-test('Agent Teams coalesces snapshots and recovers SSE without synchronized polling storms', async () => {
+test('Agent Teams coalesces monotonic snapshots and recovers one SSE subscription without polling storms', async () => {
   const source = await clientSource()
   assert.match(source, /function teamSnapshotVersion\(snapshot\)/u)
+  assert.match(source, /board\.cursor \|\| ""/u)
+  assert.match(source, /function teamSnapshotClock\(snapshot, selectedTeamId, stream\)/u)
+  assert.match(source, /function teamScopedSemanticMarker\(fullTeam, boardTeam\) \{\s*return JSON\.stringify\(\[fullTeam \?\? null, boardTeam \?\? null\]\);\s*\}/u)
+  assert.match(source, /semanticMarker: teamScopedSemanticMarker\(fullTeam, boardTeam\)/u)
+  assert.match(source, /taskClocks\[id\] = \{ revision: safeLiveInteger\(task\.revision\), eventSequence: safeLiveInteger\(task\.eventSequence\) \}/u)
+  assert.match(source, /function olderTeamSnapshot\(next, current\)/u)
+  assert.match(source, /next\.semanticMarker !== current\.semanticMarker\) return true/u)
+  assert.match(source, /next\.pauseEpoch < current\.pauseEpoch/u)
+  assert.match(source, /next\.revision < current\.revision/u)
+  assert.match(source, /nextTasks\[id\]\.revision < currentTasks\[id\]\.revision/u)
+  assert.match(source, /nextTasks\[id\]\.eventSequence < currentTasks\[id\]\.eventSequence/u)
+  assert.match(source, /olderTeamSnapshot\(nextClock, pendingClock \|\| clockRef\.current\)/u)
   assert.match(source, /version === versionRef\.current/u)
   assert.match(source, /requestAnimationFrame === "function" \? requestAnimationFrame\(work\) : setTimeout\(work, 16\)/u)
   assert.match(source, /publishFrame = requestFrame\(flushSnapshot\)/u)
@@ -101,20 +128,330 @@ test('Agent Teams coalesces snapshots and recovers SSE without synchronized poll
   assert.match(source, /addEventListener\("visibilitychange", onVisibilityChange\)/u)
   assert.match(source, /if \(hidden\(\)\) \{ closeSource\(true\); return; \}/u)
   assert.match(source, /if \(!hidden\(\)\) \{ openSource\(\); if \(!source\) load\(false, streamEpoch\)/u)
-  assert.match(source, /current\.onopen = null;[\s\S]*current\.onmessage = null;[\s\S]*current\.onerror = null;[\s\S]*current\.close\(\)/u)
+  assert.match(source, /current\.onopen = null;[\s\S]*current\.onmessage = null;[\s\S]*current\.onerror = null;[\s\S]*removeEventListener\(name, sourceUpdate\)[\s\S]*current\.close\(\)/u)
   assert.match(source, /generation === loadGeneration && \(expectedStreamEpoch === undefined \|\| streamEpoch === expectedStreamEpoch\)/u)
-  assert.match(source, /streamEpoch \+= 1; clearSnapshotFallback\(\); queueSnapshot/u)
+  assert.match(source, /streamEpoch \+= 1; streamNeedsSnapshot = false; clearSnapshotFallback\(\); setConnection\("live"\); queueSnapshot/u)
+  assert.match(source, /isAuthoritativeSnapshot = event\.type === "snapshot"/u)
+  assert.match(source, /streamNeedsSnapshot && !isAuthoritativeSnapshot/u)
   assert.match(source, /snapshotFallbackTimer = setTimeout/u)
   assert.match(source, /typeof current\.addEventListener !== "function" \|\| typeof current\.close !== "function"/u)
   assert.match(source, /if \(current && typeof current\.close === "function"\) current\.close\(\)/u)
   assert.match(source, /if \(!alive \|\| hidden\(\) \|\| sourceOpen \|\| pollTimer\) return/u)
   assert.match(source, /if \(!alive \|\| hidden\(\) \|\| source\) return/u)
   assert.match(source, /if \(loadPromise\) return loadPromise/u)
-  assert.match(source, /Math\.min\(30000, 4000 \* Math\.pow\(2, Math\.min\(pollAttempt, 3\)\)\)/u)
+  assert.match(source, /Math\.min\(60000, 15000 \* Math\.pow\(2, Math\.min\(pollAttempt, 2\)\)\)/u)
   assert.match(source, /Math\.random\(\) \* 0\.4/u)
-  assert.match(source, /Native EventSource keeps reconnecting/u)
+  assert.match(source, /Native EventSource reconnects while visible/u)
   assert.doesNotMatch(source, /setInterval\(/u)
   assert.doesNotMatch(source, /source\.onerror = function \(\) \{[^}]*source\.close\(\)/u)
+
+  const taskDetailStart = source.indexOf('    function useTaskDetailState(')
+  const taskDetailEnd = source.indexOf('    function projectTaskResponseError(', taskDetailStart)
+  const taskDetail = source.slice(taskDetailStart, taskDetailEnd)
+  assert.doesNotMatch(taskDetail, /EventSource|setTimeout|setInterval/u, 'task detail reuses shared snapshot refreshes instead of opening another subscription/timer')
+  assert.match(taskDetail, /snapshotVersion/u)
+})
+
+test('live status is sanitized, accessible, bounded, and labels historical chat separately', async () => {
+  const source = await clientSource()
+  for (const marker of ['注册中', '排队中', '执行中', '可续用', '提交待验收', '容量背压', '提供方暂时异常', '生命周期超时', '结果待核对', '发送时快照', '未采信', '查看实时状态']) assert.ok(source.includes(marker), `missing live status copy: ${marker}`)
+  assert.match(source, /TEAM_LIVE_STATUS_EVENT = "harness-desktop:agent-team-live-status"/u)
+  assert.match(source, /publishSafeTeamLiveStatus\(next, selectedTeamId\)/u)
+  assert.match(source, /publishSafeTeamLiveStatus\(null, selectedTeamId\)/u)
+  assert.match(source, /window\.__DSH_AGENT_TEAM_LIVE_STATUS__ = detail/u)
+  assert.match(source, /new window\.CustomEvent\(TEAM_LIVE_STATUS_EVENT, \{ detail: detail \}\)/u)
+  assert.match(source, /role: "status", "aria-live": "polite", "aria-atomic": "true"/u)
+  assert.match(source, /className: "dat-live-status"/u)
+  assert.match(source, /\.dat-live-status \.dat-btn\{min-width:44px;min-height:44px\}/u)
+  assert.match(source, /@media\(prefers-reduced-motion:reduce\)[^\n]*\.dat-live-status \*/u)
+  assert.match(source, /\.slice\(0, 48\)/u)
+  const safeStart = source.indexOf('    function safeTeamLiveStatus(')
+  const safeEnd = source.indexOf('    function publishSafeTeamLiveStatus(', safeStart)
+  const safeProjection = source.slice(safeStart, safeEnd)
+  assert.match(safeProjection, /fallbackWorkers = \(team\.members \|\| \[\]\)\.filter\(function \(member\) \{ return member\.kind === "worker"; \}\)/u)
+  assert.match(safeProjection, /\(member\.mode === void 0 \|\| member\.mode === "continuable"\)/u)
+  for (const forbidden of ['sessionId', 'runId', 'claimId', 'path', 'stack', 'provider', 'prompt', 'output', 'lastAssistantMessage']) assert.doesNotMatch(safeProjection, new RegExp(`(?:source|team|rawDiagnostic)\\.${forbidden}\\b|["']${forbidden}["']\\s*:`, 'u'), `live status reads forbidden field: ${forbidden}`)
+  const { hooks } = await clientLiveTestModule({})
+  const queued = hooks.safeTeamLiveStatus({ team: { id: 'team-queued', status: 'active', revision: 2, pauseEpoch: 0, updatedAt: '2026-01-01T00:00:00.000Z', members: [{ id: 'worker-queued', name: 'Queue', kind: 'worker', state: 'provisioning' }], tasks: [], provisioningQueue: [{ name: 'Queue', status: 'queued' }] } }, 'team-queued')
+  assert.equal(queued.kind, 'queued')
+  assert.equal(queued.counts.queued, 1)
+  assert.equal(queued.counts.registering, 0, 'queued placeholders are not double-counted as registering')
+  const leadOnly = hooks.safeTeamLiveStatus({ team: { id: 'team-lead-only', status: 'active', revision: 1, pauseEpoch: 0, updatedAt: '2026-01-01T00:00:00.000Z', members: [{ id: 'lead', kind: 'lead', state: 'ready' }], tasks: [] } }, 'team-lead-only')
+  assert.equal(leadOnly.kind, 'idle', 'full-team fallback never exposes the root lead as a continuable subagent')
+  assert.equal(leadOnly.counts.running, 0)
+  assert.equal(leadOnly.counts.continuable, 0)
+  const modeBoundary = hooks.safeTeamLiveStatus({ team: { id: 'team-mode-boundary', status: 'active', revision: 1, pauseEpoch: 0, updatedAt: '2026-01-01T00:00:00.000Z', members: [{ id: 'lead', kind: 'lead', state: 'ready', mode: 'continuable' }, { id: 'implicit', kind: 'worker', state: 'ready' }, { id: 'continuable', kind: 'worker', state: 'idle', mode: 'continuable' }, { id: 'one-shot', kind: 'worker', state: 'ready', mode: 'one-shot' }], tasks: [] } }, 'team-mode-boundary')
+  assert.equal(modeBoundary.kind, 'continuable')
+  assert.equal(modeBoundary.counts.continuable, 2, 'fallback matches Host: only ready/idle workers with omitted or continuable mode count; one-shot and lead do not')
+  assert.doesNotMatch(source, /dangerouslySetInnerHTML|\.innerHTML/u)
+})
+
+test('terminal lifecycle mutation reaches the Host board and safe realtime card exactly once, then recovered state wins', async () => {
+  const source = await clientSource()
+  assert.match(source, /var liveStatus = safeTeamLiveStatus\(snapshot, team && teamId\(team\)\);[\s\S]*h\(LiveTeamStatusCard, \{ t: t, status: liveStatus,/u)
+  const mod = await import(`${pathToFileURL(pluginFile).href}?terminal-live-boundary=${Date.now()}`)
+  const { hooks } = await clientLiveTestModule({})
+  const timestamp = '2026-01-01T00:00:00.000Z'
+  const worker = { id: 'worker-id', sessionId: 'worker-session', name: 'Worker', role: 'work', kind: 'worker', state: 'running', runId: 'run-1', createdAt: timestamp, updatedAt: timestamp }
+  const message = { id: 'message-id', fromSessionId: 'worker-session', toSessionId: 'lead', status: 'queued', body: 'Immutable sent-time prose.', createdAt: timestamp, queuedAt: timestamp }
+  const team = {
+    id: 'team-live-boundary', rootLeadSessionId: 'lead', name: 'Team', objective: 'Boundary', projectKey: 'c'.repeat(64), state: 'active', revision: 1, pauseEpoch: 0,
+    createdAt: timestamp, updatedAt: timestamp,
+    members: [{ id: 'lead:lead', sessionId: 'lead', name: 'Lead', role: 'root lead and coordinator', kind: 'lead', state: 'ready', createdAt: timestamp, updatedAt: timestamp }, worker],
+    tasks: [{ id: 'task-id', title: 'Current work', state: 'in_progress', assigneeSessionId: worker.sessionId, revision: 1, dependsOn: [], lifecycleLedger: [], interruptionHistory: [], externalEffects: [], createdAt: timestamp, updatedAt: timestamp }], messages: [message]
+  }
+  const document = { teams: [team] }, hostPushes = []
+  const store = {
+    hasManagedMember: id => id === worker.sessionId,
+    async mutate(change) {
+      const before = JSON.stringify(document)
+      const result = change(document)
+      if (JSON.stringify(document) !== before) {
+        team.revision += 1
+        const board = mod.decorateProjectTeamBoardRecovery(mod.createProjectTeamBoard(team.projectKey, [team]), [team], 'lead')
+        hostPushes.push({ enabled: true, team, teams: [team], projectTeamBoard: board })
+      }
+      return result
+    }
+  }
+  const reconciler = mod.createSubagentEventReconciler({ logger: { warn: assert.fail } }, store, Promise.resolve(), 60_000)
+  const rawDiagnostic = {
+    code: 'PI_AI_ERROR', message: 'Not Found: raw provider detail', retryable: true, partialOutputPresent: true,
+    provider: 'secret-provider', sessionId: 'secret-session', runId: 'secret-run', claimId: 'secret-claim', path: 'C:\\secret', stack: 'secret-stack', output: 'secret-output'
+  }
+  try {
+    const failure = reconciler.enqueue('end', { id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic, lastAssistantMessage: [{ type: 'text', text: 'secret partial output' }] })
+    const duplicate = reconciler.enqueue('end', { id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic })
+    await reconciler.flush(); await Promise.all([failure, duplicate])
+    assert.equal(hostPushes.length, 1)
+    assert.equal(team.revision, 2)
+    assert.equal(worker.state, 'failed')
+    assert.equal(worker.terminalDiagnostic.category, 'provider_transient')
+    assert.equal(hostPushes[0].projectTeamBoard.teams[0].liveStatus.kind, 'provider_transient')
+    const failedLive = hooks.safeTeamLiveStatus(hostPushes[0], team.id)
+    assert.equal(failedLive.kind, 'provider_transient')
+    assert.deepEqual(JSON.parse(JSON.stringify(failedLive.diagnostic)), { errorCode: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch', retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task' })
+    assert.doesNotMatch(JSON.stringify(hostPushes[0].projectTeamBoard), /secret-provider|secret-session|secret-run|secret-claim|secret-stack|secret-output|secret partial output/u)
+    assert.equal(message.body, 'Immutable sent-time prose.')
+
+    const repeated = reconciler.enqueue('end', { id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic })
+    await reconciler.flush(); await repeated
+    assert.equal(hostPushes.length, 1, 'a terminal semantic no-op performs no Host publication')
+
+    const recovery = reconciler.enqueue('start', { id: worker.sessionId, runId: 'run-2' })
+    await reconciler.flush(); await recovery
+    assert.equal(hostPushes.length, 2)
+    assert.equal(team.revision, 3)
+    const recoveredLive = hooks.safeTeamLiveStatus(hostPushes[1], team.id)
+    assert.equal(recoveredLive.kind, 'running')
+    assert.equal(recoveredLive.diagnostic, null)
+    assert.equal(message.body, 'Immutable sent-time prose.', 'historical sent prose remains unchanged after recovery')
+
+    const stale = reconciler.enqueue('end', { id: worker.sessionId, runId: 'run-1', stopReason: 'error', terminalDiagnostic: rawDiagnostic })
+    await reconciler.flush(); await stale
+    assert.equal(hostPushes.length, 2, 'a stale prior-run failure cannot publish over recovered live state')
+  } finally {
+    reconciler.close()
+  }
+})
+
+test('decorated root live status keeps only unresolved taskless diagnostics across the safe client bridge', async () => {
+  const board = await import(`${pathToFileURL(boardFile).href}?unresolved-live=${Date.now()}-${Math.random()}`)
+  const { hooks } = await clientLiveTestModule({ useState() { throw new Error('unused') }, useEffect() {}, useRef() { return { current: null } }, startTransition(work) { work() } })
+  const failedAt = '2026-01-01T00:00:05.000Z'
+  const failedWorker = { id: 'worker', sessionId: 'worker-session', name: 'Worker', role: 'work', kind: 'worker', state: 'failed', updatedAt: failedAt, terminalDiagnostic: { errorCode: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch', retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task', provider: 'secret-provider', output: 'secret-output' } }
+  const taskless = { id: 'taskless-live', rootLeadSessionId: 'lead', name: 'Taskless', objective: 'Diagnostic boundary', projectKey: 'd'.repeat(64), state: 'active', revision: 1, pauseEpoch: 0, createdAt: failedAt, updatedAt: failedAt, plan: { phase: 'active' }, members: [{ id: 'lead:lead', sessionId: 'lead', name: 'Lead', role: 'lead', kind: 'lead', state: 'ready', createdAt: failedAt, updatedAt: failedAt }, failedWorker], tasks: [], messages: [], memberRecoveries: [] }
+  const safeProjection = value => {
+    const projectTeamBoard = board.decorateProjectTeamBoardRecovery(board.createProjectTeamBoard(value.projectKey, [value]), [value], value.rootLeadSessionId)
+    return hooks.safeTeamLiveStatus({ team: value, teams: [value], projectTeamBoard }, value.id)
+  }
+
+  const unresolved = safeProjection(taskless)
+  assert.equal(unresolved.kind, 'provider_transient')
+  assert.deepEqual(JSON.parse(JSON.stringify(unresolved.diagnostic)), { errorCode: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch', retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task' }, 'unrecovered failure keeps only the bounded current diagnostic')
+  assert.doesNotMatch(JSON.stringify(unresolved), /secret-provider|secret-output/u)
+
+  const delivered = structuredClone(taskless)
+  delivered.revision = 2
+  delivered.updatedAt = '2026-01-01T00:00:06.000Z'
+  delivered.memberRecoveries = [{ requestId: 'delivered-recovery', action: 'retry', phase: 'followup_returned', status: 'delivered', memberId: failedWorker.id, updatedAt: failedAt }]
+  const deliveredLive = safeProjection(delivered)
+  assert.equal(deliveredLive.kind, 'idle')
+  assert.equal(deliveredLive.diagnostic, null, 'delivered taskless failure cannot be reinserted by root decoration')
+
+  const retired = structuredClone(taskless)
+  retired.revision = 2
+  retired.updatedAt = '2026-01-01T00:00:06.000Z'
+  retired.members.find(member => member.id === failedWorker.id).state = 'retired'
+  delete retired.members.find(member => member.id === failedWorker.id).terminalDiagnostic
+  const retiredLive = safeProjection(retired)
+  assert.equal(retiredLive.kind, 'idle')
+  assert.equal(retiredLive.diagnostic, null, 'retired-and-cleared taskless failure stays only in durable lifecycle history')
+})
+
+test('fake push accepts bumped restart reconciliation, rejects stale/duplicate state, gates reconnect, and fully cleans up', async () => {
+  const states = [], stateSets = [], refs = [], effects = []
+  let stateIndex = 0, refIndex = 0
+  const React = {
+    createElement() {},
+    useState(initial) {
+      const index = stateIndex++
+      if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial
+      stateSets[index] ||= 0
+      return [states[index], (value) => { states[index] = typeof value === 'function' ? value(states[index]) : value; stateSets[index] += 1 }]
+    },
+    useRef(initial) { const index = refIndex++; refs[index] ||= { current: initial }; return refs[index] },
+    useEffect(effect) { effects.push(effect) },
+    startTransition(work) { work() }
+  }
+  const instances = []
+  class FakeEventSource {
+    constructor(url) { this.url = url; this.listeners = new Map(); this.closed = false; instances.push(this) }
+    addEventListener(name, listener) { if (!this.listeners.has(name)) this.listeners.set(name, new Set()); this.listeners.get(name).add(listener) }
+    removeEventListener(name, listener) { this.listeners.get(name)?.delete(listener) }
+    close() { this.closed = true }
+    emit(name, data, lastEventId = '') { const event = { type: name, data: JSON.stringify(data), lastEventId }; for (const listener of this.listeners.get(name) || []) listener(event); if (name === 'message' && this.onmessage) this.onmessage(event) }
+  }
+  let nextTimer = 1, nextFrame = 1
+  const timers = new Map(), frames = new Map(), windowEvents = [], documentListeners = new Map()
+  const fakeWindow = {
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail } },
+    dispatchEvent(event) { windowEvents.push(event); return true }
+  }
+  const fakeDocument = {
+    visibilityState: 'visible',
+    addEventListener(name, listener) { documentListeners.set(name, listener) },
+    removeEventListener(name, listener) { if (documentListeners.get(name) === listener) documentListeners.delete(name) }
+  }
+  const { hooks } = await clientLiveTestModule(React, {
+    window: fakeWindow,
+    document: fakeDocument,
+    EventSource: FakeEventSource,
+    fetch: () => new Promise(() => {}),
+    requestAnimationFrame: (work) => { const id = nextFrame++; frames.set(id, work); return id },
+    cancelAnimationFrame: (id) => frames.delete(id),
+    setTimeout: (work, delay) => { const id = nextTimer++; timers.set(id, { work, delay }); return id },
+    clearTimeout: (id) => timers.delete(id)
+  })
+  function snapshot(revision, taskRevision, sequence, extra = {}) {
+    const task = { id: 'task-live', state: revision >= 3 ? 'in_progress' : 'pending', revision: taskRevision, eventSequence: sequence, updatedAt: `2026-01-01T00:00:0${revision}.000Z` }
+    const team = { id: 'team-live', state: 'active', revision, pauseEpoch: 0, eventSequence: sequence, updatedAt: task.updatedAt, plan: { phase: 'active', hash: `plan-${revision}`, authorization: { state: 'human_attested' } }, members: [{ id: 'worker', kind: 'worker', state: 'running' }], tasks: [task] }
+    const summary = { id: team.id, status: 'active', revision, pauseEpoch: 0, eventSequence: sequence, updatedAt: team.updatedAt, tasks: [{ id: task.id, status: task.state, revision: taskRevision, eventSequence: sequence, updatedAt: task.updatedAt }], liveStatus: Object.assign({ kind: 'running', counts: { running: 1 }, revision, pauseEpoch: 0, eventSequence: sequence, updatedAt: team.updatedAt }, extra) }
+    return { enabled: true, cursor: `state-${revision}-${sequence}`, team, teams: [team], projectTeamBoard: { cursor: `board-${revision}-${sequence}`, teams: [summary] } }
+  }
+
+  const mixedCurrent = hooks.teamSnapshotClock(snapshot(5, 8, 8), 'team-live')
+  const mixedStale = hooks.teamSnapshotClock({ ...snapshot(5, 9, 9), team: { ...snapshot(5, 9, 9).team, tasks: [{ id: 'task-live', revision: 7, eventSequence: 10 }] }, teams: [{ ...snapshot(5, 9, 9).team, tasks: [{ id: 'task-live', revision: 7, eventSequence: 10 }] }] }, 'team-live')
+  assert.equal(hooks.olderTeamSnapshot(mixedStale, mixedCurrent), true, 'a newer aggregate cannot hide one task revision regression')
+  const equalRevisionState = snapshot(5, 5, 5)
+  const equalRevisionCurrent = hooks.teamSnapshotClock(equalRevisionState, 'team-live', { streamId: 'old-stream', sequence: 9 })
+  const equalRevisionRewrite = structuredClone(equalRevisionState)
+  equalRevisionRewrite.team.members[0].state = 'ready'; equalRevisionRewrite.team.updatedAt = '2026-01-01T00:00:09.000Z'; equalRevisionRewrite.teams[0] = equalRevisionRewrite.team
+  equalRevisionRewrite.projectTeamBoard.teams[0].updatedAt = equalRevisionRewrite.team.updatedAt; equalRevisionRewrite.projectTeamBoard.teams[0].liveStatus.kind = 'continuable'; equalRevisionRewrite.projectTeamBoard.teams[0].liveStatus.updatedAt = equalRevisionRewrite.team.updatedAt
+  assert.equal(hooks.olderTeamSnapshot(hooks.teamSnapshotClock(equalRevisionRewrite, 'team-live', { streamId: 'new-stream', sequence: 1 }), equalRevisionCurrent), true, 'equal team revision rejects a selected-team semantic rewrite even on a new stream')
+  assert.equal(hooks.olderTeamSnapshot(hooks.teamSnapshotClock(snapshot(5, 6, 6), 'team-live', { streamId: 'new-stream', sequence: 1 }), equalRevisionCurrent), true, 'task advancement without its required team revision bump is rejected')
+  const genuineRevisionAdvance = structuredClone(equalRevisionState)
+  genuineRevisionAdvance.team.revision = 6; genuineRevisionAdvance.team.updatedAt = '2026-01-01T00:00:06.000Z'; genuineRevisionAdvance.team.messages = [{ id: 'authorized-message', body: 'revision-bound update' }]; genuineRevisionAdvance.teams[0] = genuineRevisionAdvance.team
+  genuineRevisionAdvance.projectTeamBoard.teams[0].revision = 6; genuineRevisionAdvance.projectTeamBoard.teams[0].liveStatus.revision = 6; genuineRevisionAdvance.projectTeamBoard.teams[0].updatedAt = genuineRevisionAdvance.team.updatedAt
+  assert.equal(hooks.olderTeamSnapshot(hooks.teamSnapshotClock(genuineRevisionAdvance, 'team-live', { streamId: 'new-stream', sequence: 1 }), equalRevisionCurrent), false, 'a genuine team revision bump authorizes the complete selected-team projection change')
+  const configOnly = structuredClone(equalRevisionState); configOnly.config = { maxMembers: 7 }
+  assert.equal(hooks.olderTeamSnapshot(hooks.teamSnapshotClock(configOnly, 'team-live', { streamId: 'new-stream', sequence: 1 }), equalRevisionCurrent), false, 'a new-stream global configuration change does not regress the selected team')
+  const otherTeamOnly = structuredClone(configOnly); otherTeamOnly.teams.push({ id: 'other-team', state: 'active', revision: 2, pauseEpoch: 0, updatedAt: '2026-01-01T00:00:10.000Z', members: [], tasks: [] }); otherTeamOnly.projectTeamBoard.teams.push({ id: 'other-team', status: 'active', revision: 2, pauseEpoch: 0, updatedAt: '2026-01-01T00:00:10.000Z', tasks: [] })
+  assert.equal(hooks.olderTeamSnapshot(hooks.teamSnapshotClock(otherTeamOnly, 'team-live', { streamId: 'new-stream', sequence: 2 }), equalRevisionCurrent), false, 'another team may advance on a new stream while the selected team remains identical')
+
+  hooks.useTeamState('root-session', 'team-live')
+  assert.equal(effects.length, 1)
+  const cleanup = effects[0]()
+  assert.equal(instances.length, 1, 'team state opens exactly one EventSource')
+  const stream = instances[0]
+  stream.onopen()
+  const first = snapshot(2, 2, 2, { diagnostic: { errorCode: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch', retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task', sessionId: 'secret-session', provider: 'secret-provider', output: 'secret-output' } })
+  stream.emit('snapshot', first)
+  assert.equal(frames.size, 1)
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(stateSets[0], 1)
+  assert.equal(states[0].team.revision, 2)
+  const firstLiveEvent = windowEvents.find((event) => event.type === 'harness-desktop:agent-team-live-status' && event.detail)
+  assert.ok(firstLiveEvent)
+  assert.deepEqual(JSON.parse(JSON.stringify(firstLiveEvent.detail.diagnostic)), { errorCode: 'PI_AI_ERROR', category: 'provider_transient', stage: 'provider_dispatch', retryable: true, partialOutputPresent: true, nextAction: 'retry_current_task' })
+  assert.doesNotMatch(JSON.stringify(firstLiveEvent.detail), /secret-session|secret-provider|secret-output/u)
+
+  stream.emit('snapshot', first)
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(stateSets[0], 1, 'semantic duplicate causes zero render')
+  stream.emit('snapshot', snapshot(3, 3, 3))
+  stream.emit('snapshot', snapshot(2, 2, 2))
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(stateSets[0], 2)
+  assert.equal(states[0].team.revision, 3, 'out-of-order stale snapshot cannot overwrite pending newer state')
+
+  stream.onerror()
+  stream.onopen()
+  stream.emit('update', snapshot(4, 4, 4))
+  assert.equal(frames.size, 0, 'reconnect rejects updates until an authoritative snapshot arrives')
+  stream.emit('snapshot', snapshot(4, 4, 4))
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(states[0].team.revision, 4)
+  const reconciledAfterRestart = snapshot(5, 5, 5)
+  reconciledAfterRestart.team.members[0].state = 'ready'
+  reconciledAfterRestart.teams[0] = reconciledAfterRestart.team
+  reconciledAfterRestart.projectTeamBoard.teams[0].revision = 5
+  reconciledAfterRestart.projectTeamBoard.teams[0].liveStatus.revision = 5
+  stream.emit('snapshot', reconciledAfterRestart)
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(states[0].team.revision, 5, 'the already-mounted client accepts Host restart reconciliation only through its bumped authoritative revision')
+  assert.equal(states[0].team.members[0].state, 'ready')
+  const rendersAtRevisionFive = stateSets[0]
+  const sameRevisionRewrites = [
+    ['member name and role', draft => { draft.team.members[0].name = 'Forged name'; draft.team.members[0].role = 'Forged role'; draft.teams[0] = draft.team }],
+    ['task title/result/submission', draft => { draft.team.tasks[0].title = 'Forged title'; draft.team.tasks[0].result = { summary: 'forged result' }; draft.team.tasks[0].submission = { submittedAt: '2026-01-01T00:00:09.000Z', summary: 'forged submission' }; draft.teams[0] = draft.team }],
+    ['plan and authorization', draft => { draft.team.plan.hash = 'forged-plan-hash'; draft.team.plan.authorization = { state: 'forged' }; draft.team.autopilot = { status: 'forged' }; draft.teams[0] = draft.team }],
+    ['messages events and recovery', draft => { draft.team.messages = [{ id: 'forged-message', body: 'forged body', status: 'delivered' }]; draft.team.tasks[0].lifecycleLedger = [{ kind: 'forged-event', sequence: 5 }]; draft.team.memberRecoveries = [{ requestId: 'forged-recovery', status: 'delivered' }]; draft.teams[0] = draft.team }],
+    ['board task title and result', draft => { draft.projectTeamBoard.teams[0].tasks[0].title = 'Forged board title'; draft.projectTeamBoard.teams[0].tasks[0].result = { summary: 'forged board result' } }],
+    ['board recovery and attention', draft => { draft.projectTeamBoard.teams[0].memberRecovery = { teamId: 'team-live', members: [{ id: 'forged-worker', name: 'Forged' }] }; draft.projectTeamBoard.teams[0].attention = { required: true, codes: ['forged'] } }]
+  ]
+  sameRevisionRewrites.forEach(([label, mutate], index) => {
+    const draft = structuredClone(reconciledAfterRestart)
+    draft.cursor = `equal-revision-${index}`; draft.projectTeamBoard.cursor = `equal-revision-board-${index}`
+    mutate(draft)
+    stream.emit('snapshot', { state: draft, live: { streamId: `rewrite-stream-${index}`, sequence: 1 } })
+    for (const work of [...frames.values()]) work(); frames.clear()
+    assert.equal(stateSets[0], rendersAtRevisionFive, `same-revision ${label} rewrite is rejected with zero render`)
+  })
+  assert.equal(states[0].team.members[0].state, 'ready')
+  const configAdvance = structuredClone(reconciledAfterRestart)
+  configAdvance.cursor = 'config-advance'; configAdvance.config = { maxMembers: 7, maxActiveTurns: 4 }
+  stream.emit('snapshot', { state: configAdvance, live: { streamId: 'new-stream', sequence: 2 } })
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(stateSets[0], rendersAtRevisionFive + 1, 'new-stream global config advances without changing selected-team revision')
+  assert.equal(states[0].config.maxMembers, 7)
+  const otherTeamAdvance = structuredClone(configAdvance)
+  otherTeamAdvance.cursor = 'other-team-advance'; otherTeamAdvance.teams.push({ id: 'other-team', state: 'active', revision: 2, pauseEpoch: 0, updatedAt: '2026-01-01T00:00:10.000Z', members: [], tasks: [] }); otherTeamAdvance.projectTeamBoard.cursor = 'other-team-board-advance'; otherTeamAdvance.projectTeamBoard.teams.push({ id: 'other-team', status: 'active', revision: 2, pauseEpoch: 0, updatedAt: '2026-01-01T00:00:10.000Z', tasks: [] })
+  stream.emit('snapshot', { state: otherTeamAdvance, live: { streamId: 'new-stream', sequence: 3 } })
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(stateSets[0], rendersAtRevisionFive + 2, 'another team may advance on the new stream while the selected team stays byte-equivalent')
+  assert.equal(states[0].teams.length, 2)
+  stream.emit('snapshot', snapshot(4, 4, 4))
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(states[0].team.revision, 5, 'an old pre-restart revision arriving later cannot regress the reconciled snapshot')
+  const stopped = snapshot(6, 6, 6)
+  stopped.team.state = 'paused'; stopped.team.pauseEpoch = 2
+  stopped.teams[0] = stopped.team
+  stopped.projectTeamBoard.teams[0].status = 'paused'; stopped.projectTeamBoard.teams[0].pauseEpoch = 2; stopped.projectTeamBoard.teams[0].liveStatus.kind = 'paused'; stopped.projectTeamBoard.teams[0].liveStatus.pauseEpoch = 2
+  stream.emit('snapshot', stopped)
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(states[0].team.state, 'paused')
+  const preStop = snapshot(99, 99, 99)
+  stream.emit('snapshot', preStop)
+  for (const work of [...frames.values()]) work(); frames.clear()
+  assert.equal(states[0].team.state, 'paused', 'a pre-Stop/revoked epoch cannot overwrite the authoritative paused state even with a larger revision')
+  cleanup()
+  assert.equal(stream.closed, true)
+  assert.equal([...stream.listeners.values()].reduce((count, set) => count + set.size, 0), 0)
+  assert.equal(frames.size, 0)
+  assert.equal(timers.size, 0)
+  assert.equal(documentListeners.size, 0)
+  assert.equal(windowEvents.at(-1).detail, null, 'session/HMR cleanup clears the shared safe status')
 })
 
 test('Agent Teams prompts through the official composer and never auto-sends', async () => {
@@ -348,12 +685,15 @@ test('settings start with automatic continuation selected and save without a pre
   assert.match(source, /settingsMaxActiveTurns: "同时工作的成员上限（所有团队合计）"/u)
   assert.match(source, /两项数值都是上限，不是要求 AI 固定凑满的人数/u)
   assert.match(source, /若希望最多 8 名成员同时启动，请将两项都设为 8/u)
-  assert.match(source, /settingsAutopilotEnabled: "自动接力，不用发送“继续”"/u)
+  assert.match(source, /settingsAutopilotEnabled: "全局自动接力，不用发送“继续”"/u)
   assert.match(source, /settingsAutopilotMaxAdditionalRounds: "每个目标最多自动多做几轮"/u)
-  assert.match(source, /自动接力默认勾选/u)
-  assert.match(source, /即使还没有团队也会记住此偏好/u)
-  assert.match(source, /Automatic continuation is selected by default/u)
-  assert.match(source, /the preference is remembered even before a team exists/u)
+  assert.match(source, /这是全局默认/u)
+  assert.match(source, /无需为每个团队重复保存/u)
+  assert.match(source, /直接创建团队、提交计划或确认两阶段恢复时继承精确授权/u)
+  assert.match(source, /普通 Goal 轮、状态读取和进度消息不能恢复/u)
+  assert.match(source, /This is a global default/u)
+  assert.match(source, /not once per team/u)
+  assert.match(source, /directly create a team, commit its plan, or confirm two-phase Resume/u)
   assert.match(source, /Normal member waiting is parked; only a durable task submission, member failure, or dependency change wakes the lead/u)
   assert.match(source, /setHostAuthorization\(state\.autopilotAuthorization \|\| null\)/u)
   assert.match(source, /authorization\.pauseEpoch, authorization\.teamScopeHash/u)
@@ -384,7 +724,7 @@ test('settings restore authoritative state after an active-team disable conflict
 
 test('switching conversation views only stops UI subscriptions, never the running team', async () => {
   const source = await clientSource()
-  assert.match(source, /alive = false;\s*acceptRef\.current = function \(\) \{\};\s*closeSource\(true\);\s*if \(publishFrame !== null\) cancelFrame\(publishFrame\)/u)
+  assert.match(source, /alive = false;\s*acceptRef\.current = function \(\) \{\};\s*closeSource\(true\);\s*pendingSnapshot = null;\s*pendingClock = null;\s*clockRef\.current = null;\s*if \(publishFrame !== null\) cancelFrame\(publishFrame\)/u)
   assert.match(source, /removeEventListener\("visibilitychange", onVisibilityChange\)/u)
   assert.doesNotMatch(source, /sessions\.(?:interrupt|stop)|team_shutdown|member-stop|postAction\([^\n]+["']close["']/u)
   assert.match(source, /Switching teams or views never stops background members/u)
@@ -439,7 +779,8 @@ test('failed-member recovery is explicit, root-only, accessible, responsive, and
   assert.match(source, /recoveryMarkDelivered: "确认已送达"/u)
   assert.match(source, /recoveryMarkNotDelivered: "Confirm not delivered"/u)
   assert.match(source, /confirm: true/u)
-  assert.doesNotMatch(source, /memberStateKind\(member\) === "(?:running|idle|ready|retired|completed)"[^]*?h\(MemberRecoveryPanel/u)
+  assert.match(source, /failedMembers\.length && props\.canRecover \? h\(MemberRecoveryPanel/u)
+  assert.doesNotMatch(source, /memberStateKind\(member\) === "(?:running|idle|ready|retired|completed)"\s*&& props\.canRecover/u)
 })
 
 test('task board keeps cancellation in history and exposes only four truthful active columns', async () => {

@@ -118,7 +118,7 @@ struct WorkbenchView: UIViewRepresentable {
       const buttonAttribute = 'data-harness-mobile-add-photo';
       const inputAttribute = 'data-harness-mobile-photo-input';
 
-      const deliverFiles = (textarea, input) => {
+      const deliverFiles = (composerInput, input) => {
         const files = Array.from(input.files || []);
         if (!files.length) return;
         const clipboardData = {
@@ -129,17 +129,17 @@ struct WorkbenchView: UIViewRepresentable {
         };
         const event = new Event('paste', { bubbles: true, cancelable: true });
         Object.defineProperty(event, 'clipboardData', { configurable: true, value: clipboardData });
-        textarea.dispatchEvent(event);
+        composerInput.dispatchEvent(event);
         input.value = '';
-        textarea.focus({ preventScroll: true });
+        composerInput.focus({ preventScroll: true });
       };
 
       const install = () => {
         document.querySelectorAll('[data-composer-card]').forEach(card => {
-          const textarea = card.querySelector('textarea[data-phase]');
+          const composerInput = card.querySelector('[data-composer-input][data-phase], textarea[data-phase]');
           const commandButton = card.querySelector('button[aria-haspopup="listbox"]');
           const tools = commandButton && commandButton.parentElement;
-          if (!textarea || !tools || card.querySelector(`[${buttonAttribute}]`)) return;
+          if (!composerInput || !tools || card.querySelector(`[${buttonAttribute}]`)) return;
 
           const input = document.createElement('input');
           input.type = 'file';
@@ -149,7 +149,7 @@ struct WorkbenchView: UIViewRepresentable {
           input.setAttribute('aria-hidden', 'true');
           input.tabIndex = -1;
           input.style.display = 'none';
-          input.addEventListener('change', () => deliverFiles(textarea, input));
+          input.addEventListener('change', () => deliverFiles(composerInput, input));
 
           const button = document.createElement('button');
           button.type = 'button';
@@ -172,16 +172,18 @@ struct WorkbenchView: UIViewRepresentable {
             'touch-action:manipulation'
           ].join(';');
           const syncDisabled = () => {
-            button.disabled = textarea.disabled || textarea.readOnly;
+            const workspaceTrigger = composerInput.getAttribute('data-phase') === 'inert' && composerInput.getAttribute('aria-haspopup') === 'menu';
+            const legacyTextarea = String(composerInput.tagName || '').toLowerCase() === 'textarea';
+            button.disabled = composerInput.disabled || composerInput.getAttribute('aria-disabled') === 'true' || (!workspaceTrigger && (legacyTextarea ? composerInput.readOnly : composerInput.getAttribute('contenteditable') !== 'true'));
             button.style.opacity = button.disabled ? '0.45' : '1';
           };
           button.addEventListener('click', event => {
             event.preventDefault();
             if (!button.disabled) input.click();
           });
-          new MutationObserver(syncDisabled).observe(textarea, {
+          new MutationObserver(syncDisabled).observe(composerInput, {
             attributes: true,
-            attributeFilter: ['disabled', 'readonly', 'data-phase']
+            attributeFilter: ['disabled', 'readonly', 'aria-disabled', 'contenteditable', 'data-phase']
           });
           syncDisabled();
           card.appendChild(input);

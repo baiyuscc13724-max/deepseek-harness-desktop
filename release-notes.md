@@ -1,80 +1,75 @@
-# Harness Desktop 1.0.58
+# Harness Desktop 1.0.59
 
-v1.0.58 候选将官方 Harness 核心兼容升级到 `0.1.2-alpha.4`，修复桌面启动认证、Runtime 并发启动和陈旧进程残留造成的真实失败；把手机同步入口接回可信 shell bridge；并将 Agent Teams 从“耗尽轮次后等待用户回复继续”改为受安全门禁约束的事件驱动自动驾驶。本版本不通过关闭认证、扩大权限、自动重放未知副作用或无限重试换取可用性。
+v1.0.59 候选将官方 Harness 完整依赖图升级到 `0.1.2-alpha.5`，并集中解决长时间、多团队、多设备运行中已经复现的可靠性与性能问题：Agent Teams 的全局自动接力、计划重提交、admission/recovery/retirement、实时状态和 Unicode 工作区边界得到收敛；长会话滚动、手机编辑器与导航恢复当前官方合同；Mobile Sync、Schedule、设备预览、缓存维护和团队投影改为可回滚、可验证的增量路径。
 
-上一稳定版是不可变的 `v1.0.57`。本文件描述候选源码与发布要求，不代表 v1.0.58 已经公开或已进入 stable feed。
+上一稳定版是不可变的 `v1.0.58`。其 Tag、Release 资产、签名 Android APK、组件、`release-manifest.json`、镜像与 stable feeds 均不移动、不覆盖。本文件描述 `v1.0.59` 候选源码与发布要求，不代表新版本已经公开、已经签名或已经进入 stable feed。
 
-## 官方核心 alpha.4、启动、认证与 Runtime 收敛
+## 官方 Harness `0.1.2-alpha.5`
 
-- 当前随包官方 Harness Runtime 及完整 required/optional DSH 依赖图精确固定为 `0.1.2-alpha.4`；此前的 `0.1.2-alpha.3` 与更早的 `0.1.2-alpha.2` 只作为可复核的历史迁移基线保留，不再描述当前运行时或发布目标。
-- Desktop 已适配 alpha.4 的 branded session sequence、事件所有权、projector/node-store 与 Host follow-up queue 合同，并继续通过精确版本、依赖图闭包、产物哈希、语义锚点和幂等 patch 门禁阻止漂移。
-- 自研 Agent Teams 的 Host 一次性授权、root/project/body 绑定、runtime epoch 撤销、任务账本与事件驱动自动驾驶仍是唯一权威；官方核心升级没有替代、双写或旁路这些边界。
-- 官方工作台 token 跳转由同一个 `persist:harness` Electron session 跟随，使认证 Cookie 在真正承载 WebView/RPC/WebSocket 的 session 内建立；每一跳仍限制为精确 loopback authority，跨来源、缺失 Cookie、循环或非成功 clean `/` 均 fail closed。
-- 同一 runtime home 的并发启动使用 singleflight，共享同一在途结果，不再同时拉起多个官方 Runtime。
-- 启动前清理能够精确证明属于 Harness Desktop 且已经失去可访问 Web 服务的陈旧进程；PID/身份/归属证据不足时不会猜测终止。
-- Runtime readiness 必须通过真实本地 Web 认证链，不以“进程存在”或“端口被占用”冒充成功。
-- 可选 MCP 连接和首次工具同步具有启动上界，由 supervisor 收敛；非强制 MCP 不会无限阻塞基础 Web 服务，配置为 fatal 的连接失败仍保持失败语义。
+- 根依赖与完整 required/optional DSH 闭包来自官方 npm 注册表，并精确固定到 `0.1.2-alpha.5`；lockfile、Desktop 自有插件 peerDependencies、运行时补丁、精确哈希与语义锚点同步更新，漂移继续 fail closed。
+- Desktop 适配 alpha.5 的 branded session sequence、事件所有权、projector/node-store、Host follow-up queue、Schedule catalog、Remote stream 与受限 lifecycle/activation seam；官方 Schedule 与 Desktop `dsh-desktop-schedules` 同时注册、互不冒充或覆盖，既有 session append-only events 不改写。历史 alpha.2–alpha.4 分支只作为兼容审计基线保留。
+- 官方 experimental Team 不接管或双写 Desktop 的 Project/Team、canonical-project 隔离、submission acceptance ledger、routing receipts、locks、recovery、cursors、evidence 与 external-effect 状态。
+- 独立官方集成 `@zseven-w/dsh-android` 继续使用自身 `0.1.0-rc.4`，不跟随 Desktop 产品版本号。
 
-## 手机同步入口
+## Agent Teams：安全自动接力与生命周期收敛
 
-- 官方工作台里的手机同步入口通过受限 guest preload 把固定动作交给可信 Electron shell bridge，再打开已有手机同步面板。
-- bridge 不提供通用 IPC 或任意方法转发；只接受受信 guest/webContents 和既定动作。
-- 仍只有一个手机同步入口和一份设备状态。配对密钥、局域网/P2P/WSS 传输、权限、撤销与加密边界不变。
-- 左侧栏“设置”和“手机同步”现在保留独立点击区与 8px 间距；展开态横向排列，折叠态纵向错开，不再覆盖或连成一个按钮。
+- “自动接力”由版本化 Desktop Host 设置证明全局持久化；直接用户建队、计划提交和两阶段 Resume 只在 root、canonical project、Goal、team、pause epoch、plan/settings hash 与 authorization epoch 全部一致时派生或重绑权限。
+- 修复安全计划重提交被误判为授权丢失、导致普通 Goal round 反复停住的问题。缺失或撤销 grant 不会被普通轮次静默补发，只显示明确的恢复路径；Stop、跨项目、未知能力、文件冲突与未知副作用继续 fail closed。
+- 等待态使用包含 Goal、grant、action 与 scheduler 事实的语义 fingerprint，在权威写入前判重；重复 idle reconciliation 不再写 store、发布同值状态或制造空转唤醒。没有新 durable transition 或 eligibility 变化的空 automatic round 会直接 park，不消耗 Goal 追加预算。
+- 成员可为至少两个持续、独立且不重叠的结果提交持久扩员提案；提案本身不生成嵌套团队、隐藏成员或执行权限，只有 Root 通过后才会持久化任务并创建用户可见的平级成员，仍由 Root 复核容量、文件/资源冲突、成本、安全边界与可验证验收标准。
+- 受 admission backpressure 的可见成员按持久 FIFO 接力；reservation/accepted/started/end/drain 精确绑定 generation、child、run 与 task，旧 run 不能释放新 lease，重复提案或旧释放事件不消耗 Goal round。
+- retry/replace 在真正进入可能产生副作用的 dispatch 前保持确定性的 `not_started`；admission timeout、Stop 与晚到 lifecycle 按精确阶段收敛。graceful retirement 可由同一 run 的晚到完成回执安全结束，现场不明时仍不自动重放。
+- `PI_AI_ERROR` / `Not Found` 只映射为当前 generation/run 的有界、脱敏诊断类别、阶段与修复动作；原始 provider 文本、stack、路径、prompt、output、session、token 与 Host 私有引用不进入模型或 UI，旧诊断不会覆盖更新的当前态。
 
-## Agent Teams 自动驾驶
+## Agent Teams：实时状态、路径身份与权威账本
 
-- 候选桌面设置新增“自动接力，不用发送继续”，默认勾选；旧配置缺少该字段时采用默认值，已明确关闭的选择仍保留。点击“保存”并完成一次 Desktop Host 确认即可使用，即使尚无团队也会记录偏好；每个目标可配置固定的 1–200 轮追加上限，默认 200。
-- 无团队的可信保存只生成 settings proof，不会凭偏好取得 Goal 权限。首个符合条件团队创建时还必须把当前 Host 授权 epoch、直接用户回合或精确 Goal round 与 Level 3 routing receipt 绑定，最终 grant 精确落到 root、canonical project、active Goal、team、pause epoch 与设置值；全局开关、静态请求头和模型参数都不能替代。只有同 root 下完整、仍存活且事实一致的平级团队，才可继承该授权组。
-- 获得授权后，正常成员等待期间 Root 会安全 park，不再消耗轮次轮询，也不再要求用户发送“继续”。成员提交、释放和状态变化通过持久事件在 Root 空闲时合并唤醒，自动继续验收和调度；显式 Stop 或安全 blocker 始终撤销自动权限，仍须人工恢复。
-- 自动 park 需要所有未完成内部任务都由 live worker 持有，或沿同一 root 的依赖链最终落到 live producer；支持跨 team 的可证明依赖链。
-- 缺失/循环/终态 blocker、跨 root、paused、project 不一致、capability 未验证、文件冲突、effect 非 `none` 或 `outcome_unknown` 均 fail closed，不会 edit/resume/followup/steer。
-- 每个 durable transition 最多补一个 goal round，并且只恢复明确的 `round-limit`。达到用户选择的预算，或发生 Host/plugin 重启、Stop、handoff、关闭设置、降低预算、权限确认、外部副作用未知和其他 blocker 时，授权都会停止或撤销。
+- 团队、成员、任务、后台计数与安全诊断通过单一权威状态流实时刷新；乱序旧事件、断线重连与 HMR 不覆盖较新 revision。已发送聊天 prose 继续保持发送时快照，不被后续活动静默改写。
+- relay `queued` 明确表示消息只在本机持久排队、接收方尚未确认；不会由发送路径提前升级成 delivered，Stop、关闭与重启边界保持可审计。
+- 工作区与资源 identity 改为逐码点保真：只规范真实分隔符、`.`、重复/尾斜杠及 Windows 实际大小写比较；NFC/NFD、全角/ASCII 等兼容等价但不同的路径不再被 NFKC 合并。
+- Host adopted-root 恢复绑定 exact actor、project、board、batch、slot 与 operation，并使用可重建索引避免宽泛扫描；错误 actor/root/project/slot/op 全部拒绝。
+- Agent Teams 权威存储新增版本化 hot/cold COW：关闭团队进入 content-hashed immutable shard，迁移保留 legacy 原件、可验证索引和可回滚 generation；OCC、claim/lease、submission/acceptance、wake/routing、handoff/recovery、authorization、quality/evidence 与 external-effect/idempotency 历史均不删减。
+- Root 投影/SSE 编码提供不超过 32 MiB 的有界缓存，但默认关闭，并保留可立即回滚的 `disabled | shadow | enabled` 三态：`disabled` 走原权威投影，`shadow` 只比较候选且仍返回权威结果，`enabled` 只允许完整 identity/revision/ACL 命中；fresh ACL 永远先于缓存，身份或线性前驱不明时立即权威重算。SSE 在断线、Stop、HMR/重载时清理 listener、abort/backpressure 队列与关联引用。65-root 已测热命中基线 p95 低于 1 ms，但不作为默认启用承诺。
 
-## Codex 浏览器能力对等
+## 长会话与移动工作台
 
-- 候选将可见导航、交互、检查和停止能力置于 Codex 浏览器对等合同下，同时保留来源/actor、站点授权、导航、敏感动作、文件/下载、取消和审计等动态安全门禁。
-- 最终验收以 browser 专项代理的真实 Electron 动态证据为准；专项复核完成前，不把静态合同表述成已通过的动态结论。任何失败都阻止发布，不能靠扩大默认授权或跳过门禁补救。
+- 发送后 Stop、排队、继续与相关官方会话控件会随当前状态及时出现，不再要求切页或等待额外轮询；长会话切换后“跟随最新/保留阅读位置”意图不再漂移，滚到底部立即提交 follow 状态，reader 锚点有界采样并在旧 DOM 卸载前刷新。
+- 恢复官方“回到底部”控件的可见性、至少 44×44 命中区、键盘语义与焦点状态；整枚“子代理会话：可继续”芯片的任一点都是同一个切换目标，单次指针操作只开合一次，Enter/Space 与至少 44×44 命中语义保持一致。
+- 已打开会话详情中的底部“代理团队”入口不再被旧导航保护逻辑吞掉；标签可见且可用时会进入官方 Agent Teams 画布。
+- Android 与 iOS 适配当前官方 `data-composer-input` contenteditable 合同；长文本、键盘抬升、附件、语音与文件 `@` 引用跟随活动编辑器，旧 textarea 只保留隔离兼容路径。
+- 发送、停止、排队与恢复继续完全由官方主按钮和编辑器状态机拥有；手机层不再改名 Stop 或把它拦截为合成 Enter。
+- 修复初次进入会话、历史仍在加载时新增 body 包装层使任务栏和输入框漂到页面上半部的问题；加载前后继续锚定视口底部。
 
-## 发布前：正式云 Windows 资产本机隔离验证
+## 无损性能、同步与存储
 
-在用户能够检查到 v1.0.58 之前，唯一 resumable publisher 必须：
-
-1. 先让绑定精确 source revision、requestId 和 workflow run 的正式云构建通过全部桌面门禁，再创建不可变 Tag，并公开该 run 产生的桌面 Release 资产；
-2. 仅从该公开 Release 的规范 URL 下载正式 Windows x64 便携包，绑定 Release/asset ID、大小、GitHub SHA-256 digest 与 40 位产品提交，并保存到新的版本/提交/validation ID 隔离目录；
-3. 使用各自唯一的 Electron userData 与 Harness runtime home 实际运行 packaged `--self-test`，由正式包启动随包 Runtime 的随机端口 token→Cookie→clean `/` 链路，并严格核对产品版本及全部检查项；
-4. 只有正式字节和隔离报告都通过并再次核对远端元数据后，才继续签名 Android、签名组件、桌面签名清单、GitHub→CNB 镜像和最后的 stable feed。
-
-本地开发实例、旧 Cookie、已运行 Runtime 或手工上传的资产不能充当该阶段的证据。失败或观测未知时，发布器必须停住，客户端不得发现 v1.0.58。
+- 自动缓存维护改用 cache-only 窄扫描，在递归前剪除 runtime、sessions、attachments、memories 与未请求的 temp/workspace；shadow oracle 不逐项等价时只预览并 fail closed，手动 scan/preview/apply 和回滚开关继续保留。
+- Desktop 活动预览使用有界 latest frame 内存槽；Android 面板复用每设备一个 2 fps persistent stream，连续预览不再反复写盘、读盘或 base64 往返。只有用户明确截图才进入带源尺寸和坐标空间的 durable evidence store。
+- preview、evidence 与 legacy namespace 分域；安全 GC 只处理没有 attachment/tool-card/history 引用且 token 过期并经过安全裕量的 preview，先 quarantine、延迟删除并允许晚到引用恢复。既有 Android 混存内容在迁移证明完成前保持 conditional-authoritative，只读保留而不盲目清理。
+- Mobile Sync v6 以单一 canonical snapshot、严格不超过 512 KiB 的 bounded delta journal 和小型 heartbeat/preferred-port 原子记录替代事件内嵌全量快照；保留 v5 只读备份、精确 reverse exporter、cursor/tombstone/offline replace、operation/idempotency 与 crash recovery。
+- Schedule 继续以 session append-only events 为唯一权威源；内存 fold 只维护 seq/generation/checksum，15 秒刷新支持 ETag、`If-None-Match`、since delta 和无 body 304，gap/rewind/generation 分叉立即回退一次权威 full replay。
 
 ## 版本身份
 
-- 桌面根包、lockfile 和 15 个自有插件：`1.0.58`
-- `@zseven-w/dsh-android`：保持独立集成版本 `0.1.0-rc.4`
-- Android：`versionName=1.0.58`、`versionCode=1005800`
-- iOS/iPadOS：`MARKETING_VERSION=1.0.58`、build `10058`
-- 计划中的正式不可变 Tag：`v1.0.58`
-- 上一稳定版：`v1.0.57`，其 Tag、18 项资产、签名 APK、组件、镜像与 stable feed 保持不可变
+- Desktop 根包与 lockfile：`1.0.59`
+- 15 个 Desktop 自有插件：`1.0.59`
+- Android：`versionName=1.0.59`、`versionCode=1005900`
+- iOS/iPadOS：`MARKETING_VERSION=1.0.59`、build `10059`
+- Desktop Mobile Sync 当前版本、移动更新示例、Web Search User-Agent 与组件签名验证 workflow identity：`1.0.59`
+- 计划中的正式不可变 Tag：`v1.0.59`
+- 上一稳定版：`v1.0.58`；其历史安全审查、Tag、资产、签名 APK、组件、清单、镜像与 stable feeds 保持不可变
 
 ## 发布门禁
 
 正式发布前仍必须在干净、已提交的精确 revision 上完成：
 
-- `npm run verify`、`npm run verify:release`、版本定向测试和 `git diff --check`；
-- Electron 同会话认证、Runtime singleflight/陈旧进程清理/MCP 启动上界、手机同步 bridge、Agent Teams 自动驾驶的定向测试；
-- browser 专项真实 Electron 动态复核；
-- packaged self-test、Android 与 iPhone/iPad 门禁；
-- 正式云 Windows 资产本机隔离验证、云端跨平台构建、签名、精确资产清单和双云一致性验证。
+- `npm run upstream:status`，确认官方 npm latest 仍与锁定的 `0.1.2-alpha.5` 一致；若出现更高官方版本，停止版本同步并重新审计，不能盲目发布。
+- `npm run verify`、`npm run verify:release`、版本定向测试、全量测试、Node/JSON 语法检查与 MinGit `diff --check`。
+- Agent Teams lifecycle/admission/recovery、自动接力、实时状态、Unicode 工作区、hot/cold store、投影缓存与性能门禁。
+- 长会话滚动、Schedule 增量刷新、Mobile Sync v6、Android/iOS 输入与导航、设备预览、evidence/GC、Android compile/test 与 iPhone/iPad simulator 验证。
+- 新的 v1.0.59 安全审查和精确 release evidence；最终 ACCEPTED hashes 只能在对应实现与门禁全部冻结后由后续验收生成，本次版本同步不预填、不沿用旧值。
+- 正式云构建、签名、精确资产清单与 GitHub/CNB 双云一致性核对。
 
-正式制品只能由仓库唯一的 resumable publisher 创建新的不可变 `v1.0.58` Tag。不得手工上传、移动 Tag、覆盖 v1.0.57 资产，或在隔离验证与双云核对完成前提升 stable feed。
+正式制品只能由仓库唯一的 resumable publisher 创建新的不可变 `v1.0.59`。不得手工上传本地二进制、移动或重建旧 Tag、覆盖 v1.0.58 资产、改写旧 `release-manifest.json`，也不得为追求全绿而盲目基线化真实失败。
 
 ## 发布完成后获取更新
 
-以下链接只有在 publisher 完成全部门禁后才代表 v1.0.58 正式版本：
-
-- GitHub Release：[v1.0.58](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/tag/v1.0.58)
-- 永久最新版入口：[GitHub Releases / latest](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)
-- 桌面摘要：[SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/SHA256SUMS.txt)
-- 组件摘要：[COMPONENT-SHA256SUMS.txt](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/COMPONENT-SHA256SUMS.txt)
-
-若 GitHub 下载受限，可把同一文件名的下载前缀替换为 `https://cnb.cool/baiyuscc13724-max/deepseek-harness-desktop/-/releases/download/v1.0.58/`。GitHub 与 CNB 文件的大小和 SHA-256 应一致；不一致时不要运行。
+`v1.0.59` 尚未发布。完成全部门禁前，请继续从[永久最新版入口](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)获取不可变的 `v1.0.58` 稳定资产。publisher 完成后，新的 Tag、下载文件与校验摘要才会出现在相应的 GitHub Release，并由固定云端流程镜像到 CNB。

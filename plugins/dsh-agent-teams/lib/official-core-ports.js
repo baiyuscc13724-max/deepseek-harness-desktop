@@ -1,6 +1,6 @@
 const OFFICIAL_CORE_BASELINE = Object.freeze({
-  tag: "dsh-v0.1.2-alpha.2",
-  commit: "0a53fb55bea101816fa226bb964ae2bed71c343b",
+  tag: "dsh-v0.1.2-alpha.5",
+  commit: "db6bdc3576c2d4e7c965e8e3ed0c2a731eed87f5",
   license: "MIT",
   runtimeEquivalent: false,
 });

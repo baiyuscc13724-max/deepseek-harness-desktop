@@ -10,13 +10,27 @@ const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8')
 const android = read('mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-compat.css')
 const ios = read('mobile', 'ios', 'HarnessMobile', 'Resources', 'mobile-compat.css')
 const runtime = read('mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js')
+const official = read('node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js')
 
 test('mobile composer CSS stays byte-identical across Android and iOS', () => {
   assert.equal(android, ios)
 })
 
-test('composer textarea remains the visible text layer in Android WebView', () => {
-  const visibleLayer = android.match(/textarea\[data-harness-mobile-composer-textarea="true"\]\s*\{[^}]*-webkit-text-fill-color:\s*var\(--hm-color-text, #172133\) !important;[^}]*\}/u)?.[0] || ''
+test('history loading keeps the composer stack at the viewport bottom through the official body wrapper', () => {
+  assert.match(official, /className: ConversationRoot_module_css_default\.body,[\s\S]*?className: ConversationRoot_module_css_default\.scrollBody,[\s\S]*?"data-conversation-scroll": ""[\s\S]*?children: \[sessionId === void 0 \? null : renderSlot\("conversation\.session", \{\}\), composerSeat\]/u)
+  const scrollRule = android.match(/\[data-harness-mobile-conversation="true"\] \[data-conversation-scroll\] \{([^}]*)\}/u)?.[1] || ''
+  assert.match(scrollRule, /display:\s*flex !important;/u)
+  assert.match(scrollRule, /flex-direction:\s*column !important;/u)
+  assert.match(scrollRule, /height:\s*100% !important;/u)
+  const seatRule = android.match(/\[data-harness-mobile-conversation="true"\] \[data-conversation-scroll\] > \[data-composer-seat\] \{([^}]*)\}/u)?.[1] || ''
+  assert.match(seatRule, /position:\s*sticky !important;/u)
+  assert.match(seatRule, /bottom:\s*0 !important;/u)
+  assert.match(seatRule, /margin-top:\s*auto !important;/u)
+  assert.doesNotMatch(android, /\[data-harness-mobile-conversation="true"\] > \[data-conversation-scroll\]/u, 'the official body wrapper must not break mobile scroll and composer anchoring')
+})
+
+test('official composer editor remains the sole visible text layer in Android WebView', () => {
+  const visibleLayer = android.match(/\[data-harness-mobile-composer-editor="true"\]\s*\{[^}]*-webkit-text-fill-color:\s*var\(--hm-color-text, #172133\) !important;[^}]*\}/u)?.[0] || ''
   assert.match(visibleLayer, /z-index:\s*2 !important;/u)
   assert.match(visibleLayer, /visibility:\s*visible !important;/u)
   assert.match(visibleLayer, /opacity:\s*1 !important;/u)
@@ -50,20 +64,23 @@ test('composer layer normalization overrides the official transparent input inli
   const inputScroll = makeNode()
   const backdrop = makeNode()
   const mirror = makeNode()
-  const textarea = makeNode()
-  textarea.inert = true
-  textarea.addEventListener = () => {}
+  const editor = makeNode()
+  editor.tagName = 'DIV'
+  editor.inert = true
+  editor.addEventListener = () => {}
   const composer = {
     querySelector (selector) {
       if (selector === '[data-input-scroll]') return inputScroll
-      if (selector === 'textarea[data-phase]') return textarea
+      if (selector === '[data-composer-input][data-phase], textarea[data-phase]') return editor
       return null
     },
     querySelectorAll: selector => selector === '[data-input-backdrop], [data-input-mirror]' ? [backdrop, mirror] : []
   }
   let layoutCalls = 0
-  const normalize = new Function('syncMobileComposerTextareaLayout', `${source}\nreturn normalizeMobileComposerLayers`) // eslint-disable-line no-new-func
-    (() => { layoutCalls += 1 })
+  const composerInput = scope => scope?.querySelector?.('[data-composer-input][data-phase], textarea[data-phase]') || null
+  const legacyComposerTextarea = input => String(input?.tagName || '').toLowerCase() === 'textarea'
+  const normalize = new Function('composerInput', 'legacyComposerTextarea', 'syncMobileComposerInputLayout', `${source}\nreturn normalizeMobileComposerLayers`) // eslint-disable-line no-new-func
+    (composerInput, legacyComposerTextarea, () => { layoutCalls += 1 })
   normalize(composer)
   assert.equal(layoutCalls, 1)
   assert.equal(inputScroll.style.values.get('isolation'), 'isolate')
@@ -73,17 +90,18 @@ test('composer layer normalization overrides the official transparent input inli
     assert.equal(layer.style.values.get('z-index'), '0')
     assert.equal(layer.style.priorities.get('visibility'), 'important')
   }
-  assert.equal(textarea.style.values.get('z-index'), '2')
-  assert.equal(textarea.style.values.get('visibility'), 'visible')
-  assert.equal(textarea.style.values.get('color'), 'var(--hm-color-text, #172133)')
-  assert.equal(textarea.style.values.get('-webkit-text-fill-color'), 'var(--hm-color-text, #172133)')
-  assert.equal(textarea.style.priorities.get('-webkit-text-fill-color'), 'important')
-  assert.equal(textarea.style.values.get('text-shadow'), 'none')
+  assert.equal(editor.dataset.harnessMobileComposerEditor, 'true')
+  assert.equal(editor.style.values.get('z-index'), '2')
+  assert.equal(editor.style.values.get('visibility'), 'visible')
+  assert.equal(editor.style.values.get('color'), 'var(--hm-color-text, #172133)')
+  assert.equal(editor.style.values.get('-webkit-text-fill-color'), 'var(--hm-color-text, #172133)')
+  assert.equal(editor.style.priorities.get('-webkit-text-fill-color'), 'important')
+  assert.equal(editor.style.values.get('text-shadow'), 'none')
 })
 
-test('long text uses one bounded scroll owner and a pre-wrap mirror', () => {
+test('long text uses one bounded scroll owner for official and legacy editors', () => {
   assert.match(android, /\[data-harness-mobile-composer-input="true"\][\s\S]*?max-height:\s*min\(168px, 30dvh\)/u)
-  assert.match(android, /\[data-input-mirror\][\s\S]*?white-space:\s*pre-wrap !important;/u)
+  assert.match(android, /\[data-harness-mobile-composer-editor="true"\][\s\S]*?white-space:\s*pre-wrap !important;/u)
   assert.match(android, /textarea\[data-harness-mobile-composer-textarea="true"\][\s\S]*?overflow-y:\s*auto !important;/u)
   assert.match(android, /\[data-phase="hero"\] \[class\*="_composerHero"\] \{[^}]*overflow:\s*visible !important;/u)
   assert.match(android, /overflow-anchor:\s*none !important;/u)

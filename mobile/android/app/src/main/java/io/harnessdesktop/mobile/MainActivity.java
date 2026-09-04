@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.speech.RecognizerIntent;
 import android.util.Base64;
@@ -96,6 +97,10 @@ public final class MainActivity extends AppCompatActivity {
     private static final long MAX_CAPTURE_BYTES = 12L * 1024L * 1024L;
     static final int MAX_PICKED_IMAGES = 20;
     static final String MOBILE_BACK_SCRIPT = "window.__harnessMobileHandleBack()";
+    static final String MOBILE_UI_RUNTIME_READY_SCRIPT =
+        "window.__harnessMobileRuntimeInstalled === 'ready'";
+    static final long MOBILE_UI_INJECTION_SETTLE_MS = 1_000L;
+    static final int MAX_MOBILE_UI_INJECTION_BATCHES_PER_DOCUMENT = 3;
 
     enum MainFrameState {
         IDLE,
@@ -138,6 +143,8 @@ public final class MainActivity extends AppCompatActivity {
     private int offlineSyncGeneration;
     private int localGatewayPort;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final MobileUiInjectionPolicy mobileUiInjectionPolicy = new MobileUiInjectionPolicy();
+    private final Object rememberedSessionLock = new Object();
     private final ExecutorService offlineSyncExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean offlineSyncInFlight = new AtomicBoolean();
     private int offlineSyncRetryAttempt;
@@ -417,7 +424,7 @@ public final class MainActivity extends AppCompatActivity {
         // 重试，成功文档的 runtime/观察器不会重复安装。
         webView.onResume();
         webView.resumeTimers();
-        mobileUiAdapter.inject(webView);
+        ensureMobileUiRuntime(webView, () -> mobileUiAdapter.inject(webView));
     }
 
     private void checkMobileAppUpdate() {
@@ -640,13 +647,13 @@ public final class MainActivity extends AppCompatActivity {
                 pageLoadingAnnounced = false;
                 workbenchReadyGeneration++;
                 publishOfflineState(view);
-                mobileUiAdapter.inject(view);
+                beginMobileUiDocument(view, () -> { mobileUiAdapter.inject(view); });
                 publishOfflineState(view);
                 updateAccessibleLoadingProgress(1);
             }
 
             @Override public void onPageCommitVisible(WebView view, String url) {
-                mobileUiAdapter.inject(view);
+                ensureMobileUiRuntime(view, () -> mobileUiAdapter.inject(view));
                 if (!mainFrameLoadFailed) revealWorkbench();
             }
 
@@ -663,7 +670,7 @@ public final class MainActivity extends AppCompatActivity {
                     || mainFrameState == MainFrameState.TERMINAL_ERROR) return;
                 cancelWorkbenchRetry(true);
                 rememberOrigin(url);
-                mobileUiAdapter.inject(view);
+                ensureMobileUiRuntime(view, () -> mobileUiAdapter.inject(view));
                 publishOfflineState(view);
                 if (!mainFrameLoadFailed) {
                     // The pair redirect has now committed its Set-Cookie in WebView.
@@ -1556,7 +1563,7 @@ public final class MainActivity extends AppCompatActivity {
         webView.evaluateJavascript(script, value -> {
             if (generation != workbenchReadyGeneration || isDestroyed()) return;
             if ("true".equals(value)) {
-                mobileUiAdapter.inject(webView);
+                ensureMobileUiRuntime(webView, () -> mobileUiAdapter.inject(webView));
                 cancelWorkbenchRetry(true);
                 revealWorkbench();
                 return;
@@ -1621,6 +1628,101 @@ public final class MainActivity extends AppCompatActivity {
                 || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return true;
         }
         return false;
+    }
+
+    private void beginMobileUiDocument(WebView view, Runnable injection) {
+        if (view == null || injection == null) return;
+        int generation = mobileUiInjectionPolicy.beginDocument();
+        if (mobileUiInjectionPolicy.startInjectionBatch(generation, SystemClock.uptimeMillis())) injection.run();
+    }
+
+    private void ensureMobileUiRuntime(WebView view, Runnable injection) {
+        if (view == null || injection == null || isDestroyed()) return;
+        int generation = mobileUiInjectionPolicy.generation();
+        long delay = mobileUiInjectionPolicy.reserveReadyProbe(generation, SystemClock.uptimeMillis());
+        if (delay < 0L) return;
+        mainHandler.postDelayed(() -> probeMobileUiRuntime(view, generation, injection), delay);
+    }
+
+    private void probeMobileUiRuntime(WebView view, int generation, Runnable injection) {
+        if (generation != mobileUiInjectionPolicy.generation() || isDestroyed()) return;
+        if (view.getHandler() == null) {
+            mobileUiInjectionPolicy.finishReadyProbe(generation, false);
+            return;
+        }
+        try {
+            view.evaluateJavascript(MOBILE_UI_RUNTIME_READY_SCRIPT, value -> {
+                boolean ready = mobileUiRuntimeReady(value);
+                if (!mobileUiInjectionPolicy.finishReadyProbe(generation, ready) || ready || isDestroyed()) return;
+                if (mobileUiInjectionPolicy.startInjectionBatch(generation, SystemClock.uptimeMillis())) {
+                    injection.run();
+                    ensureMobileUiRuntime(view, injection);
+                }
+            });
+        } catch (RuntimeException ignored) {
+            mobileUiInjectionPolicy.finishReadyProbe(generation, false);
+        }
+    }
+
+    static boolean mobileUiRuntimeReady(String javascriptResult) {
+        return "true".equals(javascriptResult);
+    }
+
+    /**
+     * One adapter injection already schedules three full-script attempts. This
+     * policy lets page-start, commit, finish, ready-check and foreground-resume
+     * share that batch instead of parsing the runtime again at every callback.
+     * A tiny marker probe authorizes another bounded batch only after the prior
+     * batch had its full retry window and still did not install the observer.
+     */
+    static final class MobileUiInjectionPolicy {
+        private int generation;
+        private int batchCount;
+        private long settlesAtMillis;
+        private boolean ready;
+        private boolean probePending;
+
+        int beginDocument() {
+            generation = generation == Integer.MAX_VALUE ? 1 : generation + 1;
+            batchCount = 0;
+            settlesAtMillis = 0L;
+            ready = false;
+            probePending = false;
+            return generation;
+        }
+
+        int generation() {
+            return generation;
+        }
+
+        int batchCount() {
+            return batchCount;
+        }
+
+        boolean isReady() {
+            return ready;
+        }
+
+        boolean startInjectionBatch(int expectedGeneration, long nowMillis) {
+            if (expectedGeneration != generation || ready
+                || batchCount >= MAX_MOBILE_UI_INJECTION_BATCHES_PER_DOCUMENT) return false;
+            batchCount++;
+            settlesAtMillis = nowMillis + MOBILE_UI_INJECTION_SETTLE_MS;
+            return true;
+        }
+
+        long reserveReadyProbe(int expectedGeneration, long nowMillis) {
+            if (expectedGeneration != generation || ready || probePending || batchCount == 0) return -1L;
+            probePending = true;
+            return Math.max(0L, settlesAtMillis - nowMillis);
+        }
+
+        boolean finishReadyProbe(int expectedGeneration, boolean runtimeReady) {
+            if (expectedGeneration != generation) return false;
+            probePending = false;
+            ready = runtimeReady;
+            return true;
+        }
     }
 
     private void configureBackNavigation() {
@@ -1750,6 +1852,12 @@ public final class MainActivity extends AppCompatActivity {
         return value;
     }
 
+    static boolean shouldPersistSessionReference(String storedReference, String safeReference) {
+        String stored = storedReference == null ? "" : storedReference;
+        String next = safeReference == null ? "" : safeReference;
+        return !next.equals(stored);
+    }
+
     private final class MobileControlBridge {
         @JavascriptInterface public void openSettings() {
             runOnUiThread(() -> startActivity(new Intent(MainActivity.this, ControlSettingsActivity.class)));
@@ -1771,9 +1879,13 @@ public final class MainActivity extends AppCompatActivity {
 
         @JavascriptInterface public void rememberSession(String sessionId) {
             String safe = safeSessionReference(sessionId);
-            android.content.SharedPreferences.Editor editor = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
-            if (safe.isEmpty()) editor.remove(SAVED_SESSION); else editor.putString(SAVED_SESSION, safe);
-            editor.apply();
+            synchronized (rememberedSessionLock) {
+                android.content.SharedPreferences preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
+                if (!shouldPersistSessionReference(preferences.getString(SAVED_SESSION, ""), safe)) return;
+                android.content.SharedPreferences.Editor editor = preferences.edit();
+                if (safe.isEmpty()) editor.remove(SAVED_SESSION); else editor.putString(SAVED_SESSION, safe);
+                editor.apply();
+            }
         }
 
         @JavascriptInterface public String restoreSession() {

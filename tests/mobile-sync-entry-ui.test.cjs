@@ -151,8 +151,9 @@ test('native cache restore precedes cursor refresh without reloading the WebView
 test('mobile presentation and composer are structurally isolated', () => {
   assert.match(mobileRuntime, /presentationRoot\.id = 'harness-mobile-presentation-root'/u)
   assert.match(mobileRuntime, /presentationRoot\.appendChild\(shell\)/u)
-  assert.match(mobileRuntime, /syncMobileComposerTextareaLayout/u)
-  assert.match(mobileRuntime, /selectionStart/u)
-  assert.match(mobileRuntime, /setSelectionRange/u)
+  assert.match(mobileRuntime, /syncMobileComposerInputLayout/u)
+  assert.match(mobileRuntime, /\[data-composer-input\]\[data-phase\], textarea\[data-phase\]/u)
+  assert.match(mobileRuntime, /const legacy = legacyComposerTextarea\(input\)/u)
+  assert.match(mobileRuntime, /legacy && focused[^]*setSelectionRange/u)
   assert.match(mobileRuntime, /data\.harnessMobileComposerAttachments|harnessMobileComposerAttachments/u)
 })

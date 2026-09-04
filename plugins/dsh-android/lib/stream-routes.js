@@ -43,7 +43,7 @@ import { join } from 'node:path';
 import { SERIAL_PATTERN, listAvds } from './adb.js';
 import { ANDROID_DEVICE_ACTIONS, ROTATION_CYCLE, AndroidHostRegistry, isAndroidDeviceAction, } from './android-host.js';
 import { MultipartFrameWriter } from './frame-source.js';
-import { StreamAccessController, classifyScreenshotPath, isTrustedRequest, openVerifiedScreenshot, screenshotDir, } from './stream-access.js';
+import { StreamAccessController, classifyScreenshotPath, isTrustedRequest, openVerifiedScreenshot, previewScreenshotDir, screenshotDir, screenshotNamespaceOf, } from './stream-access.js';
 /** HTTP prefix owned by the dsh-android web routes. */
 export const PLUGIN_ROUTE_PREFIX = '/_dsh/dsh-android';
 export const STREAM_ROUTE_PREFIX = `${PLUGIN_ROUTE_PREFIX}/stream`;
@@ -58,6 +58,9 @@ export const DEVICE_ACTION_ROUTE_PATH = `${PLUGIN_ROUTE_PREFIX}/device-action`;
 const MAX_BODY_BYTES = 16 * 1024;
 /** Cap on the pickable-device/AVD listings. */
 const MAX_LISTED_DEVICES = 40;
+export const ANDROID_STREAM_FRAME_RATE = 2;
+export const ANDROID_STREAM_TRANSPORT = 'multipart-latest-frame';
+const PREVIEW_CAPTURE_SLOTS = 2;
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
@@ -138,14 +141,24 @@ function prefixToken(rawUrl, prefix) {
         return undefined;
     }
 }
-// ── fresh capture paths (shared with the tools' screenshot store) ────────────
+// ── explicit evidence vs compatibility-preview capture paths ───────────────
 const captureNextIndex = new Map();
-/** The next capture path for `serial` inside the shared screenshot cache. */
-export async function nextCapturePath(serial) {
-    const root = screenshotDir();
+/** The next capture path for `serial`. Evidence is immutable while its signed
+ * URL lives; compatibility preview is a two-slot bounded rolling cache.
+ */
+export async function nextCapturePath(serial, namespace = 'evidence') {
+    if (namespace !== 'evidence' && namespace !== 'preview')
+        throw new TypeError('capture namespace must be evidence or preview');
+    const root = namespace === 'preview' ? previewScreenshotDir() : screenshotDir();
     await mkdir(root, { recursive: true, mode: 0o700 });
     const safe = serial.replace(/[^A-Za-z0-9_-]/g, '_');
-    let next = captureNextIndex.get(safe);
+    const counterKey = `${namespace}:${safe}`;
+    let next = captureNextIndex.get(counterKey);
+    if (namespace === 'preview') {
+        next ??= 0;
+        captureNextIndex.set(counterKey, next + 1);
+        return join(root, `preview-${safe}-${next % PREVIEW_CAPTURE_SLOTS}.png`);
+    }
     if (next === undefined) {
         next = 0;
         const prefix = `screenshot-${safe}-`;
@@ -157,13 +170,14 @@ export async function nextCapturePath(serial) {
                 next = index + 1;
         }
     }
-    // Other counters share this directory; never overwrite a live signed URL.
+    // Other evidence counters share this directory; never overwrite a live
+    // signed URL or mutate history.
     let path = join(root, `screenshot-${safe}-${next}.png`);
     while (existsSync(path)) {
         next += 1;
         path = join(root, `screenshot-${safe}-${next}.png`);
     }
-    captureNextIndex.set(safe, next + 1);
+    captureNextIndex.set(counterKey, next + 1);
     return path;
 }
 /**
@@ -332,6 +346,7 @@ export class StreamRoutes {
                     streamUrl: `${STREAM_ROUTE_PREFIX}/${signed.token}`,
                     expiresAt: signed.expiresAt,
                     device: serial,
+                    stream: { transport: ANDROID_STREAM_TRANSPORT, frameRate: ANDROID_STREAM_FRAME_RATE, persistent: true },
                 });
                 return;
             }
@@ -389,6 +404,7 @@ export class StreamRoutes {
                 expiresAt: signed.expiresAt,
                 device: serial,
                 deviceName: device.model ?? serial,
+                stream: { transport: ANDROID_STREAM_TRANSPORT, frameRate: ANDROID_STREAM_FRAME_RATE, persistent: true },
             });
         }
         catch (error) {
@@ -440,8 +456,9 @@ export class StreamRoutes {
     }
     /**
      * `POST /_dsh/dsh-android/capture` — capture a FRESH PNG of the streamed
-     * (or explicitly named, online) device into the shared screenshot cache
-     * and mint a signed relative URL. Never boots or starts a stream.
+     * (or explicitly named, online) device. Explicit captures enter evidence;
+     * the opt-in legacy panel fallback uses the isolated bounded preview cache.
+     * Never boots or starts a stream.
      */
     async handleCapture(req, res) {
         try {
@@ -450,10 +467,14 @@ export class StreamRoutes {
                 return;
             const host = this.#hostForSession(value.sessionId);
             const serial = await this.#resolveGrantSerial(host, value.device);
+            const namespace = value.purpose === undefined || value.purpose === 'evidence' ? 'evidence' : value.purpose;
+            if (namespace !== 'evidence' && namespace !== 'preview') {
+                throw new RouteError(400, 'capture purpose must be evidence or preview', 'bad_request');
+            }
             if (host.streamedSerial !== serial) {
                 await this.#requireOnline(serial);
             }
-            const path = await nextCapturePath(serial);
+            const path = await nextCapturePath(serial, namespace);
             try {
                 const shot = await host.screenshot(serial);
                 await writeFile(path, shot.png);
@@ -468,6 +489,7 @@ export class StreamRoutes {
                 screenshotUrl: `${SCREENSHOT_ROUTE_PREFIX}/${signed.token}`,
                 path,
                 bytes,
+                namespace: screenshotNamespaceOf(path),
                 expiresAt: signed.expiresAt,
             });
         }

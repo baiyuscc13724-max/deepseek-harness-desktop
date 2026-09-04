@@ -40,6 +40,47 @@ test('injected composer input script is valid JavaScript', () => {
   assert.doesNotThrow(() => new Function(script))
 })
 
+test('native input bridge follows official contenteditable state and inserts speech through the editor path', () => {
+  const script = extractJavaStringConstant(adapter, 'FILE_ENTRY_JS')
+  const preludeStart = script.indexOf('var currentCard=')
+  const preludeEnd = script.indexOf('var copyFile=', preludeStart)
+  const speechStart = script.indexOf('window.__harnessMobileReceiveSpeech=')
+  const speechEnd = script.indexOf('var syncState=', speechStart)
+  assert.ok(preludeStart >= 0 && preludeEnd > preludeStart && speechStart >= 0 && speechEnd > speechStart)
+  const source = `${script.slice(preludeStart, preludeEnd)}${script.slice(speechStart, speechEnd)}`
+  assert.match(source, /\[data-composer-input\]\[data-phase\],textarea\[data-phase\]/u)
+  assert.match(source, /document\.execCommand\('insertText',false,text\)/u)
+  assert.doesNotMatch(source, /textContent\s*=/u, 'Lexical content must not be mutated behind the official editor state')
+
+  const attributes = new Map([['data-phase', 'active'], ['contenteditable', 'true']])
+  const selectionNode = {}
+  let focused = 0
+  const editor = {
+    tagName: 'DIV',
+    disabled: false,
+    getAttribute: name => attributes.get(name) ?? null,
+    focus: () => { focused += 1 },
+    contains: node => node === selectionNode
+  }
+  const card = { querySelector: selector => selector === '[data-composer-input][data-phase],textarea[data-phase]' ? editor : null }
+  const insertions = []
+  const documentMock = {
+    querySelector: selector => selector.includes('[data-composer-card]') ? card : null,
+    execCommand: (command, _ui, value) => { insertions.push({ command, value }); return true }
+  }
+  const windowMock = { getSelection: () => ({ anchorNode: selectionNode }) }
+  const receiveSpeech = new Function('window', 'document', 'HTMLTextAreaElement', 'Event', 'InputEvent', `${source}; return window.__harnessMobileReceiveSpeech`) ( // eslint-disable-line no-new-func
+    windowMock, documentMock, class {}, class {}, class {}
+  )
+  receiveSpeech('排队后的下一条')
+  assert.equal(focused, 1)
+  assert.deepEqual(insertions, [{ command: 'insertText', value: '排队后的下一条' }])
+
+  attributes.set('contenteditable', 'false')
+  receiveSpeech('不应插入')
+  assert.equal(insertions.length, 1)
+})
+
 test('new-session image and document wait for the official workspace before intake', async () => {
   const script = extractJavaStringConstant(adapter, 'FILE_ENTRY_JS')
   const documentListeners = new Map()
@@ -118,7 +159,7 @@ test('new-session image and document wait for the official workspace before inta
     })
   }
   const railImages = []
-  card.querySelector = selector => selector === 'textarea[data-phase]' ? textarea : null
+  card.querySelector = selector => selector === '[data-composer-input][data-phase],textarea[data-phase]' ? textarea : null
   card.querySelectorAll = selector => selector === '[role="group"] img[alt]' ? railImages : []
   const findById = (node, id) => {
     if (node.id === id) return node
@@ -274,6 +315,282 @@ test('composer attachment entry follows the active card across official remounts
   ownsButton = true
   syncOrMount()
   assert.equal(syncCalls, 1, 'the current card keeps and refreshes its own plus entry')
+})
+
+test('picker URI images survive an active contenteditable composer remount and enter the official rail in order', async () => {
+  const script = extractJavaStringConstant(adapter, 'FILE_ENTRY_JS')
+  const documentListeners = new Map()
+  const windowListeners = new Map()
+  const observers = []
+  const timers = new Map()
+  let nextTimer = 0
+
+  const findNode = (node, predicate) => {
+    if (predicate(node)) return node
+    for (const child of node.children || []) {
+      const found = findNode(child, predicate)
+      if (found) return found
+    }
+    return null
+  }
+  const makeNode = tagName => {
+    const listeners = new Map()
+    const attributes = new Map()
+    const node = {
+      nodeType: 1,
+      tagName: String(tagName).toUpperCase(),
+      id: '',
+      style: {},
+      children: [],
+      parentElement: null,
+      hidden: false,
+      disabled: false,
+      value: '',
+      setAttribute(name, value) {
+        const text = String(value)
+        attributes.set(name, text)
+        if (name === 'id') node.id = text
+      },
+      getAttribute(name) { return name === 'id' ? node.id || null : attributes.get(name) ?? null },
+      appendChild(child) { child.parentElement = node; node.children.push(child); return child },
+      insertBefore(child, before) {
+        child.parentElement = node
+        const index = node.children.indexOf(before)
+        if (index < 0) node.children.push(child)
+        else node.children.splice(index, 0, child)
+        return child
+      },
+      removeChild(child) {
+        node.children = node.children.filter(item => item !== child)
+        child.parentElement = null
+        return child
+      },
+      addEventListener(type, listener) { (listeners.get(type) || listeners.set(type, []).get(type)).push(listener) },
+      dispatchEvent(event) {
+        if (!event.target) event.target = node
+        for (const listener of listeners.get(event.type) || []) listener(event)
+        return !event.defaultPrevented
+      },
+      querySelector(selector) {
+        if (selector === '[role=menuitem]') return findNode(node, candidate => candidate !== node && candidate.getAttribute?.('role') === 'menuitem')
+        return null
+      },
+      querySelectorAll() { return [] },
+      contains(target) { return target === node || node.children.some(child => child.contains?.(target)) },
+      matches(selector) {
+        if (selector === '[data-composer-card]') return node.getAttribute('data-composer-card') !== null
+        if (selector.includes('[data-composer-input][data-phase]')) return node.getAttribute('data-composer-input') !== null && node.getAttribute('data-phase') !== null
+        return false
+      },
+      closest(selector) {
+        for (let current = node; current; current = current.parentElement) {
+          if (current.matches?.(selector)) return current
+        }
+        return null
+      },
+      click() { node.dispatchEvent(new FakeEvent('click')) },
+      blur() {},
+      focus() {}
+    }
+    return node
+  }
+  const makeComposer = label => {
+    const card = makeNode('section')
+    card.setAttribute('data-composer-card', 'true')
+    card.label = label
+    const editor = makeNode('div')
+    editor.setAttribute('data-composer-input', 'true')
+    editor.setAttribute('data-phase', 'active')
+    editor.setAttribute('contenteditable', 'true')
+    let blurCount = 0
+    editor.blur = () => { blurCount += 1 }
+    card.appendChild(editor)
+    const rail = []
+    const inheritedQuery = card.querySelector.bind(card)
+    card.querySelector = selector => {
+      if (selector === '[data-composer-input][data-phase],textarea[data-phase]') return editor
+      if (selector === '[aria-haspopup="listbox"]') return null
+      return inheritedQuery(selector)
+    }
+    card.querySelectorAll = selector => selector === '[role="group"] img[alt]' ? rail : []
+    return { card, editor, rail, blurCount: () => blurCount }
+  }
+  class FakeEvent {
+    constructor(type, init = {}) { this.type = type; Object.assign(this, init); this.defaultPrevented = false }
+    preventDefault() { if (this.cancelable) this.defaultPrevented = true }
+    stopPropagation() { this.propagationStopped = true }
+  }
+  class FakeCustomEvent extends FakeEvent {
+    constructor(type, init = {}) { super(type, init); this.detail = init.detail }
+  }
+  class FakeFile {
+    constructor(parts, name, options = {}) {
+      const part = parts[0]
+      const bytes = part instanceof ArrayBuffer
+        ? new Uint8Array(part.slice(0))
+        : part instanceof Uint8Array
+          ? part.slice()
+          : new Uint8Array()
+      this.bytes = bytes
+      this.name = name
+      this.type = options.type || ''
+      this.lastModified = options.lastModified || 0
+      this.size = bytes.byteLength
+    }
+  }
+  class FakeFileReader {
+    readAsArrayBuffer(file) {
+      try {
+        const bytes = file.bytes
+        this.result = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        queueMicrotask(() => this.onload?.())
+      } catch (error) {
+        this.error = error
+        queueMicrotask(() => this.onerror?.())
+      }
+    }
+  }
+  class FakeMutationObserver {
+    constructor(callback) { this.callback = callback; this.connected = false; observers.push(this) }
+    observe(target, options) { this.target = target; this.options = options; this.connected = true }
+    disconnect() { this.connected = false }
+  }
+  const notifyMutation = records => {
+    for (const observer of observers.filter(candidate => candidate.connected)) {
+      const relevant = records.filter(record => record.target === observer.target || (observer.options?.subtree && observer.target.contains?.(record.target)))
+      if (relevant.length) observer.callback(relevant)
+    }
+  }
+
+  const body = makeNode('body')
+  const stale = makeComposer('stale-first-global-card')
+  stale.rail.push({ getAttribute: name => name === 'alt' ? 'uri-one.png' : null })
+  body.appendChild(stale.card)
+  let active = makeComposer('active-before-picker')
+  body.appendChild(active.card)
+  const byId = id => findNode(body, node => node.id === id)
+  const documentMock = {
+    body,
+    documentElement: body,
+    createElement: makeNode,
+    getElementById: byId,
+    querySelector(selector) {
+      if (selector === '[data-phase="active"] [data-composer-card]') return active.card
+      if (selector === '[data-harness-mobile-conversation="true"] [data-composer-card]') return active.card
+      if (selector === '[data-composer-card]') return stale.card
+      return null
+    },
+    addEventListener(type, listener) { (documentListeners.get(type) || documentListeners.set(type, []).get(type)).push(listener) },
+    dispatchEvent(event) {
+      if (!event.target) event.target = documentMock
+      for (const listener of documentListeners.get(event.type) || []) listener(event)
+      return !event.defaultPrevented
+    }
+  }
+  const officialBatches = []
+  documentMock.addEventListener('drop', event => {
+    const transfer = event.dataTransfer
+    if (!transfer || !transfer.types.includes('Files')) return
+    event.preventDefault()
+    const files = [...transfer.files]
+    officialBatches.push({ composer: active.card.label, files })
+    queueMicrotask(() => {
+      const beforeIntakeRemount = active
+      body.removeChild(beforeIntakeRemount.card)
+      active = makeComposer('active-during-official-intake')
+      for (const file of files) active.rail.push({ getAttribute: name => name === 'alt' ? file.name : null })
+      body.appendChild(active.card)
+      notifyMutation([{
+        type: 'childList',
+        target: body,
+        addedNodes: [active.card],
+        removedNodes: [beforeIntakeRemount.card]
+      }])
+    })
+  })
+  const windowMock = {
+    innerWidth: 390,
+    dispatchEvent(event) { for (const listener of windowListeners.get(event.type) || []) listener(event); return !event.defaultPrevented },
+    addEventListener(type, listener) { (windowListeners.get(type) || windowListeners.set(type, []).get(type)).push(listener) },
+    removeEventListener(type, listener) {
+      const listeners = windowListeners.get(type) || []
+      const index = listeners.indexOf(listener)
+      if (index >= 0) listeners.splice(index, 1)
+    }
+  }
+  const setTimeoutMock = (callback, delay = 0) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id }
+  const clearTimeoutMock = id => timers.delete(id)
+  new Function('window', 'document', 'HarnessMobileInputs', 'FileReader', 'File', 'Event', 'CustomEvent', 'MutationObserver', 'setTimeout', 'clearTimeout', 'setInterval', 'HTMLTextAreaElement', 'InputEvent', 'fetch', script)( // eslint-disable-line no-new-func
+    windowMock, documentMock, {}, FakeFileReader, FakeFile, FakeEvent, FakeCustomEvent,
+    FakeMutationObserver, setTimeoutMock, clearTimeoutMock, () => 1, class {}, class {}, async () => new Response()
+  )
+
+  const firstPlus = byId('harness-mobile-input-button')
+  const firstMenu = byId('harness-mobile-input-menu')
+  const pickerInput = byId('harness-mobile-photo-input')
+  assert.ok(firstPlus && firstMenu && pickerInput)
+  assert.equal(active.card.contains(firstPlus), true, 'plus must mount in the active contenteditable composer')
+  assert.equal(stale.card.contains(firstPlus), false, 'the first stale global composer must never own the plus')
+  assert.equal(firstMenu.parentElement, body, 'the picker menu must escape composer clipping')
+  let pickerClicks = 0
+  pickerInput.addEventListener('click', () => { pickerClicks += 1 })
+  firstPlus.click()
+  assert.equal(active.blurCount(), 1, 'opening the picker menu releases editor focus before Android launches a system surface')
+  const gallery = firstMenu.children.find(item => item.getAttribute('aria-label') === '相册')
+  assert.ok(gallery)
+  gallery.click()
+  assert.equal(pickerClicks, 1, 'the visible gallery action must launch the stable hidden input')
+
+  const beforeRemount = active
+  body.removeChild(beforeRemount.card)
+  active = makeComposer('active-after-picker-remount')
+  body.appendChild(active.card)
+  windowMock.__harnessMobileInputEntryObserver.callback([{
+    type: 'childList',
+    target: body,
+    addedNodes: [active.card],
+    removedNodes: [beforeRemount.card]
+  }])
+  assert.equal(byId('harness-mobile-photo-input'), pickerInput, 'the WebView chooser callback anchor must survive the composer remount')
+  assert.equal(pickerInput.parentElement, body, 'the picker-owned input must stay connected while URI grants are live')
+  assert.equal(active.card.contains(byId('harness-mobile-input-button')), true, 'the visible plus must move to the remounted active composer')
+  assert.notEqual(byId('harness-mobile-input-menu'), firstMenu, 'the body-level menu must be replaced with the active composer closure')
+
+  let grantLive = true
+  const uriFile = (name, values, lastModified) => ({
+    name,
+    type: 'image/png',
+    lastModified,
+    get bytes() {
+      if (!grantLive) throw new Error('temporary content URI grant expired')
+      return Uint8Array.from(values)
+    }
+  })
+  const selected = [
+    uriFile('uri-one.png', [1, 2, 3], 11),
+    uriFile('uri-two.png', [4, 5, 6, 7], 12)
+  ]
+  pickerInput.files = selected
+  pickerInput.dispatchEvent(new FakeEvent('change'))
+  grantLive = false
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(officialBatches.length, 1, 'one picker selection must issue one official document-level drop batch')
+  assert.equal(officialBatches[0].composer, 'active-after-picker-remount')
+  assert.equal(active.card.label, 'active-during-official-intake', 'rail acceptance must follow an official intake remount instead of the dispatched-to card')
+  assert.equal(active.card.contains(byId('harness-mobile-input-button')), true, 'the visible plus must also follow the intake remount')
+  assert.equal(byId('harness-mobile-photo-input'), pickerInput, 'the stable picker input must survive every composer remount')
+  assert.deepEqual(officialBatches[0].files.map(file => file.name), ['uri-one.png', 'uri-two.png'], 'Photo Picker order must be preserved')
+  assert.deepEqual(officialBatches[0].files.map(file => [...file.bytes]), [[1, 2, 3], [4, 5, 6, 7]], 'official intake must receive page-owned bytes after the URI grant expires')
+  assert.notEqual(officialBatches[0].files[0], selected[0])
+  assert.notEqual(officialBatches[0].files[1], selected[1])
+  assert.deepEqual(active.rail.map(image => image.getAttribute('alt')), ['uri-one.png', 'uri-two.png'])
+  assert.deepEqual(stale.rail.map(image => image.getAttribute('alt')), ['uri-one.png'], 'the first stale composer rail must remain untouched')
+  assert.equal(windowMock.__harnessMobileAttachmentState?.phase, 'success', 'success requires the active official rail to render the whole batch')
+  assert.equal(windowMock.__harnessMobileAttachmentState?.count, 2)
+  assert.equal(pickerInput.value, '')
+  assert.equal([...timers.values()].some(timer => timer.delay === 8000), false, 'active rail acceptance must settle without a guessed delivery delay')
+  assert.ok(observers.some(observer => observer.target === body && observer.options?.attributeFilter?.includes('alt')), 'rail acceptance must observe the document root so a second remount remains visible')
 })
 
 test('composer frame stays inside its padded parent during focus and IME lift', () => {

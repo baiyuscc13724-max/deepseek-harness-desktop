@@ -7,7 +7,7 @@ const { mkdir, mkdtemp, rm, writeFile } = require('node:fs/promises')
 const budgetModule = import('../scripts/artifact-size-budget.mjs')
 const productionBudget = require('../build/artifact-size-budget.json')
 
-test('v1.0.58 keeps intentional plugin and alpha.4 runtime-peer growth under narrow physical ceilings', () => {
+test('v1.0.59 keeps intentional plugin and alpha.5 runtime-peer growth under narrow physical ceilings', () => {
   assert.equal(productionBudget.windows.appAsarMiB, 121)
   assert.equal(productionBudget.windows.appAsarUnpackedMiB, 33)
   assert.equal(productionBudget.windows.localesMaxFiles, 2)

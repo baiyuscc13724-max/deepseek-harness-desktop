@@ -1,12 +1,17 @@
 const net = require('node:net')
 const path = require('node:path')
 const { createHash, randomBytes, randomUUID, timingSafeEqual } = require('node:crypto')
-const { mkdir, open, readFile, rename, rm } = require('node:fs/promises')
+const { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } = require('node:fs')
+const { mkdir, open, rm } = require('node:fs/promises')
 const { createLocalIpcEndpoint } = require('./local-ipc-endpoint.cjs')
 
 const ENDPOINT_ENV = 'HARNESS_DESKTOP_AUTHORIZATION_ENDPOINT'
 const TOKEN_ENV = 'HARNESS_DESKTOP_AUTHORIZATION_TOKEN'
-const AUTHORIZATION_VERSION = 1
+const AUTHORIZATION_VERSION = 2
+const LEGACY_AUTHORIZATION_VERSION = 1
+const AUTOPILOT_SETTINGS_PROOF_VERSION = 1
+const AUTHORIZATION_HEAD_VERSION = 1
+const AUTHORIZATION_TRANSACTION_VERSION = 1
 const RECEIPT_TTL_MS = 60_000
 const MAX_RECEIPT_TTL_MS = 2 * 60_000
 const AUTOPILOT_RECEIPT_TTL_MS = 15_000
@@ -23,7 +28,12 @@ const AUTOPILOT_REQUEST_KEYS = Object.freeze(['authorizationId', 'sessionId', 's
 const AUTOPILOT_SETTINGS_KEYS = Object.freeze(['enabled', 'maxMembers', 'maxActiveTurns', 'autopilotEnabled', 'autopilotMaxAdditionalRounds'])
 const AUTOPILOT_DESKTOP_BINDING_KEYS = Object.freeze(['senderWebContentsId', 'ownerWindowWebContentsId', 'runtimeOrigin'])
 const AUTOPILOT_REVOKE_KEYS = Object.freeze(['authorizationEpoch', 'reason'])
+const AUTOPILOT_SETTINGS_PROOF_KEYS = Object.freeze(['version', 'settingsHash', 'enabled', 'autopilotEnabled', 'authorizationEpoch', 'authorizedAt'])
+const AUTHORIZATION_STATE_KEYS = Object.freeze(['version', 'revision', 'consumed', 'authorizationEpoch', 'autopilotSettingsProof'])
+const LEGACY_AUTHORIZATION_STATE_KEYS = Object.freeze(['version', 'consumed'])
+const AUTHORIZATION_HEAD_KEYS = Object.freeze(['version', 'revision', 'stateHash'])
 const OUTCOMES = new Set(['succeeded', 'failed', 'not_started'])
+const LOCK_WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4))
 const PUBLIC_ERROR_CODES = new Set([
   'HOST_AUTHORIZATION_REPLAY',
   'HOST_AUTHORIZATION_DENIED',
@@ -129,27 +139,121 @@ function desktopBindingHash(value) {
 function defaultEndpoint() {
   return createLocalIpcEndpoint('ata', { windowsKind: 'agent-teams-authorization' })
 }
-async function atomicWriteJson(file, value) {
-  await mkdir(path.dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  const handle = await open(temporary, 'wx', 0o600)
-  try { await handle.writeFile(`${JSON.stringify(value)}\n`, 'utf8'); await handle.sync() }
-  finally { await handle.close() }
-  try { await rename(temporary, file) } catch (error) { await rm(temporary, { force: true }).catch(() => undefined); throw error }
+function normalizeConsumedRows(value, maxConsumed = MAX_CONSUMED) {
+  if (!Array.isArray(value) || value.length > maxConsumed) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+  const seen = new Set()
+  return Object.freeze(value.map(row => {
+    exactObject(row, ['authorizationId', 'requestHash', 'consumedAt'])
+    const authorizationId = strictString(row.authorizationId)
+    if (!/^[a-f0-9]{64}$/u.test(row.requestHash) || !Number.isSafeInteger(row.consumedAt) || row.consumedAt < 0 || seen.has(authorizationId)) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+    seen.add(authorizationId)
+    return Object.freeze({ authorizationId, requestHash: row.requestHash, consumedAt: row.consumedAt })
+  }))
 }
-async function readState(file, maxConsumed = MAX_CONSUMED) {
-  try {
-    const parsed = JSON.parse(await readFile(file, 'utf8'))
-    if (parsed?.version !== AUTHORIZATION_VERSION || !Array.isArray(parsed.consumed) || parsed.consumed.length > maxConsumed) throw new Error('invalid')
-    const consumed = new Map()
-    for (const row of parsed.consumed) {
-      if (typeof row?.authorizationId !== 'string' || !/^[a-f0-9]{64}$/u.test(row.requestHash) || !Number.isSafeInteger(row.consumedAt) || consumed.has(row.authorizationId)) throw new Error('invalid')
-      consumed.set(row.authorizationId, row)
-    }
-    return consumed
-  } catch (error) {
-    if (error?.code === 'ENOENT') return new Map()
+function normalizeAutopilotSettingsProof(value, authorizationEpoch) {
+  if (value === null) return null
+  exactObject(value, AUTOPILOT_SETTINGS_PROOF_KEYS)
+  if (value.version !== AUTOPILOT_SETTINGS_PROOF_VERSION || !/^[a-f0-9]{64}$/u.test(value.settingsHash)
+    || typeof value.enabled !== 'boolean' || typeof value.autopilotEnabled !== 'boolean'
+    || validateAuthorizationEpoch(value.authorizationEpoch) !== authorizationEpoch
+    || !Number.isSafeInteger(value.authorizedAt) || value.authorizedAt < 0) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+  return Object.freeze(Object.fromEntries(AUTOPILOT_SETTINGS_PROOF_KEYS.map(key => [key, value[key]])))
+}
+function createAuthorizationState({ revision, consumed, authorizationEpoch, autopilotSettingsProof }) {
+  if (!Number.isSafeInteger(revision) || revision <= 0) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+  const epoch = validateAuthorizationEpoch(authorizationEpoch)
+  return Object.freeze({
+    version: AUTHORIZATION_VERSION,
+    revision,
+    consumed: normalizeConsumedRows(consumed),
+    authorizationEpoch: epoch,
+    autopilotSettingsProof: normalizeAutopilotSettingsProof(autopilotSettingsProof, epoch)
+  })
+}
+function normalizeAuthorizationState(value, maxConsumed = MAX_CONSUMED) {
+  if (value?.version === LEGACY_AUTHORIZATION_VERSION) {
+    exactObject(value, LEGACY_AUTHORIZATION_STATE_KEYS)
+    return Object.freeze({ legacy: true, consumed: normalizeConsumedRows(value.consumed, maxConsumed) })
+  }
+  exactObject(value, AUTHORIZATION_STATE_KEYS)
+  if (value.version !== AUTHORIZATION_VERSION) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+  return createAuthorizationState({ ...value, consumed: normalizeConsumedRows(value.consumed, maxConsumed) })
+}
+function authorizationStateHash(state) {
+  return createHash('sha256').update(JSON.stringify(AUTHORIZATION_STATE_KEYS.map(key => state[key]))).digest('hex')
+}
+function readAuthorizationState(file, maxConsumed = MAX_CONSUMED) {
+  try { return normalizeAuthorizationState(JSON.parse(readFileSync(file, 'utf8')), maxConsumed) }
+  catch (error) {
+    if (error?.code === 'ENOENT') return null
     throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+  }
+}
+function readAuthorizationHead(file) {
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8'))
+    exactObject(value, AUTHORIZATION_HEAD_KEYS)
+    if (value.version !== AUTHORIZATION_HEAD_VERSION || !Number.isSafeInteger(value.revision) || value.revision <= 0 || !/^[a-f0-9]{64}$/u.test(value.stateHash)) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+    return Object.freeze({ version: value.version, revision: value.revision, stateHash: value.stateHash })
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+  }
+}
+function atomicWriteJson(file, value) {
+  mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  let handle
+  try {
+    handle = openSync(temporary, 'wx', 0o600)
+    writeFileSync(handle, `${JSON.stringify(value)}\n`, 'utf8')
+    fsyncSync(handle)
+    closeSync(handle)
+    handle = undefined
+    renameSync(temporary, file)
+  } catch (error) {
+    if (handle !== undefined) try { closeSync(handle) } catch {}
+    try { rmSync(temporary, { force: true }) } catch {}
+    throw error
+  }
+}
+function transactionMarkerExists(file) {
+  try {
+    const handle = openSync(file, 'r')
+    closeSync(handle)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false
+    return true
+  }
+}
+function writeTransactionMarker(file, value) {
+  mkdirSync(path.dirname(file), { recursive: true })
+  let handle
+  try {
+    handle = openSync(file, 'wx', 0o600)
+    writeFileSync(handle, `${JSON.stringify(value)}\n`, 'utf8')
+    fsyncSync(handle)
+  } finally {
+    if (handle !== undefined) closeSync(handle)
+  }
+}
+function withStateLockSync(stateFile, operation, { retryMs = 10, timeoutMs = 5_000 } = {}) {
+  const lockFile = `${stateFile}.lock`
+  mkdirSync(path.dirname(lockFile), { recursive: true })
+  const deadline = Date.now() + timeoutMs
+  let handle
+  for (;;) {
+    try { handle = openSync(lockFile, 'wx', 0o600); break }
+    catch (error) {
+      if (error?.code !== 'EEXIST' || Date.now() >= deadline) throw authorizationError()
+      Atomics.wait(LOCK_WAIT_BUFFER, 0, 0, retryMs)
+    }
+  }
+  try { return operation() }
+  finally {
+    try { closeSync(handle) } catch {}
+    try { rmSync(lockFile, { force: true }) } catch {}
   }
 }
 async function withStateLock(stateFile, operation, { retryMs = 10, timeoutMs = 5_000 } = {}) {
@@ -210,11 +314,12 @@ function createAgentTeamsAuthorizationService({
   maxConsumed = MAX_CONSUMED,
   maxPendingAutopilot = MAX_PENDING_AUTOPILOT,
   createAutopilotEpoch = () => randomBytes(16).toString('hex'),
+  writeAuthorizationState = atomicWriteJson,
   lockRetryMs = 10,
   lockTimeoutMs = 5_000
 } = {}) {
   strictString(stateFile, 4096)
-  if (typeof showMessageBox !== 'function' || typeof now !== 'function' || typeof createAutopilotEpoch !== 'function') throw new TypeError('showMessageBox, now and createAutopilotEpoch are required')
+  if (typeof showMessageBox !== 'function' || typeof now !== 'function' || typeof createAutopilotEpoch !== 'function' || typeof writeAuthorizationState !== 'function') throw new TypeError('showMessageBox, now, createAutopilotEpoch and writeAuthorizationState are required')
   if (!Buffer.isBuffer(token) || token.length !== 32) throw new TypeError('token must be a 32-byte Buffer')
   if (!Number.isSafeInteger(receiptTtlMs) || receiptTtlMs <= 0 || receiptTtlMs > MAX_RECEIPT_TTL_MS) throw new TypeError('receiptTtlMs is invalid')
   if (!Number.isSafeInteger(autopilotReceiptTtlMs) || autopilotReceiptTtlMs <= 0 || autopilotReceiptTtlMs > MAX_AUTOPILOT_RECEIPT_TTL_MS) throw new TypeError('autopilotReceiptTtlMs is invalid')
@@ -225,12 +330,114 @@ function createAgentTeamsAuthorizationService({
   const pendingAutopilot = new Map()
   const autopilotTombstones = new Map()
   const maxAutopilotTombstones = maxPendingAutopilot * 4
-  let authorizationEpoch = validateAuthorizationEpoch(createAutopilotEpoch())
+  // The durable record contains only the global settings proof and epoch. Exact
+  // root/Goal/team authority and user-activation receipts remain memory-only.
+  // A separate head detects single-file rollback, while a transaction marker
+  // makes every interrupted multi-file replacement recover disabled.
+  const stateHeadFile = `${stateFile}.head`
+  const transactionFile = `${stateFile}.transaction`
+  let authorizationState
+  let authorizationStateFingerprint
+  let authorizationStateHealthy = true
+  let authorizationEpoch
   let autopilotSettingsProof = null
   let server
-  let consumed
+  let consumed = new Map()
   let closed = false
   let queue = Promise.resolve()
+
+  const nextAuthorizationEpoch = previous => {
+    const candidate = validateAuthorizationEpoch(createAutopilotEpoch())
+    if (candidate === previous) throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+    return candidate
+  }
+  const applyAuthorizationState = state => {
+    authorizationState = state
+    authorizationStateFingerprint = authorizationStateHash(state)
+    authorizationEpoch = state.authorizationEpoch
+    autopilotSettingsProof = state.autopilotSettingsProof
+    consumed = new Map(state.consumed.map(row => [row.authorizationId, row]))
+    authorizationStateHealthy = true
+    return state
+  }
+  const commitAuthorizationState = (state, { reuseTransaction = false } = {}) => {
+    try {
+      if (!reuseTransaction) writeTransactionMarker(transactionFile, {
+        version: AUTHORIZATION_TRANSACTION_VERSION,
+        previousRevision: authorizationState?.revision ?? 0,
+        nextRevision: state.revision
+      })
+      const writeResult = writeAuthorizationState(stateFile, state)
+      if (writeResult && typeof writeResult.then === 'function') throw new TypeError('writeAuthorizationState must be synchronous')
+      atomicWriteJson(stateHeadFile, { version: AUTHORIZATION_HEAD_VERSION, revision: state.revision, stateHash: authorizationStateHash(state) })
+      rmSync(transactionFile, { force: true })
+      return applyAuthorizationState(state)
+    } catch (error) {
+      authorizationStateHealthy = false
+      throw error
+    }
+  }
+  const verifyAuthorizationHead = state => {
+    const head = readAuthorizationHead(stateHeadFile)
+    const stateHash = authorizationStateHash(state)
+    if (!head || head.revision !== state.revision || head.stateHash !== stateHash) throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+    return stateHash
+  }
+  const readCurrentAuthorizationState = () => {
+    if (!authorizationStateHealthy || transactionMarkerExists(transactionFile)) {
+      authorizationStateHealthy = false
+      throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+    }
+    const state = readAuthorizationState(stateFile, maxConsumed)
+    if (!state || state.legacy) {
+      authorizationStateHealthy = false
+      throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+    }
+    const stateHash = verifyAuthorizationHead(state)
+    if (authorizationState && (state.revision < authorizationState.revision
+      || (state.revision === authorizationState.revision && stateHash !== authorizationStateFingerprint))) {
+      authorizationStateHealthy = false
+      throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+    }
+    return applyAuthorizationState(state)
+  }
+  const initializeAuthorizationState = () => withStateLock(stateFile, async () => {
+    const incompleteTransaction = transactionMarkerExists(transactionFile)
+    const state = readAuthorizationState(stateFile, maxConsumed)
+    const head = readAuthorizationHead(stateHeadFile)
+    if (incompleteTransaction) {
+      const revision = state && !state.legacy ? state.revision + 1 : 1
+      const previousEpoch = state && !state.legacy ? state.authorizationEpoch : undefined
+      const recovered = createAuthorizationState({
+        revision,
+        consumed: state?.consumed ?? [],
+        authorizationEpoch: nextAuthorizationEpoch(previousEpoch),
+        autopilotSettingsProof: null
+      })
+      commitAuthorizationState(recovered, { reuseTransaction: true })
+      return
+    }
+    if (!state || state.legacy) {
+      if (head) throw authorizationError('HOST_AUTHORIZATION_STATE_INVALID')
+      const initial = createAuthorizationState({
+        revision: 1,
+        consumed: state?.consumed ?? [],
+        authorizationEpoch: nextAuthorizationEpoch(),
+        autopilotSettingsProof: null
+      })
+      commitAuthorizationState(initial)
+      return
+    }
+    verifyAuthorizationHead(state)
+    applyAuthorizationState(state)
+  }, { retryMs: lockRetryMs, timeoutMs: lockTimeoutMs })
+  const refreshAuthorizationState = () => withStateLockSync(stateFile, readCurrentAuthorizationState, { retryMs: lockRetryMs, timeoutMs: lockTimeoutMs })
+  const nextPersistedState = ({ consumedRows = authorizationState.consumed, nextEpoch = authorizationState.authorizationEpoch, proof = authorizationState.autopilotSettingsProof } = {}) => createAuthorizationState({
+    revision: authorizationState.revision + 1,
+    consumed: consumedRows,
+    authorizationEpoch: nextEpoch,
+    autopilotSettingsProof: proof
+  })
 
   const authorizeToken = value => {
     let supplied
@@ -255,7 +462,7 @@ function createAgentTeamsAuthorizationService({
     const operation = queue.then(async () => {
       const normalized = validateRequest(request)
       return withStateLock(stateFile, async () => {
-        consumed = await readState(stateFile, maxConsumed)
+        readCurrentAuthorizationState()
         if (consumed.has(normalized.authorizationId)) throw authorizationError('HOST_AUTHORIZATION_REPLAY')
         if (consumed.size >= maxConsumed) throw authorizationError('HOST_AUTHORIZATION_CAPACITY')
         const decision = await new Promise((resolve, reject) => {
@@ -267,10 +474,10 @@ function createAgentTeamsAuthorizationService({
         })
         if (!decision) throw authorizationError('HOST_AUTHORIZATION_DENIED')
         const consumedAt = now()
+        if (!Number.isSafeInteger(consumedAt) || consumedAt < 0) throw authorizationError()
         const row = { authorizationId: normalized.authorizationId, requestHash: requestHash(normalized), consumedAt }
         const nextRows = [...consumed.values(), row]
-        await atomicWriteJson(stateFile, { version: AUTHORIZATION_VERSION, consumed: nextRows })
-        consumed = new Map(nextRows.map(item => [item.authorizationId, item]))
+        commitAuthorizationState(nextPersistedState({ consumedRows: nextRows }))
         return { ...normalized, expiresAt: consumedAt + receiptTtlMs }
       }, { retryMs: lockRetryMs, timeoutMs: lockTimeoutMs })
     })
@@ -279,6 +486,7 @@ function createAgentTeamsAuthorizationService({
   }
   const issueAutopilotAuthorization = (value, desktopContext) => {
     if (closed || !server) throw authorizationError()
+    refreshAuthorizationState()
     const binding = validateAutopilotIssue(value)
     const desktopBinding = validateDesktopBinding(desktopContext)
     const issuedAt = now()
@@ -300,11 +508,18 @@ function createAgentTeamsAuthorizationService({
     if (closed || !server) throw authorizationError()
     const authorizationId = strictString(authorizationIdValue)
     const current = now()
+    if (!Number.isSafeInteger(current) || current < 0) throw authorizationError()
     purgeExpiredAutopilot(current)
     const tombstone = autopilotTombstones.get(authorizationId)
     if (tombstone) throw authorizationError(tombstone)
     const pending = pendingAutopilot.get(authorizationId)
     if (!pending) throw authorizationError('HOST_AUTHORIZATION_INVALID')
+    try { refreshAuthorizationState() }
+    catch (error) {
+      pendingAutopilot.delete(authorizationId)
+      rememberAutopilotTombstone(authorizationId, 'HOST_AUTHORIZATION_STATE_INVALID')
+      throw error
+    }
     let request
     let desktopBinding
     let requestOrigin
@@ -344,42 +559,55 @@ function createAgentTeamsAuthorizationService({
       rememberAutopilotTombstone(request.authorizationId, 'HOST_AUTHORIZATION_EXPIRED')
       throw authorizationError('HOST_AUTHORIZATION_EXPIRED')
     }
-    if (pending.authorizationEpoch !== authorizationEpoch) {
-      rememberAutopilotTombstone(request.authorizationId, 'HOST_AUTHORIZATION_REVOKED')
-      throw authorizationError('HOST_AUTHORIZATION_REVOKED')
-    }
-    rememberAutopilotTombstone(request.authorizationId, 'HOST_AUTHORIZATION_REPLAY')
-    if (!pending.webRequestClaimed || pending.bindingHash !== autopilotBindingHash(request)) throw authorizationError('HOST_AUTHORIZATION_MISMATCH')
-    for (const pendingId of pendingAutopilot.keys()) rememberAutopilotTombstone(pendingId, 'HOST_AUTHORIZATION_REVOKED')
-    pendingAutopilot.clear()
-    authorizationEpoch = validateAuthorizationEpoch(createAutopilotEpoch())
-    autopilotSettingsProof = Object.freeze({
-      version: 1,
-      settingsHash: autopilotSettingsHash(request.settings),
-      enabled: request.settings.enabled,
-      autopilotEnabled: request.settings.autopilotEnabled,
-      authorizationEpoch,
-      authorizedAt: current
-    })
-    return Object.freeze({ ...request, tool: 'team_autopilot', desktopBindingHash: pending.desktopBindingHash, authorizationEpoch, autopilotSettingsProof, issuedAt: pending.issuedAt, expiresAt: pending.expiresAt })
+    return withStateLockSync(stateFile, () => {
+      try { readCurrentAuthorizationState() }
+      catch (error) {
+        rememberAutopilotTombstone(request.authorizationId, 'HOST_AUTHORIZATION_STATE_INVALID')
+        throw error
+      }
+      if (pending.authorizationEpoch !== authorizationEpoch) {
+        rememberAutopilotTombstone(request.authorizationId, 'HOST_AUTHORIZATION_REVOKED')
+        throw authorizationError('HOST_AUTHORIZATION_REVOKED')
+      }
+      rememberAutopilotTombstone(request.authorizationId, 'HOST_AUTHORIZATION_REPLAY')
+      if (!pending.webRequestClaimed || pending.bindingHash !== autopilotBindingHash(request)) throw authorizationError('HOST_AUTHORIZATION_MISMATCH')
+      const nextEpoch = nextAuthorizationEpoch(authorizationEpoch)
+      const proof = {
+        version: AUTOPILOT_SETTINGS_PROOF_VERSION,
+        settingsHash: autopilotSettingsHash(request.settings),
+        enabled: request.settings.enabled,
+        autopilotEnabled: request.settings.autopilotEnabled,
+        authorizationEpoch: nextEpoch,
+        authorizedAt: current
+      }
+      commitAuthorizationState(nextPersistedState({ nextEpoch, proof }))
+      for (const pendingId of pendingAutopilot.keys()) rememberAutopilotTombstone(pendingId, 'HOST_AUTHORIZATION_REVOKED')
+      pendingAutopilot.clear()
+      return Object.freeze({ ...request, tool: 'team_autopilot', desktopBindingHash: pending.desktopBindingHash, authorizationEpoch, autopilotSettingsProof, issuedAt: pending.issuedAt, expiresAt: pending.expiresAt })
+    }, { retryMs: lockRetryMs, timeoutMs: lockTimeoutMs })
   }
   const readAutopilotAuthorizationState = () => {
     if (closed || !server) throw authorizationError()
+    refreshAuthorizationState()
     return Object.freeze({ authorizationEpoch, autopilotSettingsProof })
   }
-  const revokeAutopilotAuthorizations = (reason = 'Host revoked automatic continuation authority') => {
+  const revokeAutopilotAuthorizationsInternal = (reason, expectedEpoch) => {
     if (closed || !server) throw authorizationError()
     strictString(reason, 256)
-    for (const authorizationId of pendingAutopilot.keys()) rememberAutopilotTombstone(authorizationId, 'HOST_AUTHORIZATION_REVOKED')
-    pendingAutopilot.clear()
-    authorizationEpoch = validateAuthorizationEpoch(createAutopilotEpoch())
-    autopilotSettingsProof = null
-    return Object.freeze({ authorizationEpoch, autopilotSettingsProof })
+    return withStateLockSync(stateFile, () => {
+      readCurrentAuthorizationState()
+      if (expectedEpoch !== undefined && expectedEpoch !== authorizationEpoch) throw authorizationError('HOST_AUTHORIZATION_MISMATCH')
+      for (const authorizationId of pendingAutopilot.keys()) rememberAutopilotTombstone(authorizationId, 'HOST_AUTHORIZATION_REVOKED')
+      pendingAutopilot.clear()
+      const nextEpoch = nextAuthorizationEpoch(authorizationEpoch)
+      commitAuthorizationState(nextPersistedState({ nextEpoch, proof: null }))
+      return Object.freeze({ authorizationEpoch, autopilotSettingsProof })
+    }, { retryMs: lockRetryMs, timeoutMs: lockTimeoutMs })
   }
+  const revokeAutopilotAuthorizations = (reason = 'Host revoked automatic continuation authority') => revokeAutopilotAuthorizationsInternal(reason)
   const revokeAutopilotFromCapability = value => {
     const request = validateAutopilotRevoke(value)
-    if (request.authorizationEpoch !== authorizationEpoch) throw authorizationError('HOST_AUTHORIZATION_MISMATCH')
-    return revokeAutopilotAuthorizations(request.reason)
+    return revokeAutopilotAuthorizationsInternal(request.reason, request.authorizationEpoch)
   }
   const executeMessage = message => {
     if (!authorizeToken(message?.token)) throw authorizationError()
@@ -392,7 +620,7 @@ function createAgentTeamsAuthorizationService({
   const start = async () => {
     if (closed) throw authorizationError()
     if (server) return
-    consumed = await readState(stateFile, maxConsumed)
+    await initializeAuthorizationState()
     if (process.platform !== 'win32') await rm(endpoint, { force: true }).catch(() => undefined)
     server = net.createServer(socket => {
       let bytes = 0

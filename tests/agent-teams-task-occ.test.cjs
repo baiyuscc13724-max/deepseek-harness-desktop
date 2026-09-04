@@ -13,11 +13,11 @@ async function plugin() {
   return import(`${pathToFileURL(pluginFile).href}?task-occ=${Date.now()}-${importSequence}`)
 }
 
-async function fixture() {
+async function fixture({ hotColdStore } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-task-occ-'))
   const file = path.join(root, 'storages', 'agent_teams.json')
   const mod = await plugin()
-  const store = new mod.AgentTeamsStore(file, { enabled: true, maxMembers: 4, maxActiveTurns: 4 })
+  const store = new mod.AgentTeamsStore(file, { enabled: true, maxMembers: 4, maxActiveTurns: 4, hotColdStore })
   await store.init()
   const lead = { id: 'occ-lead', options: { provider: 'test', model: 'test' } }
   const team = await mod.createTeam(store, lead, { objective: 'Fence destructive task transitions' })
@@ -129,6 +129,45 @@ test('external-effect prepare increments revision and fences a stale root cancel
   } finally { await rm(fx.root, { recursive: true, force: true }) }
 })
 
+test('hot/cold storage preserves stale-claim fencing, outcome_unknown, acceptance, reopen, and restart', async () => {
+  const fx = await fixture({ hotColdStore: true })
+  let restarted
+  try {
+    let effectTask = await fx.createTask('Hot unknown effect', { externalEffects: [{ name: 'publish', policy: 'idempotent' }] })
+    effectTask = (await fx.mod.updateTask(fx.store, { id: 'occ-worker-a' }, { teamId: fx.team.id, taskId: effectTask.id, action: 'claim' })).task
+    const staleCancel = command(effectTask, 'cancel', 'hot-stale-cancel', { teamId: fx.team.id })
+    const prepared = await fx.mod.updateTaskExternalEffect(fx.store, { id: 'occ-worker-a' }, {
+      teamId: fx.team.id, taskId: effectTask.id, effectName: 'publish', action: 'prepare', claimId: effectTask.claimId, leaseEpoch: effectTask.leaseEpoch
+    })
+    assert.equal(prepared.effect.outcome, 'outcome_unknown')
+    await expectCode(fx.mod.updateTask(fx.store, fx.lead, staleCancel), 'AGENT_TEAMS_STALE_TASK_REVISION')
+
+    let reviewed = await fx.createTask('Hot accepted then reopened')
+    reviewed = (await fx.mod.updateTask(fx.store, { id: 'occ-worker-b' }, { teamId: fx.team.id, taskId: reviewed.id, action: 'claim' })).task
+    reviewed = (await fx.mod.updateTask(fx.store, { id: 'occ-worker-b' }, { teamId: fx.team.id, taskId: reviewed.id, action: 'complete', claimId: reviewed.claimId, leaseEpoch: reviewed.leaseEpoch })).task
+    reviewed = (await fx.mod.updateTask(fx.store, fx.lead, command(reviewed, 'accept', 'hot-accept', { teamId: fx.team.id }))).task
+    reviewed = (await fx.mod.updateTask(fx.store, fx.lead, command(reviewed, 'reopen', 'hot-reopen', { teamId: fx.team.id }))).task
+    assert.equal(fx.store.storageDiagnostics().mode, 'hot-cold')
+    fx.store.close()
+
+    const restartedMod = await plugin()
+    restarted = new restartedMod.AgentTeamsStore(fx.file)
+    await restarted.init()
+    const durable = restarted.snapshot().teams.find(team => team.id === fx.team.id)
+    const durableEffect = durable.tasks.find(task => task.id === effectTask.id)
+    const durableReviewed = durable.tasks.find(task => task.id === reviewed.id)
+    assert.equal(durableEffect.externalEffects[0].outcome, 'outcome_unknown')
+    assert.equal(durableEffect.claimId, effectTask.claimId)
+    assert.equal(durableReviewed.state, 'pending')
+    assert.ok(durableReviewed.lifecycleLedger.some(event => event.kind === 'acceptance'))
+    assert.ok(durableReviewed.lifecycleLedger.some(event => event.kind === 'reopen'))
+  } finally {
+    restarted?.close()
+    fx.store.close()
+    await rm(fx.root, { recursive: true, force: true })
+  }
+})
+
 test('reopen, assign, and unassign use revision CAS rather than updatedAt', async () => {
   const fx = await fixture()
   try {
@@ -221,7 +260,10 @@ test('submitted accept and reject are independently fenced and exact command rep
 })
 
 test('current-version stores durably migrate missing task revisions and receipt collections', async () => {
-  const fx = await fixture()
+  // This fixture deliberately edits the authoritative v8 document on disk. Keep it
+  // in legacy mode even when the outer suite forces hot/cold storage; immutable v8
+  // sources are never a writable back door after promotion.
+  const fx = await fixture({ hotColdStore: false })
   try {
     const task = await fx.createTask('Additive revision migration')
     const document = JSON.parse(await readFile(fx.file, 'utf8'))
@@ -264,7 +306,8 @@ test('exact durable replay bypasses a later pause while new commands remain gate
 })
 
 test('pause epoch CAS and receipt validation fail closed', async () => {
-  const fx = await fixture()
+  // The corruption probe must target the authoritative legacy document itself.
+  const fx = await fixture({ hotColdStore: false })
   try {
     const task = await fx.createTask('Pause epoch OCC')
     const stale = command(task, 'cancel', 'pause-stale', { teamId: fx.team.id })

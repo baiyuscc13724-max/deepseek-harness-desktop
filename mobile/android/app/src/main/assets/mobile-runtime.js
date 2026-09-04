@@ -461,10 +461,22 @@
     if (section) section.dataset.harnessMobileConversationSearchSection = 'true'
   }
 
+  const composerInputSelector = '[data-composer-input][data-phase], textarea[data-phase]'
+  const composerInput = (scope = document) => scope?.querySelector?.(composerInputSelector) || null
+  const legacyComposerTextarea = input => String(input?.tagName || '').toLowerCase() === 'textarea' || Boolean(input?.matches?.('textarea'))
+  const composerInputText = input => legacyComposerTextarea(input) ? String(input?.value || '') : String(input?.innerText ?? input?.textContent ?? '')
+  const composerWorkspaceTrigger = input => Boolean(input && input.getAttribute?.('data-phase') === 'inert' && input.getAttribute?.('aria-haspopup') === 'menu')
+  const composerInputUnavailable = input => {
+    if (!input || input.disabled || input.getAttribute?.('aria-disabled') === 'true') return true
+    if (composerWorkspaceTrigger(input)) return false
+    if (legacyComposerTextarea(input)) return Boolean(input.readOnly)
+    return input.getAttribute?.('contenteditable') !== 'true'
+  }
+
   const releaseComposerFocus = () => {
     const active = document.activeElement
     if (active?.matches?.('input,textarea,[contenteditable="true"]')) active.blur()
-    document.querySelector('[data-composer-card] textarea')?.blur()
+    composerInput()?.blur?.()
   }
 
   const sidebarToggle = mode => {
@@ -795,8 +807,7 @@
 
   const officialScheduledTasksContent = () => {
     const view = document.querySelector('[data-conversation-view="desktop-schedules"]')
-    const content = view?.querySelector?.('.dds-view[aria-labelledby="dds-title"], #dds-title') || null
-    return content && String(content.textContent || '').trim() ? content : null
+    return view?.querySelector?.('main.dds-view[aria-labelledby="dds-title"]') || null
   }
 
   const openOfficialScheduledTasks = shell => new Promise(resolve => {
@@ -1328,14 +1339,7 @@
       if (event.key === 'Escape' && !mobileMenu.hidden) mobileMenu.hidden = true
     })
     for (const domain of mobileDomains) {
-      shell.querySelector(`[data-harness-mobile-domain="${domain.id}"]`)?.addEventListener('click', event => {
-        const visibleConversation = document.querySelector('[data-harness-mobile-conversation="true"]')
-        const detailComposer = visibleConversation?.querySelector?.('[data-composer-card]')
-        if (domain.id !== 'conversations' && root.dataset.harnessMobileChatDetail === 'open' && detailComposer && visible(visibleConversation)) {
-          event.preventDefault()
-          event.stopPropagation()
-          return
-        }
+      shell.querySelector(`[data-harness-mobile-domain="${domain.id}"]`)?.addEventListener('click', () => {
         mobileMenu.hidden = true
         navigateMobileDomain(domain, shell)
       })
@@ -2580,7 +2584,7 @@
   }
 
   // Keep the phone presentation structurally isolated from desktop paint and
-  // accessibility, and make the native textarea the only visible text layer.
+  // accessibility, and make the active official editor the only visible text layer.
   const syncMobilePresentationIsolation = (domain, shell) => {
     const settingsVisible = domain === 'me' || root.dataset.harnessMobileMyDetail === 'official'
     const settingsSurface = document.querySelector('[data-harness-mobile-settings-dialog="true"]')
@@ -2601,33 +2605,34 @@
     }
   }
 
-  const syncMobileComposerTextareaLayout = textarea => {
-    if (!textarea || textarea.__harnessMobileSizing) return
-    textarea.__harnessMobileSizing = true
-    const start = textarea.selectionStart
-    const end = textarea.selectionEnd
-    const direction = textarea.selectionDirection
-    const scrollTop = textarea.scrollTop
-    const focused = document.activeElement === textarea
+  const syncMobileComposerInputLayout = input => {
+    if (!input || input.__harnessMobileSizing) return
+    input.__harnessMobileSizing = true
+    const legacy = legacyComposerTextarea(input)
+    const start = legacy ? input.selectionStart : null
+    const end = legacy ? input.selectionEnd : null
+    const direction = legacy ? input.selectionDirection : null
+    const scrollTop = input.scrollTop
+    const focused = document.activeElement === input
     const lifted = root.dataset.harnessMobileComposerLifted === 'true'
     const viewportHeight = Number(window.visualViewport?.height || window.innerHeight || 0)
     const maximum = Math.max(60, Math.min(lifted ? 120 : 168, viewportHeight * (lifted ? .26 : .30) || 168))
-    textarea.style.setProperty('height', 'auto', 'important')
-    const height = Math.max(60, Math.min(maximum, Number(textarea.scrollHeight) || 60))
-    textarea.style.setProperty('height', `${Math.ceil(height)}px`, 'important')
-    const inputScroll = textarea.closest?.('[data-input-scroll]')
+    input.style.setProperty('height', 'auto', 'important')
+    const height = Math.max(60, Math.min(maximum, Number(input.scrollHeight) || 60))
+    input.style.setProperty('height', `${Math.ceil(height)}px`, 'important')
+    const inputScroll = input.closest?.('[data-input-scroll]')
     if (inputScroll) inputScroll.style.setProperty('height', `${Math.ceil(height)}px`, 'important')
-    if (focused && Number.isInteger(start) && Number.isInteger(end)) {
-      try { textarea.setSelectionRange(start, end, direction || 'none') } catch {}
+    if (legacy && focused && Number.isInteger(start) && Number.isInteger(end)) {
+      try { input.setSelectionRange(start, end, direction || 'none') } catch {}
     }
-    textarea.scrollTop = scrollTop
-    textarea.__harnessMobileSizing = false
+    input.scrollTop = scrollTop
+    input.__harnessMobileSizing = false
   }
 
   const normalizeMobileComposerLayers = composer => {
     if (!composer) return
     const inputScroll = composer.querySelector('[data-input-scroll]')
-    const textarea = composer.querySelector('textarea[data-phase]')
+    const input = composerInput(composer)
     if (inputScroll) {
       inputScroll.dataset.harnessMobileComposerInput = 'true'
       inputScroll.setAttribute('role', 'group')
@@ -2644,30 +2649,32 @@
       layer.style.setProperty('z-index', '0', 'important')
       layer.style.setProperty('-webkit-text-fill-color', 'transparent', 'important')
     }
-    if (textarea) {
-      textarea.dataset.harnessMobileComposerTextarea = 'true'
-      textarea.inert = false
-      textarea.removeAttribute('aria-hidden')
-      textarea.setAttribute('role', 'textbox')
-      textarea.setAttribute('aria-multiline', 'true')
-      textarea.style.setProperty('z-index', '2', 'important')
-      textarea.style.setProperty('visibility', 'visible', 'important')
-      textarea.style.setProperty('opacity', '1', 'important')
-      textarea.style.setProperty('color', 'var(--hm-color-text, #172133)', 'important')
-      textarea.style.setProperty('-webkit-text-fill-color', 'var(--hm-color-text, #172133)', 'important')
-      textarea.style.setProperty('caret-color', 'var(--hm-color-primary, #4968e8)', 'important')
-      textarea.style.setProperty('background', 'transparent', 'important')
-      textarea.style.setProperty('text-shadow', 'none', 'important')
-      if (!textarea.__harnessMobileLayoutInstalled) {
-        textarea.__harnessMobileLayoutInstalled = true
-        textarea.addEventListener('input', () => syncMobileComposerTextareaLayout(textarea))
-        textarea.addEventListener('compositionstart', () => { textarea.dataset.harnessMobileComposing = 'true' })
-        textarea.addEventListener('compositionend', () => {
-          delete textarea.dataset.harnessMobileComposing
-          syncMobileComposerTextareaLayout(textarea)
+    if (input) {
+      input.dataset.harnessMobileComposerEditor = 'true'
+      if (legacyComposerTextarea(input)) input.dataset.harnessMobileComposerTextarea = 'true'
+      else delete input.dataset.harnessMobileComposerTextarea
+      input.inert = false
+      input.removeAttribute('aria-hidden')
+      input.setAttribute('role', 'textbox')
+      input.setAttribute('aria-multiline', 'true')
+      input.style.setProperty('z-index', '2', 'important')
+      input.style.setProperty('visibility', 'visible', 'important')
+      input.style.setProperty('opacity', '1', 'important')
+      input.style.setProperty('color', 'var(--hm-color-text, #172133)', 'important')
+      input.style.setProperty('-webkit-text-fill-color', 'var(--hm-color-text, #172133)', 'important')
+      input.style.setProperty('caret-color', 'var(--hm-color-primary, #4968e8)', 'important')
+      input.style.setProperty('background', 'transparent', 'important')
+      input.style.setProperty('text-shadow', 'none', 'important')
+      if (!input.__harnessMobileLayoutInstalled) {
+        input.__harnessMobileLayoutInstalled = true
+        input.addEventListener('input', () => syncMobileComposerInputLayout(input))
+        input.addEventListener('compositionstart', () => { input.dataset.harnessMobileComposing = 'true' })
+        input.addEventListener('compositionend', () => {
+          delete input.dataset.harnessMobileComposing
+          syncMobileComposerInputLayout(input)
         })
       }
-      syncMobileComposerTextareaLayout(textarea)
+      syncMobileComposerInputLayout(input)
     }
     const toolbar = composer.querySelector('[data-harness-mobile-composer-toolbar="true"]')
     if (toolbar) toolbar.setAttribute('role', 'toolbar')
@@ -2693,7 +2700,7 @@
       queue.dataset.harnessMobileQueueDock = 'true'
     }
     const composer = conversation.querySelector('[data-composer-card]')
-    const input = composer?.querySelector('textarea[data-phase]')
+    const input = composerInput(composer)
     const inputScroll = composer?.querySelector('[data-input-scroll]')
     if (composer) {
       composer.dataset.harnessMobileComposer = 'orbit'
@@ -2736,13 +2743,13 @@
     normalizeMobileComposerLayers(composer)
     if (inputScroll) inputScroll.dataset.harnessMobileComposerInput = 'true'
     if (input) {
-      input.dataset.harnessMobileComposerTextarea = 'true'
-      if (input.readOnly && input.getAttribute('data-phase') === 'inert' && input.getAttribute('aria-haspopup') === 'menu') {
+      input.dataset.harnessMobileComposerEditor = 'true'
+      if (composerWorkspaceTrigger(input)) {
         // A workspace-trigger composer has no authoritative session yet. Never
         // let a newly selected document inherit the previously viewed session.
         window.__harnessMobileCurrentSessionId = ''
       }
-      input.placeholder = '发消息…'
+      if (legacyComposerTextarea(input)) input.placeholder = '发消息…'
       window.__harnessMobileSyncComposerIntent?.(input)
     }
   }
@@ -2813,11 +2820,13 @@
       button.setAttribute('aria-label', sendLabel)
       button.setAttribute('title', sendLabel)
     }
-    const syncStopIntent = textarea => {
-      const card = textarea?.closest?.('[data-composer-card]') || document.querySelector('[data-composer-card]')
+    const syncStopIntent = target => {
+      const card = target?.closest?.('[data-composer-card]') || document.querySelector('[data-composer-card]')
       const buttons = [...(card?.querySelectorAll?.('button') || [])]
+      const preferredInput = composerInput(card || document)
+      const textarea = legacyComposerTextarea(preferredInput) ? preferredInput : null
       const hasDraft = Boolean((textarea?.value || '').trim())
-      if (!hasDraft) {
+      if (!textarea || !hasDraft) {
         for (const button of buttons) if (stopAsSend(button)) restoreStopPresentation(button)
         pendingSendTextarea = null
         return null
@@ -2826,10 +2835,8 @@
       if (stop) presentStopAsSend(stop)
       return stop
     }
-    window.__harnessMobileSyncComposerIntent = textarea => syncStopIntent(
-      composerTextarea(textarea) || document.querySelector('[data-composer-card] textarea')
-    )
-    // Busy conversations deliberately keep Stop mounted while the official
+    window.__harnessMobileSyncComposerIntent = input => syncStopIntent(input)
+    // Legacy busy conversations deliberately keep Stop mounted while the old
     // textarea's Enter handler owns Queue/Steer policy. A dressed-up Stop can
     // therefore never become a real Send button by waiting for DOM replacement.
     // Route the tap through that exact keyboard contract instead — the same path
@@ -2885,14 +2892,14 @@
     window.__harnessMobileComposerLift = true
     let largestViewportHeight = Number(window.visualViewport?.height || window.innerHeight || 0)
     let scheduled = false
-    const composerTextarea = () => document.querySelector('[data-composer-card] textarea[data-phase]')
+    const currentComposerInput = () => composerInput(document.querySelector('[data-composer-card]') || document)
     const update = () => {
       scheduled = false
       const viewport = window.visualViewport
       const viewportHeight = Number(viewport?.height || window.innerHeight || 0)
-      if (document.activeElement !== composerTextarea()) largestViewportHeight = Math.max(largestViewportHeight, viewportHeight)
-      const textarea = composerTextarea()
-      const focused = Boolean(textarea && document.activeElement === textarea)
+      if (document.activeElement !== currentComposerInput()) largestViewportHeight = Math.max(largestViewportHeight, viewportHeight)
+      const input = currentComposerInput()
+      const focused = Boolean(input && document.activeElement === input)
       const viewportCovered = largestViewportHeight > 0 && largestViewportHeight - viewportHeight >= Math.max(120, largestViewportHeight * .18)
       const nativeImeHeight = mobileCapabilities.nativeImeInsets
         ? Math.max(0, Number.parseFloat(root.style.getPropertyValue('--harness-mobile-ime-height')) || 0)
@@ -2907,12 +2914,12 @@
       const visualOverlay = viewport ? Math.max(0, Math.round(layoutHeight - viewport.height - viewport.offsetTop)) : 0
       const overlay = lifted ? (viewportCovered ? visualOverlay : nativeImeHeight) : 0
       root.style.setProperty('--harness-mobile-ime-overlay', `${overlay}px`)
-      syncMobileComposerTextareaLayout(textarea)
+      syncMobileComposerInputLayout(input)
       if (!lifted) return
       const reveal = () => {
-        const seat = textarea.closest('[data-composer-seat]') || textarea.closest('[data-harness-mobile-composer-frame="true"]')
+        const seat = input.closest('[data-composer-seat]') || input.closest('[data-harness-mobile-composer-frame="true"]')
         seat?.scrollIntoView?.({ block: 'end', inline: 'nearest', behavior: 'smooth' })
-        const scroll = textarea.closest('[data-conversation-scroll]')
+        const scroll = input.closest('[data-conversation-scroll]')
         if (scroll) scroll.scrollTop = scroll.scrollHeight
       }
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(reveal)
@@ -3303,12 +3310,41 @@
       matches[0].click()
       return true
     }
+    const officialSessionMutationSelector = '[data-composer-card], [data-harness-mobile-session-row="true"], [role="treeitem"][class*="_sessionRow"]'
+    const containsOfficialSessionMutationNode = node => {
+      try {
+        return Boolean(node?.matches?.(officialSessionMutationSelector) || node?.querySelector?.(officialSessionMutationSelector))
+      } catch {
+        return false
+      }
+    }
+    const isOfficialSessionMutation = mutation => {
+      try {
+        const target = mutation?.target?.nodeType === 1 ? mutation.target : mutation?.target?.parentElement
+        if (target?.closest?.(officialSessionMutationSelector)) return true
+        return [...(mutation?.addedNodes || []), ...(mutation?.removedNodes || [])].some(containsOfficialSessionMutationNode)
+      } catch {
+        return false
+      }
+    }
+    let officialSessionSyncScheduled = false
+    const scheduleOfficialSessionSync = () => {
+      if (officialSessionSyncScheduled) return
+      officialSessionSyncScheduled = true
+      const run = () => {
+        officialSessionSyncScheduled = false
+        syncOfficialComposerSession()
+        restoreOfficialSession()
+      }
+      if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(run)
+      else if (typeof window.setTimeout === 'function') window.setTimeout(run, 16)
+      else run()
+    }
     window.addEventListener?.('harness-mobile-session-context', event => applyOfficialSessionContext(event?.detail))
     applyOfficialSessionContext(window.__harnessMobileOfficialSessionContext)
     try {
-      const sessionObserver = new MutationObserver(() => {
-        syncOfficialComposerSession()
-        restoreOfficialSession()
+      const sessionObserver = new MutationObserver(mutations => {
+        if (mutations.some(isOfficialSessionMutation)) scheduleOfficialSessionSync()
       })
       sessionObserver.observe(document.documentElement, { childList: true, subtree: true })
     } catch {}
@@ -3479,22 +3515,33 @@
       return typeof path === 'string' && path.startsWith('uploads/') && path.length <= 512 && !path.includes('..') && !path.includes('\\') && !path.includes('\0')
     }
     const writeComposerDraft = next => {
-      const textarea = document.querySelector('[data-composer-card] textarea[data-phase]')
-      if (!textarea || textarea.disabled || textarea.readOnly) return false
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-      if (setter) setter.call(textarea, next)
-      else textarea.value = next
-      textarea.setSelectionRange?.(next.length, next.length)
-      textarea.dispatchEvent(new Event('input', { bubbles: true }))
-      textarea.focus?.({ preventScroll: true })
-      window.__harnessMobileSyncComposerIntent?.(textarea)
-      return true
+      const input = composerInput(document.querySelector('[data-composer-card]') || document)
+      if (!input || composerInputUnavailable(input) || input.getAttribute?.('data-phase') === 'inert') return false
+      if (legacyComposerTextarea(input)) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+        if (setter) setter.call(input, next)
+        else input.value = next
+        input.setSelectionRange?.(next.length, next.length)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.focus?.({ preventScroll: true })
+        window.__harnessMobileSyncComposerIntent?.(input)
+        return true
+      }
+      input.focus?.({ preventScroll: true })
+      const selection = window.getSelection?.()
+      if (!selection || typeof document.createRange !== 'function' || typeof document.execCommand !== 'function') return false
+      const range = document.createRange()
+      range.selectNodeContents(input)
+      selection.removeAllRanges()
+      selection.addRange(range)
+      try { return document.execCommand('insertText', false, next) === true }
+      catch { return false }
     }
     const appendDocumentReferences = files => {
-      const textarea = document.querySelector('[data-composer-card] textarea[data-phase]')
-      if (!textarea || textarea.disabled || textarea.readOnly) return false
+      const input = composerInput(document.querySelector('[data-composer-card]') || document)
+      if (!input || composerInputUnavailable(input) || input.getAttribute?.('data-phase') === 'inert') return false
       const references = files.map(file => `@${file.path}`).join(' ')
-      const current = textarea.value || ''
+      const current = composerInputText(input)
       const separator = current && !/\s$/u.test(current) ? '\n' : ''
       return writeComposerDraft(`${current}${separator}请查看文件：${references}\n`)
     }
@@ -3525,10 +3572,10 @@
         remove.textContent = '移除预览'
         remove.setAttribute('aria-label', `移除文件预览 ${name.textContent}`)
         remove.addEventListener('click', () => {
-          const textarea = document.querySelector('[data-composer-card] textarea[data-phase]')
-          if (textarea && !textarea.disabled && !textarea.readOnly) {
+          const input = composerInput(document.querySelector('[data-composer-card]') || document)
+          if (input && !composerInputUnavailable(input) && input.getAttribute?.('data-phase') !== 'inert') {
             const reference = `@${file.path}`
-            const next = String(textarea.value || '').replace(reference, '').replace(/请查看文件：(?=\s*(?:\n|$))/u, '').replace(/[ \t]+\n/gu, '\n').replace(/\n{3,}/gu, '\n\n').replace(/\s+$/u, '')
+            const next = composerInputText(input).replace(reference, '').replace(/请查看文件：(?=\s*(?:\n|$))/u, '').replace(/[ \t]+\n/gu, '\n').replace(/\n{3,}/gu, '\n\n').replace(/\s+$/u, '')
             writeComposerDraft(next)
           }
           chip.remove()
@@ -3925,8 +3972,8 @@
       composer.setAttribute('role', 'region')
       composer.setAttribute('aria-label', '消息编辑器')
     }
-    const textarea = composer?.querySelector?.('textarea[data-phase]')
-    if (textarea && !textarea.getAttribute('aria-label')) textarea.setAttribute('aria-label', '消息')
+    const input = composerInput(composer)
+    if (input && !input.getAttribute('aria-label')) input.setAttribute('aria-label', '消息')
     for (const button of composer?.querySelectorAll?.('[data-harness-mobile-composer-action="true"]') || []) {
       const label = accessibleButtonText(button)
       if (/stop generating|停止生成|停止运行/i.test(label)) button.setAttribute('aria-label', '停止生成')
