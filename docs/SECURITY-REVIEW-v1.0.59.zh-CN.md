@@ -111,7 +111,7 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 ## 10. Mobile Sync v6、v5 备份与反向导出
 
 - Mobile Sync v6 只保存一份 canonical snapshot 与 lossless delta journal；journal 严格不超过 512 KiB。单次超大权威变化使用有界 anchor 并失效无法继续增量的旧 cursor，不能截断仍宣称可重放的 delta。
-- heartbeat 与 preferred-port 写入小型独立原子记录，不重写 canonical ledger。operation/idempotency、cursor、tombstone、offline replace、generation/hash 与崩溃恢复仍是权威合同。
+- heartbeat 与 preferred-port 写入小型独立原子记录，不重写 canonical ledger。同一设备单调递增的亚秒 heartbeat burst 在内存投影中保持最新值，但复用最近一次 durable heartbeat；达到 1 秒窗口或发生 preferred-port 更新时立即原子持久化最新记录，从而消除 Windows 同步 flush 抖动而不放宽 p95 门槛。operation/idempotency、cursor、tombstone、offline replace、generation/hash 与崩溃恢复仍是权威合同。
 - v5→v6 首次迁移保留精确、只读的 `.v5.bak`，包括加密 secret envelope；不得把明文 network secret 写回备份或 reverse export。
 - `exportV5State` 必须能从 v6 精确反向生成 v5 canonical state；显式切回 v5、再迁移 v6 后 canonical hash 必须一致。shadow 阶段只比较 v5/v6 canonical hash，仍持久化单一 legacy transaction，不双发同步。
 - main、runtime、backup、fsync 与 rename 任一崩溃点只能恢复完整旧事务或完整新事务；损坏的 canonical/runtime integrity record fail closed，错误文本不得回显损坏内容。

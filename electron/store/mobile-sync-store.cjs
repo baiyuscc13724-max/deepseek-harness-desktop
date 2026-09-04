@@ -28,6 +28,7 @@ const RUNTIME_RECORD_SCHEMA_VERSION = 1
 const V6_STORAGE_FORMAT = 'canonical-delta-v1'
 const V5_BACKUP_SUFFIX = '.v5.bak'
 const RUNTIME_RECORD_SUFFIX = '.runtime'
+const RUNTIME_HEARTBEAT_PERSIST_INTERVAL_MS = 1000
 const ATOMIC_WRITE_PHASES = Object.freeze([
   'temp-created',
   'temp-written',
@@ -786,7 +787,8 @@ class MobileSyncStore {
     cleanupAtomicTemps(this.runtimeFile)
     cleanupAtomicTemps(this.v5BackupFile)
     const loaded = this.#load()
-    this.runtimeRecord = this.#loadRuntimeRecord()
+    this.persistedHeartbeats = new Map()
+    this.#assignRuntimeRecord(this.#loadRuntimeRecord(), true)
     this.#assignState(applyRuntimeRecord(loaded.state, this.runtimeRecord))
     if (loaded.backupSource != null) this.#ensureV5Backup(loaded.backupSource)
     if (loaded.rewrite) {
@@ -918,6 +920,17 @@ class MobileSyncStore {
     atomicWriteFile(this.runtimeFile, serialized, { mode: 0o600, kind: 'runtime', crashInjector: this.crashInjector })
   }
 
+  #assignRuntimeRecord(record, persisted = false) {
+    this.runtimeRecord = record
+    if (!persisted) return
+    const persistedHeartbeats = new Map()
+    for (const heartbeat of record.heartbeats) {
+      const timestamp = Date.parse(heartbeat.lastSeenAt)
+      if (Number.isFinite(timestamp)) persistedHeartbeats.set(heartbeat.id, { timestamp, secretHash: heartbeat.secretHash })
+    }
+    this.persistedHeartbeats = persistedHeartbeats
+  }
+
   #assignState(state) {
     const schemaVersion = this.mode === 'v6' ? STATE_SCHEMA_VERSION : LEGACY_STATE_SCHEMA_VERSION
     this.state = deepFreeze(state.schemaVersion === schemaVersion ? state : { ...state, schemaVersion })
@@ -948,12 +961,12 @@ class MobileSyncStore {
       this.#persistRuntime(nextRecord)
     } catch (error) {
       if (error?.mobileSyncPublished) {
-        this.runtimeRecord = nextRecord
+        this.#assignRuntimeRecord(nextRecord, true)
         this.#assignState(nextState)
       }
       throw error
     }
-    this.runtimeRecord = nextRecord
+    this.#assignRuntimeRecord(nextRecord, true)
     this.#assignState(nextState)
     return this.get()
   }
@@ -1034,7 +1047,25 @@ class MobileSyncStore {
     const nextRecord = { ...this.runtimeRecord, heartbeats: heartbeats.slice(-32) }
     const devices = [...this.state.devices]
     devices[index] = { ...device, lastSeenAt }
-    return this.#commitRuntime(nextRecord, { ...this.state, devices })
+    const nextState = { ...this.state, devices }
+    const timestamp = Date.parse(lastSeenAt)
+    const persistedHeartbeat = this.persistedHeartbeats.get(id)
+    const persistedTimestamp = persistedHeartbeat?.timestamp
+    if (
+      Number.isFinite(timestamp) &&
+      Number.isFinite(persistedTimestamp) &&
+      persistedHeartbeat.secretHash === device.secretHash &&
+      timestamp >= persistedTimestamp &&
+      timestamp - persistedTimestamp < RUNTIME_HEARTBEAT_PERSIST_INTERVAL_MS
+    ) {
+      // Sub-second heartbeat bursts update the authoritative in-memory view but
+      // retain the most recent durable heartbeat. Normal heartbeats are spaced
+      // beyond this window, and preferred-port changes always persist at once.
+      this.#assignRuntimeRecord(nextRecord)
+      this.#assignState(nextState)
+      return this.get()
+    }
+    return this.#commitRuntime(nextRecord, nextState)
   }
 
   revokeDevice(id) {
