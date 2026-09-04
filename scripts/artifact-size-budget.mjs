@@ -15,6 +15,18 @@ export function assertMaximum(label, bytes, maximumMiB) {
   }
 }
 
+const NODE_PTY_PREBUILD_DIRECTORY = /^(?:darwin|linux|win32)-(?:arm64|x64)$/u
+
+export function planNodePtyPrebuildPrune(directoryNames, { platform, arch }) {
+  if (!Array.isArray(directoryNames) || directoryNames.length === 0) throw new Error('node-pty prebuild directory list is empty.')
+  const target = `${platform}-${arch}`
+  if (!NODE_PTY_PREBUILD_DIRECTORY.test(target)) throw new Error(`Unsupported node-pty package target: ${target}`)
+  const names = [...new Set(directoryNames.map(name => String(name || '')))].sort()
+  if (names.some(name => !NODE_PTY_PREBUILD_DIRECTORY.test(name))) throw new Error('node-pty prebuild directory list contains an unsupported entry.')
+  if (!names.includes(target)) throw new Error(`node-pty package is missing its required ${target} prebuild.`)
+  return Object.freeze({ target, remove: Object.freeze(names.filter(name => name !== target)) })
+}
+
 export async function directorySize(root) {
   const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(error => {
     if (error?.code === 'ENOENT') return []

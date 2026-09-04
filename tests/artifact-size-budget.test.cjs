@@ -20,6 +20,17 @@ test('artifact size budget rejects regressions with an actionable error', async 
   assert.throws(() => assertMaximum('sample', 1, 0), /Invalid size budget/)
 })
 
+test('Windows packaging retains only the matching node-pty prebuild without weakening other platform builds', async () => {
+  const { planNodePtyPrebuildPrune } = await budgetModule
+  const directories = ['win32-x64', 'win32-arm64', 'darwin-x64', 'darwin-arm64', 'linux-x64', 'linux-arm64']
+  assert.deepEqual(planNodePtyPrebuildPrune(directories, { platform: 'win32', arch: 'x64' }), {
+    target: 'win32-x64',
+    remove: ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-arm64']
+  })
+  assert.throws(() => planNodePtyPrebuildPrune(['darwin-x64'], { platform: 'win32', arch: 'x64' }), /missing its required win32-x64 prebuild/)
+  assert.throws(() => planNodePtyPrebuildPrune([...directories, '..'], { platform: 'win32', arch: 'x64' }), /unsupported entry/)
+})
+
 test('directorySize counts nested files and tolerates a missing directory', async () => {
   const { directorySize } = await budgetModule
   const root = await mkdtemp(path.join(os.tmpdir(), 'harness-size-budget-'))

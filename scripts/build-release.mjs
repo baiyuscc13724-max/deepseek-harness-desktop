@@ -1,11 +1,21 @@
-import { access, copyFile, mkdir, readFile, rm } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import spawn from 'cross-spawn'
+import { planNodePtyPrebuildPrune } from './artifact-size-budget.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dist = path.join(root, 'dist')
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+
+async function pruneNodePtyPrebuilds(platform, arch) {
+  const prebuilds = path.join(root, 'node_modules', 'node-pty', 'prebuilds')
+  const entries = await readdir(prebuilds, { withFileTypes: true })
+  if (entries.some(entry => !entry.isDirectory())) throw new Error('node-pty prebuild root contains an unsupported entry.')
+  const plan = planNodePtyPrebuildPrune(entries.map(entry => entry.name), { platform, arch })
+  for (const name of plan.remove) await rm(path.join(prebuilds, name), { recursive: true, force: false })
+  console.log(`Retained only the required node-pty ${plan.target} prebuild.`)
+}
 
 function run(command, args) {
   const result = spawn.sync(command, args, {
@@ -35,6 +45,7 @@ run(process.execPath, ['scripts/patch-official-runtime.mjs'])
 
 if (process.platform === 'win32') {
   run(process.execPath, ['scripts/prepare-bundled-git.mjs'])
+  await pruneNodePtyPrebuilds('win32', 'x64')
   // Native dependencies are already aligned by the package postinstall step.
   // Re-running electron-rebuild here adds no release value and can fail in
   // restricted Windows shells that deny nested child-process forks.
