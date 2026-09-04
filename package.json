@@ -68,7 +68,7 @@
     "@deepseek-ai/dsh-subprocess": "0.1.2-alpha.5",
     "@deepseek-ai/dsh-timeout": "0.1.2-alpha.5",
     "@deepseek-ai/dsh-workflow": "0.1.2-alpha.5",
-    "@earendil-works/pi-ai": "0.82.1",
+    "@earendil-works/pi-ai": "0.84.4",
     "@peculiar/x509": "2.0.0",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
