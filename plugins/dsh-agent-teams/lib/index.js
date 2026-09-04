@@ -172,6 +172,7 @@ const STORE_INSTANCES = new Map();
 const LAZY_TEAM_STATES = new WeakMap();
 const LAZY_TEAM_VIEW_STATES = new WeakMap();
 const STORE_PROJECTION_METADATA = new WeakMap();
+const LEDGER_PROJECTION_IDENTITIES = new WeakMap();
 const SSE_SNAPSHOT_ENCODINGS = new WeakMap();
 const TEAM_KEYS = new Set(["id", "rootLeadSessionId", "name", "objective", "revision", "state", "createdAt", "updatedAt", "members", "tasks", "messages", "provisioningQueue", "start", "bootstrap", "plan", "autopilot", "pauseEpoch", "resume", "handoff", "projectKey", "ownershipHistory", "closure", "memberRecoveries", "taskCommandReceipts"]);
 const TEAM_START_KEYS = new Set(["requestId", "inputHash"]);
@@ -3216,9 +3217,12 @@ async function writeImmutableArtifact(layoutRoot, reference, bytes, { beforeRena
       const existing = await readFile(destination);
       if (!existing.equals(bytes)) throw new TypeError(`immutable Agent Teams artifact collision at ${reference}`);
     }
-    const verified = await readFile(destination);
-    if (!verified.equals(bytes)) throw new TypeError(`immutable Agent Teams artifact failed verification at ${reference}`);
-    await syncStoreDirectory(dirname(destination));
+    const [verification] = await Promise.allSettled([
+      readFile(destination),
+      syncStoreDirectory(dirname(destination)),
+    ]);
+    if (verification.status === "rejected") throw verification.reason;
+    if (!verification.value.equals(bytes)) throw new TypeError(`immutable Agent Teams artifact failed verification at ${reference}`);
     return destination;
   } finally {
     await handle?.close().catch(() => undefined);
@@ -3238,9 +3242,12 @@ async function replaceAtomicArtifact(filePath, bytes) {
     handle = undefined;
     await rename(temp, filePath);
     tempOwned = false;
-    const verified = await readFile(filePath);
-    if (!verified.equals(bytes)) throw new TypeError(`atomic Agent Teams artifact failed verification at ${filePath}`);
-    await syncStoreDirectory(dirname(filePath));
+    const [verification] = await Promise.allSettled([
+      readFile(filePath),
+      syncStoreDirectory(dirname(filePath)),
+    ]);
+    if (verification.status === "rejected") throw verification.reason;
+    if (!verification.value.equals(bytes)) throw new TypeError(`atomic Agent Teams artifact failed verification at ${filePath}`);
   } finally {
     await handle?.close().catch(() => undefined);
     if (tempOwned) await rm(temp, { force: true }).catch(() => undefined);
@@ -3758,6 +3765,8 @@ function projectionArtifactDescriptorKey(artifact) {
   return JSON.stringify([artifact.path, artifact.hash, artifact.bytes, artifact.generation ?? null]);
 }
 function projectionTeamIdentityFromLedger(entry) {
+  const cached = LEDGER_PROJECTION_IDENTITIES.get(entry);
+  if (cached !== undefined) return cached;
   const members = entry.index.members.map((member) => Object.freeze([
     member.id,
     member.sessionId,
@@ -3765,7 +3774,7 @@ function projectionTeamIdentityFromLedger(entry) {
     member.state,
     member.updatedAt ?? null,
   ]));
-  return Object.freeze({
+  const identity = Object.freeze({
     id: entry.id,
     hash: entry.hash,
     bytes: entry.bytes,
@@ -3778,6 +3787,8 @@ function projectionTeamIdentityFromLedger(entry) {
     ownershipHash: sha256Bytes(Buffer.from(JSON.stringify(entry.index.ownershipHistory), "utf8")),
     members: Object.freeze(members),
   });
+  LEDGER_PROJECTION_IDENTITIES.set(entry, identity);
+  return identity;
 }
 function projectionTeamIdentityFromDocument(team) {
   const artifact = jsonArtifact(team);
@@ -3919,6 +3930,7 @@ class AgentTeamsStore {
     this.retentionKeep = undefined;
     this.retentionKeepGeneration = 0;
     this.retentionAuthority = undefined;
+    this.retentionManifestChain = undefined;
     this.retentionRevision = 0;
     this.retentionLifecycleEpoch = 0;
     this.retentionGarbage = new Map();
@@ -4340,6 +4352,7 @@ class AgentTeamsStore {
     this.retentionKeep = undefined;
     this.retentionKeepGeneration = 0;
     this.retentionAuthority = undefined;
+    this.retentionManifestChain = undefined;
     if (requireAuthorityReload) this.retentionAuthorityReloadRequired = true;
     if (clearDebt) {
       this.retentionGarbage = new Map();
@@ -4655,6 +4668,7 @@ class AgentTeamsStore {
   }
   async #commitHotColdPlan(header, ordered, { sourceV8 = this.manifest?.sourceV8, promotionDocument } = {}) {
     let previousRetentionKeep = new Set();
+    let previousRetentionManifestChain;
     if (this.manifest !== undefined) {
       // A failed prior write may have left immutable artifacts outside the cached
       // reachability set. Refresh that stale state before the hard gate and before
@@ -4662,6 +4676,7 @@ class AgentTeamsStore {
       if (!this.#retentionReachabilityIsCurrent()) await this.#refreshRetentionDebt();
       await this.#ensureRetentionWritable();
       previousRetentionKeep = new Set(this.retentionKeep);
+      previousRetentionManifestChain = this.retentionManifestChain;
       // From this point an injected or physical write failure can leave an orphan.
       // The next real mutation must rescan; semantic no-ops never enter this method.
       this.#invalidateRetentionReachability();
@@ -4701,7 +4716,10 @@ class AgentTeamsStore {
     });
     const closedEntries = entries.filter((entry) => entry.storage === "closed");
     const previousClosedEntries = previousEntries.filter((entry) => entry.storage === "closed");
-    let closedCatalog = JSON.stringify(closedEntries) === JSON.stringify(previousClosedEntries) ? this.manifest?.closedCatalog : undefined;
+    const closedCatalogUnchangedByIdentity = closedEntries.length === previousClosedEntries.length
+      && closedEntries.every((entry, index) => entry === previousClosedEntries[index]);
+    let closedCatalog = (closedCatalogUnchangedByIdentity
+      || JSON.stringify(closedEntries) === JSON.stringify(previousClosedEntries)) ? this.manifest?.closedCatalog : undefined;
     if (closedCatalog === undefined) {
       const catalogArtifact = jsonArtifact({ version: HOT_COLD_STORE_VERSION, entries: closedEntries });
       closedCatalog = { path: `catalog/catalog-${catalogArtifact.hash}.json`, hash: catalogArtifact.hash, bytes: catalogArtifact.size };
@@ -4812,7 +4830,7 @@ class AgentTeamsStore {
       try {
         // Only refs that just fell out of the bounded keep set are garbage. Newly
         // written current/rollback artifacts never enter debt, even transiently.
-        await this.#advanceRetentionDebt(previousRetentionKeep);
+        await this.#advanceRetentionDebt(previousRetentionKeep, previousRetentionManifestChain);
         await this.#maybeSweepRetention();
       } catch (error) {
         this.#invalidateRetentionReachability();
@@ -4933,21 +4951,20 @@ class AgentTeamsStore {
     }
     return files.sort((left, right) => left.reference.localeCompare(right.reference));
   }
-  async #retentionPlan({ fullValidation = false, shouldContinue, expectedAuthority } = {}) {
+  async #retentionPlan({ fullValidation = false, shouldContinue, expectedAuthority, previousManifestChain } = {}) {
     this.#assertRetentionContinuation(shouldContinue);
     const pointerBytes = await readFile(this.layout.pointerPath);
     this.#assertRetentionContinuation(shouldContinue);
     const pointer = validateHotColdPointer(JSON.parse(pointerBytes.toString("utf8")));
     if (!pointerBytes.equals(jsonArtifact(pointer).bytes)) throw new TypeError("Agent Teams hot/cold pointer is noncanonical");
-    const pointerStamp = await this.#currentFileStamp(this.layout.pointerPath);
-    this.#assertRetentionContinuation(shouldContinue);
-    const authority = this.#retentionAuthorityFor(pointer, pointerStamp, pointerBytes);
-    if (expectedAuthority !== undefined && !this.#retentionAuthorityEquals(authority, expectedAuthority)) throw this.#retentionMaintenanceSuperseded();
-    const sentinel = await this.#readPromotionSentinel();
-    this.#assertRetentionContinuation(shouldContinue);
-    if (sentinel?.phase !== "committed") throw new TypeError("Agent Teams retention requires a committed sibling promotion sentinel");
-    const legacyMarker = await this.#readLegacyPromotionMarker();
-    this.#assertRetentionContinuation(shouldContinue);
+    const retentionAuthorityContext = Promise.all([
+      this.#currentFileStamp(this.layout.pointerPath),
+      this.#readPromotionSentinel(),
+      this.#readLegacyPromotionMarker(),
+    ]).then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
     const keep = new Set();
     const artifactBytesCache = new Map();
     const artifactJsonCache = new Map();
@@ -4955,71 +4972,112 @@ class AgentTeamsStore {
     const descriptorCacheKey = (candidate) => JSON.stringify([candidate.path, candidate.hash, candidate.bytes, candidate.generation ?? null]);
     const cachedArtifactBytes = async (candidate) => {
       const key = descriptorCacheKey(candidate);
-      if (!artifactBytesCache.has(key)) {
+      if (!artifactBytesCache.has(key)) artifactBytesCache.set(key, (async () => {
         this.#assertRetentionContinuation(shouldContinue);
         await this.#fault(`before-retention-artifact-read:${candidate.path}`);
         this.#assertRetentionContinuation(shouldContinue);
         const bytes = await verifiedArtifactBytes(this.layout.root, candidate);
         this.#assertRetentionContinuation(shouldContinue);
-        artifactBytesCache.set(key, bytes);
-      }
+        return bytes;
+      })());
       return artifactBytesCache.get(key);
     };
     const cachedArtifactJson = async (candidate) => {
       const key = descriptorCacheKey(candidate);
-      if (!artifactJsonCache.has(key)) artifactJsonCache.set(key, JSON.parse((await cachedArtifactBytes(candidate)).toString("utf8")));
+      if (!artifactJsonCache.has(key)) artifactJsonCache.set(key, cachedArtifactBytes(candidate).then((bytes) => JSON.parse(bytes.toString("utf8"))));
       return artifactJsonCache.get(key);
     };
     const cachedClosedCatalog = async (candidate) => {
       const key = descriptorCacheKey(candidate);
-      if (!validatedClosedCatalogCache.has(key)) validatedClosedCatalogCache.set(key, validateClosedCatalog(await cachedArtifactJson(candidate)));
+      if (!validatedClosedCatalogCache.has(key)) validatedClosedCatalogCache.set(key, cachedArtifactJson(candidate).then(validateClosedCatalog));
       return validatedClosedCatalogCache.get(key);
     };
+    const expectedManifestDescriptors = Array.isArray(previousManifestChain)
+      ? [pointer.manifest, ...previousManifestChain.slice(0, HOT_COLD_RETENTION_MAX_COMPLETE_GENERATIONS)]
+      : [];
+    const prefetchedManifestJson = new Map();
+    for (const candidate of expectedManifestDescriptors) {
+      validateCanonicalArtifactDescriptor(candidate, "manifest", candidate.generation);
+      const key = descriptorCacheKey(candidate);
+      if (!prefetchedManifestJson.has(key)) prefetchedManifestJson.set(key, cachedArtifactJson(candidate).then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      ));
+    }
+    const authorityOutcome = await retentionAuthorityContext;
+    if (authorityOutcome.error !== undefined) throw authorityOutcome.error;
+    const [pointerStamp, sentinel, legacyMarker] = authorityOutcome.value;
+    this.#assertRetentionContinuation(shouldContinue);
+    const authority = this.#retentionAuthorityFor(pointer, pointerStamp, pointerBytes);
+    if (expectedAuthority !== undefined && !this.#retentionAuthorityEquals(authority, expectedAuthority)) throw this.#retentionMaintenanceSuperseded();
+    if (sentinel?.phase !== "committed") throw new TypeError("Agent Teams retention requires a committed sibling promotion sentinel");
     let descriptor = pointer.manifest;
     let currentSource;
+    const manifestChain = [];
+    const retainedGenerations = [];
     const retentionFloorGeneration = pointer.retentionFloorGeneration
       ?? Math.max(1, pointer.generation - (HOT_COLD_RETENTION_COMPLETE_GENERATIONS - 1));
     for (let depth = 0; descriptor !== undefined && depth <= HOT_COLD_RETENTION_MAX_COMPLETE_GENERATIONS; depth += 1) {
       this.#assertRetentionContinuation(shouldContinue);
       validateCanonicalArtifactDescriptor(descriptor, "manifest", descriptor.generation);
-      const manifest = validateHotColdManifest(await cachedArtifactJson(descriptor));
+      const expectedDescriptor = expectedManifestDescriptors[depth];
+      if (expectedDescriptor !== undefined && descriptorCacheKey(descriptor) !== descriptorCacheKey(expectedDescriptor)) throw new TypeError("Agent Teams retained manifest chain diverged from the prior validated generation");
+      const prefetched = prefetchedManifestJson.get(descriptorCacheKey(descriptor));
+      const outcome = prefetched === undefined
+        ? { value: await cachedArtifactJson(descriptor) }
+        : await prefetched;
+      if (outcome.error !== undefined) throw outcome.error;
+      const manifest = validateHotColdManifest(outcome.value);
       if (manifest.generation !== descriptor.generation) throw new TypeError("Agent Teams retention manifest generation mismatch");
+      manifestChain.push(descriptor);
       keep.add(descriptor.path);
       const retainComplete = depth < HOT_COLD_RETENTION_MAX_COMPLETE_GENERATIONS && manifest.generation >= retentionFloorGeneration;
       if (retainComplete) {
         currentSource ??= manifest.sourceV8;
         if (JSON.stringify(manifest.sourceV8) !== JSON.stringify(currentSource)) throw new TypeError("Agent Teams retained generations disagree on their immutable v8 source");
         for (const artifact of [manifest.sourceV8, manifest.hot, manifest.closedCatalog]) keep.add(artifact.path);
-        const catalog = await cachedClosedCatalog(manifest.closedCatalog);
-        const entries = [...manifest.hotTeams, ...catalog.entries].sort((left, right) => left.ordinal - right.ordinal);
-        if (entries.length !== manifest.teamCount) throw new TypeError("Agent Teams retained generation team count mismatch");
-        // Both descriptor classes were fully validated above; only their merged
-        // canonical ordinal sequence is generation-specific.
-        if (entries.some((entry, ordinal) => entry.ordinal !== ordinal)) throw new TypeError("Agent Teams retained generation team ordinals mismatch");
-        for (const entry of catalog.entries) keep.add(entry.shard.path);
-        if (fullValidation) {
-          await cachedArtifactBytes(manifest.sourceV8);
-          const hotDocument = validateHotDocument(await cachedArtifactJson(manifest.hot), manifest);
-          const hotById = new Map(hotDocument.teams.map((team) => [team.id, team]));
-          const fullTeams = new Map();
-          for (const entry of entries) {
-            this.#assertRetentionContinuation(shouldContinue);
-            let team;
-            if (entry.storage === "hot") team = hotById.get(entry.id);
-            else team = await cachedArtifactJson(entry.shard);
-            if (team === undefined) throw new TypeError(`Agent Teams retained generation is missing ${entry.id}`);
-            fullTeams.set(entry.id, this.#assertTeamMatchesEntry(clone(team), entry));
-          }
-          validateIndexedStore(clone(hotDocument.header), entries, fullTeams);
-          const document = assembleStoreDocument(hotDocument.header, entries.map((entry) => fullTeams.get(entry.id)));
-          validateStoreDocument(document);
-          if (documentMerkleHash(hotDocument.header, entries) !== manifest.documentHash
-            || documentSecurityHash(hotDocument.header, entries) !== manifest.securityHash
-            || JSON.stringify(rootLedgerProjectionHashes(hotDocument.header, entries)) !== JSON.stringify(manifest.projectionHashes)) throw new TypeError("Agent Teams retained generation hash validation failed");
-        }
+        // Catalog integrity is independent of the preceding manifest chain. Start
+        // each distinct content-addressed read now while the next manifest resolves.
+        const catalogOutcome = cachedClosedCatalog(manifest.closedCatalog).then(
+          (catalog) => ({ catalog }),
+          (error) => ({ error }),
+        );
+        retainedGenerations.push({ manifest, catalogOutcome });
       }
       if (!retainComplete) break;
       descriptor = manifest.previous;
+    }
+    for (const retained of retainedGenerations) {
+      const { manifest } = retained;
+      const outcome = await retained.catalogOutcome;
+      if (outcome.error !== undefined) throw outcome.error;
+      const catalog = outcome.catalog;
+      const entries = [...manifest.hotTeams, ...catalog.entries].sort((left, right) => left.ordinal - right.ordinal);
+      if (entries.length !== manifest.teamCount) throw new TypeError("Agent Teams retained generation team count mismatch");
+      // Both descriptor classes were fully validated above; only their merged
+      // canonical ordinal sequence is generation-specific.
+      if (entries.some((entry, ordinal) => entry.ordinal !== ordinal)) throw new TypeError("Agent Teams retained generation team ordinals mismatch");
+      for (const entry of catalog.entries) keep.add(entry.shard.path);
+      if (fullValidation) {
+        await cachedArtifactBytes(manifest.sourceV8);
+        const hotDocument = validateHotDocument(await cachedArtifactJson(manifest.hot), manifest);
+        const hotById = new Map(hotDocument.teams.map((team) => [team.id, team]));
+        const fullTeams = new Map();
+        for (const entry of entries) {
+          this.#assertRetentionContinuation(shouldContinue);
+          let team;
+          if (entry.storage === "hot") team = hotById.get(entry.id);
+          else team = await cachedArtifactJson(entry.shard);
+          if (team === undefined) throw new TypeError(`Agent Teams retained generation is missing ${entry.id}`);
+          fullTeams.set(entry.id, this.#assertTeamMatchesEntry(clone(team), entry));
+        }
+        validateIndexedStore(clone(hotDocument.header), entries, fullTeams);
+        const document = assembleStoreDocument(hotDocument.header, entries.map((entry) => fullTeams.get(entry.id)));
+        validateStoreDocument(document);
+        if (documentMerkleHash(hotDocument.header, entries) !== manifest.documentHash
+          || documentSecurityHash(hotDocument.header, entries) !== manifest.securityHash
+          || JSON.stringify(rootLedgerProjectionHashes(hotDocument.header, entries)) !== JSON.stringify(manifest.projectionHashes)) throw new TypeError("Agent Teams retained generation hash validation failed");
+      }
     }
     if (currentSource === undefined || JSON.stringify(sentinel.sourceV8) !== JSON.stringify(currentSource)) throw new TypeError("Agent Teams promotion sentinel disagrees with the retained generation chain");
     if (legacyMarker !== undefined) validateLegacyPromotionMarker(legacyMarker, currentSource);
@@ -5029,12 +5087,13 @@ class AgentTeamsStore {
       await this.#verifyOuterV8Source(currentSource, undefined, { knownCopyBytes: sourceBytes });
       this.#assertRetentionContinuation(shouldContinue);
     }
-    return { pointer, pointerBytes, pointerStamp, authority, keep };
+    return { pointer, pointerBytes, pointerStamp, authority, keep, manifestChain };
   }
   #setRetentionReachability(plan, candidates) {
     this.retentionKeep = plan.keep;
     this.retentionKeepGeneration = plan.pointer.generation;
     this.retentionAuthority = plan.authority;
+    this.retentionManifestChain = plan.manifestChain;
     this.retentionGarbage = new Map(candidates.map((candidate) => [candidate.reference, candidate]));
     this.retention.debtBytes = candidates.reduce((sum, file) => sum + file.bytes, 0);
     this.retention.debtFiles = candidates.length;
@@ -5052,18 +5111,19 @@ class AgentTeamsStore {
     this.#setRetentionReachability(plan, candidates);
     return { plan, files, candidates };
   }
-  async #advanceRetentionDebt(previousKeep) {
-    const plan = await this.#retentionPlan();
+  async #advanceRetentionDebt(previousKeep, previousManifestChain) {
+    const plan = await this.#retentionPlan({ previousManifestChain });
     for (const reference of plan.keep) this.retentionGarbage.delete(reference);
-    for (const reference of previousKeep) {
-      if (plan.keep.has(reference) || this.retentionGarbage.has(reference)) continue;
+    const expiredReferences = [...previousKeep].filter((reference) => !plan.keep.has(reference) && !this.retentionGarbage.has(reference));
+    const expiredArtifacts = await Promise.all(expiredReferences.map(async (reference) => {
       const filePath = hotColdArtifactPath(this.layout.root, reference);
       let info;
       try { info = await lstat(filePath); }
-      catch (error) { if (error?.code === "ENOENT") continue; throw error; }
-      if (!info.isFile() || info.isSymbolicLink() || !Number.isSafeInteger(info.size) || info.size < 0) continue;
-      this.retentionGarbage.set(reference, { reference, filePath, bytes: info.size });
-    }
+      catch (error) { if (error?.code === "ENOENT") return undefined; throw error; }
+      if (!info.isFile() || info.isSymbolicLink() || !Number.isSafeInteger(info.size) || info.size < 0) return undefined;
+      return { reference, filePath, bytes: info.size };
+    }));
+    for (const artifact of expiredArtifacts) if (artifact !== undefined) this.retentionGarbage.set(artifact.reference, artifact);
     this.#setRetentionReachability(plan, [...this.retentionGarbage.values()]);
   }
   #retentionAtSoftWatermark() {
@@ -10108,11 +10168,12 @@ function teamProjectionCacheIdentity(document, sessionId, selectedTeamId, select
   ]);
   return { metadata, semanticKey, exactKey };
 }
+const canonicalTeamProjectionCandidate = (_document, _sessionId, _selectedTeamId, _selectedTaskId, _authorization, canonical) => canonical;
 function createTeamProjectionCache({
   maxBytes = TEAM_PROJECTION_CACHE_MAX_BYTES,
   mode,
   canonicalSnapshot = teamSnapshot,
-  candidateSnapshot = (_document, _sessionId, _selectedTeamId, _selectedTaskId, _authorization, canonical) => canonical,
+  candidateSnapshot = canonicalTeamProjectionCandidate,
 } = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > TEAM_PROJECTION_CACHE_MAX_BYTES) throw new TypeError(`maxBytes must be a positive safe integer no greater than ${TEAM_PROJECTION_CACHE_MAX_BYTES}`);
   if (typeof canonicalSnapshot !== "function" || typeof candidateSnapshot !== "function") throw new TypeError("projection cache snapshots must be callable");
@@ -10132,7 +10193,7 @@ function createTeamProjectionCache({
     if (related?.size === 0) semanticEntries.delete(entry.semanticKey);
     SSE_SNAPSHOT_ENCODINGS.delete(entry.snapshot);
     entry.snapshot = undefined;
-    entry.jsonBytes = undefined;
+    entry.jsonByteLength = undefined;
     entry.payload = undefined;
   };
   const clear = () => {
@@ -10153,10 +10214,10 @@ function createTeamProjectionCache({
     entries.set(entry.exactKey, entry);
     return entry.snapshot;
   };
-  const insert = (identity, snapshot, jsonBytes, payload) => {
-    const entryBytes = (jsonBytes.length * 2) + Buffer.byteLength("event: snapshot\ndata: \n\n") + Buffer.byteLength(identity.exactKey) + Buffer.byteLength(identity.semanticKey);
+  const insert = (identity, snapshot, jsonByteLength, payload) => {
+    const entryBytes = (jsonByteLength * 2) + Buffer.byteLength("event: snapshot\ndata: \n\n") + Buffer.byteLength(identity.exactKey) + Buffer.byteLength(identity.semanticKey);
     if (entryBytes > maxBytes) return snapshot;
-    const entry = { exactKey: identity.exactKey, semanticKey: identity.semanticKey, serial: identity.metadata.serial, bytes: entryBytes, snapshot, jsonBytes, payload };
+    const entry = { exactKey: identity.exactKey, semanticKey: identity.semanticKey, serial: identity.metadata.serial, bytes: entryBytes, snapshot, jsonByteLength, payload };
     SSE_SNAPSHOT_ENCODINGS.set(snapshot, payload);
     entries.set(entry.exactKey, entry);
     const related = semanticEntries.get(entry.semanticKey) ?? new Set();
@@ -10193,7 +10254,7 @@ function createTeamProjectionCache({
           if (reusable !== undefined) {
             counters.hits += 1;
             counters.semanticReuses += 1;
-            return insert(identity, reusable.snapshot, reusable.jsonBytes, reusable.payload);
+            return insert(identity, reusable.snapshot, reusable.jsonByteLength, reusable.payload);
           }
         }
       }
@@ -10203,24 +10264,36 @@ function createTeamProjectionCache({
     }
     counters.misses += 1;
     const canonical = canonicalSnapshot(document, sessionId, selectedTeamId, selectedTaskId);
-    let candidate, canonicalBytes, candidateBytes;
+    let candidate, candidateByteLength, candidateText;
     try {
-      // The new path materializes the cache candidate from the just-authorized
-      // canonical pure projection; injected candidates keep the A/B guard testable.
-      canonicalBytes = Buffer.from(JSON.stringify(canonical), "utf8");
-      const candidateValue = candidateSnapshot(document, sessionId, selectedTeamId, selectedTaskId, authorization, canonical);
-      if (candidateValue === canonical) {
-        candidate = deepFreeze(JSON.parse(canonicalBytes.toString("utf8")));
-        candidateBytes = canonicalBytes;
+      // The built-in enabled path owns this freshly authorized pure projection, so
+      // freezing it directly preserves isolation without parsing the same JSON again.
+      // Shadow/custom candidates retain the independent byte-for-byte A/B guard.
+      const canonicalText = JSON.stringify(canonical);
+      if (activeMode === "enabled" && canonicalSnapshot === teamSnapshot && candidateSnapshot === canonicalTeamProjectionCandidate) {
+        candidate = deepFreeze(canonical);
+        candidateText = canonicalText;
+        candidateByteLength = Buffer.byteLength(canonicalText);
       } else {
-        candidate = immutableClone(candidateValue);
-        candidateBytes = Buffer.from(JSON.stringify(candidate), "utf8");
-      }
-      const bytesMatch = candidateBytes === canonicalBytes || canonicalBytes.equals(candidateBytes);
-      const canonicalHash = sha256Bytes(canonicalBytes), candidateHash = bytesMatch ? canonicalHash : sha256Bytes(candidateBytes);
-      if (!bytesMatch || canonicalHash !== candidateHash) {
-        trip(`shadow_mismatch:${canonicalHash}:${candidateHash}`, true);
-        return canonical;
+        const canonicalBytes = Buffer.from(canonicalText, "utf8");
+        const candidateValue = candidateSnapshot(document, sessionId, selectedTeamId, selectedTaskId, authorization, canonical);
+        let candidateBytes;
+        if (candidateValue === canonical) {
+          candidate = deepFreeze(JSON.parse(canonicalText));
+          candidateBytes = canonicalBytes;
+          candidateText = canonicalText;
+        } else {
+          candidate = immutableClone(candidateValue);
+          candidateText = JSON.stringify(candidate);
+          candidateBytes = Buffer.from(candidateText, "utf8");
+        }
+        const bytesMatch = candidateBytes === canonicalBytes || canonicalBytes.equals(candidateBytes);
+        const canonicalHash = sha256Bytes(canonicalBytes), candidateHash = bytesMatch ? canonicalHash : sha256Bytes(candidateBytes);
+        if (!bytesMatch || canonicalHash !== candidateHash) {
+          trip(`shadow_mismatch:${canonicalHash}:${candidateHash}`, true);
+          return canonical;
+        }
+        candidateByteLength = candidateBytes.length;
       }
       counters.shadowMatches += 1;
     } catch (error) {
@@ -10228,9 +10301,9 @@ function createTeamProjectionCache({
       return canonical;
     }
     if (activeMode === "shadow") return canonical;
-    const payload = `event: snapshot\ndata: ${candidateBytes.toString("utf8")}\n\n`;
+    const payload = `event: snapshot\ndata: ${candidateText}\n\n`;
     counters.promotions += 1;
-    return insert(identity, candidate, candidateBytes, payload);
+    return insert(identity, candidate, candidateByteLength, payload);
   };
   const stats = () => Object.freeze({
     mode: closed ? "closed" : circuitOpen ? "disabled" : lastMode ?? configuredMode(),

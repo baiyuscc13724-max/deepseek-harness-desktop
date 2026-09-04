@@ -25,7 +25,7 @@ alpha2Audit('accepted alpha.2 source, static gate, migration and publication inp
 
 test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof sources without moving history', () => {
   const accepted = Object.freeze({
-    'plugins/dsh-agent-teams/lib/index.js': 'e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856',
+    'plugins/dsh-agent-teams/lib/index.js': 'a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b',
     'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887'
   })
   assert.equal(Object.keys(helper.ACCEPTED).length, 12)
@@ -35,20 +35,20 @@ test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof so
   }
   assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
-  const evidence = [...Object.values(accepted), 'Promise.allSettled', '删除前的 `fullValidation`', '74/74', '25.98 ms', '25.92 ms', '169/169', '29/29', '3.54%']
+  const evidence = [...Object.values(accepted), 'Promise.allSettled', '删除前的 `fullValidation`', '74/74', '22.67 ms', '12/12', '30.416 ms', '169/169', '29/29', '3.54%']
   for (const contract of evidence) assert.ok(review.includes(contract), `v1.0.59 hot/cold review evidence missing: ${contract}`)
 })
 
 test('v1.0.59 cloud performance recovery binds exact optimized sources and unchanged safety gates', () => {
   const accepted = Object.freeze({
-    'plugins/dsh-agent-teams/lib/index.js': 'e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856',
+    'plugins/dsh-agent-teams/lib/index.js': 'a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b',
     'electron/store/mobile-sync-store.cjs': 'da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba'
   })
   for (const [relative, expected] of Object.entries(accepted)) {
     assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `optimized source drift: ${relative}`)
   }
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
-  for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', '没有提高阈值', '文件 `fsync` 与原子 rename', 'runtime.fiber.dispose()', '--test-force-exit']) {
+  for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', 'manifest descriptor chain', '同一 canonical text', '`WeakMap` identity', '没有提高阈值', '文件 `fsync` 与原子 rename', 'runtime.fiber.dispose()', '--test-force-exit']) {
     assert.ok(review.includes(contract), `v1.0.59 performance recovery evidence missing: ${contract}`)
   }
   const runtimeTest = fs.readFileSync(path.join(ROOT, 'tests', 'agent-teams-runtime.test.cjs'), 'utf8')

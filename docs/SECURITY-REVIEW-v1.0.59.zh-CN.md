@@ -85,25 +85,25 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 本轮独立逐项审查产品 `+574/-104` 与回归 `+510/-9` 差异，并在产品文件和性能测试只读的条件下接受以下两个 canonical-LF 源身份：
 
-- `plugins/dsh-agent-teams/lib/index.js`：`e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856`
+- `plugins/dsh-agent-teams/lib/index.js`：`a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b`
 - `tests/agent-teams-store-performance.test.cjs`：`68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887`
 
 独立复核确认性能恢复没有缩小权威数据域、耐久边界或拒绝条件：
 
 - Root ledger projection 只在单次 `rootLedgerProjectionHashes` 调用内，按已校验的 canonical ordinal 有序子序列复用 scope digest；Map 不跨 mutation、generation 或 ACL 存活，返回行仍保留每个原始 `rootSessionId` 的逐码点身份。独立 oracle 覆盖 NFC/NFD 规范等价但码点不同的 root、共享与不同 scope、scope 变化及重启。
 - hot 与 manifest 只在写前完整 `validateIndexedStore`、canonical bytes 和全部 hash 已确定后并行落盘；`Promise.allSettled` 等待两支完全结束，hot 错误优先，拒绝返回后不存在晚到 writer。随后仍按 after-hot fault gate、物理 hot 的 hash/长度/JSON/team-entry exact 核验、manifest gate，最后才原子替换 pointer；pointer 是唯一可见提交边界。
-- immutable writer 继续使用同目录随机 temp、`wx`、文件 `fsync`、rename、readback 与目录同步。`tempOwned` 只在 rename 真正成功后清除；失败或 EEXIST/EPERM 碰撞只清理由本调用拥有的 temp，绝不 `rm` destination。hot 的第二次物理核验仍在，删除的只是同一已验证内存图的重复全局遍历。
-- retention 的 artifact/JSON/catalog 复用键精确包含 `path + hash + bytes + generation`，并且生命周期只限一次 plan；每代 manifest/hot、merged ordinal、document/security/projection hash、ACL/epoch、closed shard 和 immutable v8 source 仍分别验证。任何 unlink 前仍先完成删除前的 `fullValidation`，每次 unlink 前仍重读并比对完整 pointer bytes 与 stat identity。
+- immutable writer 继续使用同目录随机 temp、`wx`、文件 `fsync`、rename、readback 与目录同步。rename 后只让 readback 与目录同步并发执行，并以 `Promise.allSettled` 等待二者完全结束；没有省略或后移任一耐久步骤。`tempOwned` 只在 rename 真正成功后清除；失败或 EEXIST/EPERM 碰撞只清理由本调用拥有的 temp，绝不 `rm` destination。hot 的第二次物理核验仍在，删除的只是同一已验证内存图的重复全局遍历。
+- retention 的 artifact/JSON/catalog 复用键精确包含 `path + hash + bytes + generation`，并且生命周期只限一次 plan。正常线性提交可把上一份已验证、且与完整 pointer authority 同生共失的 manifest descriptor chain 仅用于并发发起物理读取；每个 manifest 仍逐一执行 path/hash/bytes/generation、JSON 与链关系核验，链不一致立即失败，peer adoption、rollback、写后故障或 authority 变化都会清除此提示。catalog 读取可与 manifest 链核验重叠，但 merged ordinal、document/security/projection hash、ACL/epoch、closed shard 和 immutable v8 source 仍分别验证。任何 unlink 前仍先完成删除前的 `fullValidation`，每次 unlink 前仍重读并比对完整 pointer bytes 与 stat identity。
 - soft maintenance 仅是按 `filePath` 共享、与 writer 共用 mutation lane 的 captured quiet job；`setImmediate().unref()` 只调度，不授权。token 同时绑定 canonical pointer bytes 的 SHA/长度/stat、generation、manifest descriptor、retention floor、debt/revision、lifecycle 与 foreground epoch；`init/read/mutate/rollback`、peer adoption、post-commit failure、同 generation 分支替换、Stop/close 都会使旧 token 失效，结果只有在 CAS 仍匹配时才可回写，maintenance 不产生 publication。captured promise 完整吸收诊断分支异常，close 会取消 queued/running maintenance，取消后不会开始下一次 unlink。
 - hard watermark 不等待 soft job：下一次真实写在写入第一个新 artifact 前仍同步刷新 reachability，并在超线时执行完整同步 sweep 或 fail closed refusal。保留集合仍是 current+4 个完整 generation 与 depth 5 的 manifest-only 线索，两次可重启 rollback、promotion source/sentinel、Unicode、task/claim/lease/OCC 历史均未降级。
-- exact-origin fast path 只对刚完成首轮 adopt 且对象 identity、stamp 与 branch descriptor 全部一致的提交者生效，并执行等价 retention normalization；peer store、listener/SSE、rollback、init、failure 和外部分支继续走完整 adoption。一次 mutation 仍只产生一次 publication。
+- exact-origin fast path 只对刚完成首轮 adopt 且对象 identity、stamp 与 branch descriptor 全部一致的提交者生效，并执行等价 retention normalization；活动团队 mutation 若保持全部 closed entry 的相同对象 identity 与 canonical 顺序，可直接复用 catalog descriptor，否则仍回退到完整 JSON 等价比较。ledger projection identity 也只按同一不可变 generation entry 的 `WeakMap` identity 复用；任何新 entry 都重建 member/ownership hash。peer store、listener/SSE、rollback、init、failure 和外部分支继续走完整 adoption。一次 mutation 仍只产生一次 publication。
 
-性能合同保持 45 次、丢弃前 5 次、p95 `<75 ms`、写入 `<30%`，没有 sleep、额外 warmup、样本减少、阈值或 runner 重分类。Windows `10.0.22621` / Node `v24.16.0` 以 `--unhandled-rejections=strict` 独立复验：完整 store 连续两次均为 74/74、0 skip，目标 p95 为 `25.98 ms` / `25.92 ms`，写入均为 `5290/149443`（`3.54%`）；security/OCC/Stop accepted 矩阵为 169/169，authorization/projection/SSE 专项为 29/29；official hermetic acceptance 为 11 pass、0 fail、2 个既有 historical-audit skip，`node scripts/verify-static.mjs`、Node syntax 与 MinGit `diff --check` 成功。两个 skip 仍由既有 `DSH_HISTORICAL_ALPHA2_AUDIT` 显式门控，没有改成通过，也没有掩盖产品测试失败。
+性能合同保持 45 次、丢弃前 5 次、p95 `<75 ms`、写入 `<30%`，没有 sleep、额外 warmup、样本减少、阈值或 runner 重分类。Windows `10.0.22621` / Node `v24.16.0` 以原合同复验当前候选：完整 store 为 74/74、0 skip，目标 p95 为 `22.67 ms`，写入仍为 `5290/149443`（`3.54%`）；65-root 完整投影专项为 12/12，冷 miss 中位数 `30.416 ms`，缓存 65 项仍为 `2705970` bytes，RSS 增长 `405504` bytes。上一轮 security/OCC/Stop accepted 矩阵 169/169、authorization/projection/SSE 专项 29/29 与 official hermetic acceptance 继续作为未放宽的基线；`node scripts/verify-static.mjs`、Node syntax 与 MinGit `diff --check` 仍是正式发布前门禁。既有 historical-audit skip 继续由 `DSH_HISTORICAL_ALPHA2_AUDIT` 显式门控，没有改成通过，也没有掩盖产品测试失败。
 
 ## 9. Root 投影缓存与 SSE 清理
 
 - 投影缓存 feature flag 只有 `disabled | shadow | enabled` 三态，默认 `disabled`。`disabled` 直接走权威投影并清空缓存；`shadow` 计算并比较候选但始终返回权威结果；只有 `enabled` 才允许命中。
-- 权威候选仍先序列化为唯一 canonical bytes，再从这些 bytes 产生隔离且 deep-frozen 的缓存值；默认候选复用同一份不可变 bytes 做全等校验、哈希和 SSE 计量，不再对相同对象重复序列化。注入的独立候选仍执行完整 clone、序列化、逐字节比较和 hash mismatch 断路，不能绕过 A/B 审核。
+- 权威投影仍只序列化一次。只有 `canonicalSnapshot === teamSnapshot` 且候选也是内建恒等函数的 enabled 路径，才把刚生成、尚未逸出的权威纯对象直接 deep-freeze，并复用同一 canonical text 生成 SSE 与 exact UTF-8 byte-length 计量；不再重复 parse、分配常驻 Buffer 或对自身做无信息哈希。shadow 或任一注入候选仍执行独立 materialization、clone、序列化、逐字节比较和 hash mismatch 断路，不能绕过 A/B 审核。
 - 缓存采用不超过 32 MiB 的 LRU，预算同时计算 deep-frozen JSON projection 与 SSE encoding。SSE 字节预算按 exact UTF-8 canonical bytes 加固定 ASCII framing 计算，与实际 payload 等长；eviction、disable 和 close 必须把 bytes 归零，不能留下 document 引用。
 - fresh ACL 必须先于 cache lookup。hot/cold cache branch descriptor 精确绑定 `path + hash + bytes + generation`，命中键和前驱验证还覆盖 store publication serial、root/canonical project、team/task selection、revision、owner、pause/auth epoch；只有经过 artifact 校验的线性 predecessor 才能 reuse。ACL 撤销、选择变化、rollback、generation 分叉或外部 branch 都必须 miss 并重新权威投影。
 - shadow mismatch 立即打开 fail-safe circuit，之后返回权威结果；不能用缓存结果掩盖身份或序列不一致。
@@ -120,9 +120,9 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 ### 10.1 本轮云端性能恢复的等价复核
 
-- canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
-- Windows / Node `v24.16.0` 仅重跑两个失败域且保持原始样本与断言：65-root 冷投影中位数由 `58.280 ms` 降至 `40.422 ms`（固定门槛 `<=60 ms`）；1307-session changed commit p95 由 `12.672 ms` 降至 `9.952 ms`（固定门槛 `<50 ms`）；128-event journal commit p95 由 `10.920 ms` 降至 `6.277 ms`（固定门槛 `<75 ms`）。相关 37 个 Mobile Sync 测试与全部 Agent Teams 投影测试通过。
-- 没有提高阈值、减少样本、增加 warmup、sleep、跳过测试或更改 smoke 分组；缓存候选仍逐字节/哈希等价，Mobile Sync 每次 applied commit 仍完成文件 `fsync` 与原子 rename。
+- canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
+- Windows / Node `v24.16.0` 保持原始样本与断言。此前云端证据已把 65-root 冷投影中位数由 `58.280 ms` 降至 `40.422 ms`，并把 1307-session changed commit p95 由 `12.672 ms` 降至 `9.952 ms`、128-event journal commit p95 由 `10.920 ms` 降至 `6.277 ms`；Mobile Sync 已通过固定门槛。当前 exact 候选进一步在本地原合同下得到 65-root 冷投影中位数 `30.416 ms` 和 146-team mutation p95 `22.67 ms`，门槛仍分别为 `<=60 ms` 与 `<75 ms`。相关 37 个 Mobile Sync 测试、74 个 hot/cold 测试与全部 Agent Teams 投影测试通过。
+- 没有提高阈值、减少样本、增加 warmup、sleep、跳过测试或更改 smoke 分组；内建缓存候选就是刚完成授权的同一未逸出 canonical 对象，任一 shadow/注入候选仍须逐字节/哈希等价，Mobile Sync 每次 applied commit 仍完成文件 `fsync` 与原子 rename。
 - 前一云端 run 还证明 macOS/Linux ordinary phase 在完成前 17 个有序文件后由测试自建但未释放的 Cordis root fiber 阻塞，而不是产品断言慢。JSON output boundary 现在以 `finally` 等待 `runtime.fiber.dispose()`，optional-provider 探针以 `t.after` 等待所有 root fiber settle；没有使用 `--test-force-exit`、缩短测试、吞掉活动 handle 或重分组。单文件 37/37 通过并自然退出。
 
 ## 11. preview/evidence 分域与延迟 GC
