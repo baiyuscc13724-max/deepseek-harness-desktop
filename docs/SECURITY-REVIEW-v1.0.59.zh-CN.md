@@ -123,6 +123,7 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 - canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
 - Windows / Node `v24.16.0` 仅重跑两个失败域且保持原始样本与断言：65-root 冷投影中位数由 `58.280 ms` 降至 `40.422 ms`（固定门槛 `<=60 ms`）；1307-session changed commit p95 由 `12.672 ms` 降至 `9.952 ms`（固定门槛 `<50 ms`）；128-event journal commit p95 由 `10.920 ms` 降至 `6.277 ms`（固定门槛 `<75 ms`）。相关 37 个 Mobile Sync 测试与全部 Agent Teams 投影测试通过。
 - 没有提高阈值、减少样本、增加 warmup、sleep、跳过测试或更改 smoke 分组；缓存候选仍逐字节/哈希等价，Mobile Sync 每次 applied commit 仍完成文件 `fsync` 与原子 rename。
+- 前一云端 run 还证明 macOS/Linux ordinary phase 在完成前 17 个有序文件后由测试自建但未释放的 Cordis root fiber 阻塞，而不是产品断言慢。JSON output boundary 现在以 `finally` 等待 `runtime.fiber.dispose()`，optional-provider 探针以 `t.after` 等待所有 root fiber settle；没有使用 `--test-force-exit`、缩短测试、吞掉活动 handle 或重分组。单文件 37/37 通过并自然退出。
 
 ## 11. preview/evidence 分域与延迟 GC
 

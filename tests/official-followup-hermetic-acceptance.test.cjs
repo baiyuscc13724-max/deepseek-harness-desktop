@@ -48,9 +48,12 @@ test('v1.0.59 cloud performance recovery binds exact optimized sources and uncha
     assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `optimized source drift: ${relative}`)
   }
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
-  for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', '没有提高阈值', '文件 `fsync` 与原子 rename']) {
+  for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', '没有提高阈值', '文件 `fsync` 与原子 rename', 'runtime.fiber.dispose()', '--test-force-exit']) {
     assert.ok(review.includes(contract), `v1.0.59 performance recovery evidence missing: ${contract}`)
   }
+  const runtimeTest = fs.readFileSync(path.join(ROOT, 'tests', 'agent-teams-runtime.test.cjs'), 'utf8')
+  assert.match(runtimeTest, /finally \{\s*await runtime\.fiber\.dispose\(\)\s*\}/u)
+  assert.match(runtimeTest, /t\.after\(async \(\) => \{ await Promise\.all\(contexts\.map\(value => value\.fiber\.dispose\(\)\)\) \}\)/u)
 })
 
 test('source exclusions are exact components and cannot hide similarly named product paths', () => {

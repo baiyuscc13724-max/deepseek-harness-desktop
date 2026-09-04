@@ -116,22 +116,26 @@ async function crossRealDshJsonOutputBoundary(value) {
     import('@deepseek-ai/dsh-tools')
   ])
   const runtime = new Context()
-  runtime.plugin(SystemPrompt)
-  runtime.plugin(ToolRuntime)
-  await new Promise(resolve => setImmediate(resolve))
-  runtime.tools.register(defineTool({
-    name: 'agent_teams_output_boundary',
-    description: 'Exercise the installed DSH tool output boundary.',
-    parameters: {},
-    output: { schema: { type: 'json' }, render: (_args, result) => [{ type: 'text', text: JSON.stringify(result) }] },
-    execute: async () => value
-  }))
-  return runtime.tools.execute({
-    callId: `agent-teams-boundary-${Date.now()}-${Math.random()}`,
-    name: 'agent_teams_output_boundary',
-    arguments: {},
-    signal: new AbortController().signal
-  })
+  try {
+    runtime.plugin(SystemPrompt)
+    runtime.plugin(ToolRuntime)
+    await new Promise(resolve => setImmediate(resolve))
+    runtime.tools.register(defineTool({
+      name: 'agent_teams_output_boundary',
+      description: 'Exercise the installed DSH tool output boundary.',
+      parameters: {},
+      output: { schema: { type: 'json' }, render: (_args, result) => [{ type: 'text', text: JSON.stringify(result) }] },
+      execute: async () => value
+    }))
+    return await runtime.tools.execute({
+      callId: `agent-teams-boundary-${Date.now()}-${Math.random()}`,
+      name: 'agent_teams_output_boundary',
+      arguments: {},
+      signal: new AbortController().signal
+    })
+  } finally {
+    await runtime.fiber.dispose()
+  }
 }
 
 test('per-team operation tails are deleted only after their current settled promise completes', async () => {
@@ -3334,8 +3338,11 @@ test('bootstrap capacity counts 7/8 and 8/8 managed peers while allowing more du
   }
 })
 
-test('resolveProjectFoundationHostOptions reads the optional service through the Cordis lookup only', async () => {
+test('resolveProjectFoundationHostOptions reads the optional service through the Cordis lookup only', async t => {
   const { Context } = await import('@deepseek-ai/cordis')
+  const contexts = []
+  const context = () => { const value = new Context(); contexts.push(value); return value }
+  t.after(async () => { await Promise.all(contexts.map(value => value.fiber.dispose())) })
   const mod = await import(`${pathToFileURL(pluginFile).href}?foundation-host-options=${Date.now()}-${Math.random()}`)
   const source = await readFile(pluginFile, 'utf8')
   assert.doesNotMatch(source, /ctx\.projectFoundations\?\./u, 'apply must never touch the optional service by direct property access')
@@ -3344,16 +3351,16 @@ test('resolveProjectFoundationHostOptions reads the optional service through the
   assert.deepEqual(mod.inject.includes('projectFoundations'), false, 'the optional service must never join the required inject list')
 
   // Missing or non-record provider resolves to an empty object without throwing.
-  const missing = new Context()
+  const missing = context()
   assert.deepEqual(mod.resolveProjectFoundationHostOptions(missing), {})
-  const withGet = new Context()
+  const withGet = context()
   assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => undefined }), {})
-  const weird = new Context()
+  const weird = context()
   weird.provide('projectFoundations', 'not-a-record')
   assert.deepEqual(mod.resolveProjectFoundationHostOptions(weird), {})
 
   // An active record provider is projected onto exactly the fixed Host fields.
-  const provided = new Context()
+  const provided = context()
   const record = {
     runner: { handle: 'desktop-runner' },
     connector: { enabled: true, name: 'desktop-connector' },
@@ -3368,7 +3375,7 @@ test('resolveProjectFoundationHostOptions reads the optional service through the
   })
 
   // A disabled connector is dropped while runner and evidence stay projected.
-  const disabled = new Context()
+  const disabled = context()
   disabled.provide('projectFoundations', { runner: record.runner, connector: { enabled: false }, runnerEvidence: record.runnerEvidence })
   assert.deepEqual(mod.resolveProjectFoundationHostOptions(disabled), {
     runner: record.runner,
@@ -3378,7 +3385,7 @@ test('resolveProjectFoundationHostOptions reads the optional service through the
 
   // The old direct property access is the captured regression: it throws inside
   // a real Cordis fiber while ctx.get stays the non-throwing optional boundary.
-  const runtime = new Context()
+  const runtime = context()
   const attempts = []
   runtime.plugin({
     name: 'foundation-host-options-probe',
