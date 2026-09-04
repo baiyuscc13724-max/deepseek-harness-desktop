@@ -10154,7 +10154,7 @@ function createTeamProjectionCache({
     return entry.snapshot;
   };
   const insert = (identity, snapshot, jsonBytes, payload) => {
-    const entryBytes = jsonBytes.length + Buffer.byteLength(payload) + Buffer.byteLength(identity.exactKey) + Buffer.byteLength(identity.semanticKey);
+    const entryBytes = (jsonBytes.length * 2) + Buffer.byteLength("event: snapshot\ndata: \n\n") + Buffer.byteLength(identity.exactKey) + Buffer.byteLength(identity.semanticKey);
     if (entryBytes > maxBytes) return snapshot;
     const entry = { exactKey: identity.exactKey, semanticKey: identity.semanticKey, serial: identity.metadata.serial, bytes: entryBytes, snapshot, jsonBytes, payload };
     SSE_SNAPSHOT_ENCODINGS.set(snapshot, payload);
@@ -10209,11 +10209,14 @@ function createTeamProjectionCache({
       // canonical pure projection; injected candidates keep the A/B guard testable.
       canonicalBytes = Buffer.from(JSON.stringify(canonical), "utf8");
       const candidateValue = candidateSnapshot(document, sessionId, selectedTeamId, selectedTaskId, authorization, canonical);
-      candidate = candidateValue === canonical
-        ? deepFreeze(JSON.parse(canonicalBytes.toString("utf8")))
-        : immutableClone(candidateValue);
-      candidateBytes = Buffer.from(JSON.stringify(candidate), "utf8");
-      const bytesMatch = canonicalBytes.equals(candidateBytes);
+      if (candidateValue === canonical) {
+        candidate = deepFreeze(JSON.parse(canonicalBytes.toString("utf8")));
+        candidateBytes = canonicalBytes;
+      } else {
+        candidate = immutableClone(candidateValue);
+        candidateBytes = Buffer.from(JSON.stringify(candidate), "utf8");
+      }
+      const bytesMatch = candidateBytes === canonicalBytes || canonicalBytes.equals(candidateBytes);
       const canonicalHash = sha256Bytes(canonicalBytes), candidateHash = bytesMatch ? canonicalHash : sha256Bytes(candidateBytes);
       if (!bytesMatch || canonicalHash !== candidateHash) {
         trip(`shadow_mismatch:${canonicalHash}:${candidateHash}`, true);

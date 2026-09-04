@@ -85,7 +85,7 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 本轮独立逐项审查产品 `+574/-104` 与回归 `+510/-9` 差异，并在产品文件和性能测试只读的条件下接受以下两个 canonical-LF 源身份：
 
-- `plugins/dsh-agent-teams/lib/index.js`：`2fa992584f0509a23be0c3f24c2827507a4ef39ba0c21dcac18982f3550d5878`
+- `plugins/dsh-agent-teams/lib/index.js`：`e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856`
 - `tests/agent-teams-store-performance.test.cjs`：`68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887`
 
 独立复核确认性能恢复没有缩小权威数据域、耐久边界或拒绝条件：
@@ -103,7 +103,8 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 ## 9. Root 投影缓存与 SSE 清理
 
 - 投影缓存 feature flag 只有 `disabled | shadow | enabled` 三态，默认 `disabled`。`disabled` 直接走权威投影并清空缓存；`shadow` 计算并比较候选但始终返回权威结果；只有 `enabled` 才允许命中。
-- 缓存采用不超过 32 MiB 的 LRU，预算同时计算 deep-frozen JSON projection 与 SSE encoding。eviction、disable 和 close 必须把 bytes 归零，不能留下 document 引用。
+- 权威候选仍先序列化为唯一 canonical bytes，再从这些 bytes 产生隔离且 deep-frozen 的缓存值；默认候选复用同一份不可变 bytes 做全等校验、哈希和 SSE 计量，不再对相同对象重复序列化。注入的独立候选仍执行完整 clone、序列化、逐字节比较和 hash mismatch 断路，不能绕过 A/B 审核。
+- 缓存采用不超过 32 MiB 的 LRU，预算同时计算 deep-frozen JSON projection 与 SSE encoding。SSE 字节预算按 exact UTF-8 canonical bytes 加固定 ASCII framing 计算，与实际 payload 等长；eviction、disable 和 close 必须把 bytes 归零，不能留下 document 引用。
 - fresh ACL 必须先于 cache lookup。hot/cold cache branch descriptor 精确绑定 `path + hash + bytes + generation`，命中键和前驱验证还覆盖 store publication serial、root/canonical project、team/task selection、revision、owner、pause/auth epoch；只有经过 artifact 校验的线性 predecessor 才能 reuse。ACL 撤销、选择变化、rollback、generation 分叉或外部 branch 都必须 miss 并重新权威投影。
 - shadow mismatch 立即打开 fail-safe circuit，之后返回权威结果；不能用缓存结果掩盖身份或序列不一致。
 - SSE broadcaster 对断线、error、Stop 和 backpressure client 执行精确 cleanup；零客户端时不渲染、不保留 pending document，也不保留 keepalive/debounce timer。
@@ -112,9 +113,16 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 - Mobile Sync v6 只保存一份 canonical snapshot 与 lossless delta journal；journal 严格不超过 512 KiB。单次超大权威变化使用有界 anchor 并失效无法继续增量的旧 cursor，不能截断仍宣称可重放的 delta。
 - heartbeat 与 preferred-port 写入小型独立原子记录，不重写 canonical ledger。同一设备单调递增的亚秒 heartbeat burst 在内存投影中保持最新值，但复用最近一次 durable heartbeat；达到 1 秒窗口或发生 preferred-port 更新时立即原子持久化最新记录，从而消除 Windows 同步 flush 抖动而不放宽 p95 门槛。operation/idempotency、cursor、tombstone、offline replace、generation/hash 与崩溃恢复仍是权威合同。
+- complete manifest 的 delta 比较只对已经规范化的扁平记录使用逐键全等；若无 tombstone 且 workspace/session/read-message 三组 identity 的长度与顺序逐项相同，可直接证明既有 Map merge 保序，不再重复构造并序列化整份 replay。任一删除、重排、identity 变化或未来嵌套值均走原有完整 replay/full-reset 校验；主文件仍在每次已应用提交时执行同目录 temp、文件 `fsync` 与原子 rename，耐久边界未改变。
 - v5→v6 首次迁移保留精确、只读的 `.v5.bak`，包括加密 secret envelope；不得把明文 network secret 写回备份或 reverse export。
 - `exportV5State` 必须能从 v6 精确反向生成 v5 canonical state；显式切回 v5、再迁移 v6 后 canonical hash 必须一致。shadow 阶段只比较 v5/v6 canonical hash，仍持久化单一 legacy transaction，不双发同步。
 - main、runtime、backup、fsync 与 rename 任一崩溃点只能恢复完整旧事务或完整新事务；损坏的 canonical/runtime integrity record fail closed，错误文本不得回显损坏内容。
+
+### 10.1 本轮云端性能恢复的等价复核
+
+- canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
+- Windows / Node `v24.16.0` 仅重跑两个失败域且保持原始样本与断言：65-root 冷投影中位数由 `58.280 ms` 降至 `40.422 ms`（固定门槛 `<=60 ms`）；1307-session changed commit p95 由 `12.672 ms` 降至 `9.952 ms`（固定门槛 `<50 ms`）；128-event journal commit p95 由 `10.920 ms` 降至 `6.277 ms`（固定门槛 `<75 ms`）。相关 37 个 Mobile Sync 测试与全部 Agent Teams 投影测试通过。
+- 没有提高阈值、减少样本、增加 warmup、sleep、跳过测试或更改 smoke 分组；缓存候选仍逐字节/哈希等价，Mobile Sync 每次 applied commit 仍完成文件 `fsync` 与原子 rename。
 
 ## 11. preview/evidence 分域与延迟 GC
 

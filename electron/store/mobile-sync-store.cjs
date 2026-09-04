@@ -514,9 +514,26 @@ function sameJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
+function sameFlatJsonRecord(left, right) {
+  if (left === right) return true
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) || Array.isArray(right)) return false
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    const key = leftKeys[index]
+    if (key !== rightKeys[index] || left[key] !== right[key]) return false
+  }
+  return true
+}
+
 function changedItems(previous, next, identity) {
   const before = new Map(previous.map(item => [identity(item), item]))
-  return next.filter(item => !sameJson(before.get(identity(item)), item))
+  return next.filter(item => !sameFlatJsonRecord(before.get(identity(item)), item))
+}
+
+function sameIdentityOrder(previous, next, identity) {
+  return previous.length === next.length && previous.every((item, index) => identity(item) === identity(next[index]))
 }
 
 function deltaJournalAnchor(events, current) {
@@ -1205,8 +1222,12 @@ class MobileSyncStore {
       readMessages: complete && current ? changedItems(current.readMessages, nextReadMessages, item => `${item.sessionId}:${item.messageId}`) : (readMessages || []),
       tombstones: eventTombstones
     }, { workspaces: nextWorkspaces, sessions: nextSessions, readMessages: nextReadMessages })
-    const replayed = current ? applyEventSnapshot(current, { ...deltaEvent, complete: false }) : null
-    const deltaIsLossless = !tombstonesWerePruned && (!current || snapshotCollectionsEqual(
+    const completeOrderPreserved = Boolean(current && complete && explicitTombstones.length === 0 &&
+      sameIdentityOrder(current.workspaces, nextWorkspaces, item => item.workspaceId) &&
+      sameIdentityOrder(current.sessions, nextSessions, item => item.sessionId) &&
+      sameIdentityOrder(current.readMessages, nextReadMessages, item => `${item.sessionId}:${item.messageId}`))
+    const replayed = current && !completeOrderPreserved ? applyEventSnapshot(current, { ...deltaEvent, complete: false }) : null
+    const deltaIsLossless = !tombstonesWerePruned && (!current || completeOrderPreserved || snapshotCollectionsEqual(
       replayed,
       { workspaces: nextWorkspaces, sessions: nextSessions, readMessages: nextReadMessages }
     ))

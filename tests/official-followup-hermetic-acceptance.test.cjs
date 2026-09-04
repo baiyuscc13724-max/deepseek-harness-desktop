@@ -25,7 +25,7 @@ alpha2Audit('accepted alpha.2 source, static gate, migration and publication inp
 
 test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof sources without moving history', () => {
   const accepted = Object.freeze({
-    'plugins/dsh-agent-teams/lib/index.js': '2fa992584f0509a23be0c3f24c2827507a4ef39ba0c21dcac18982f3550d5878',
+    'plugins/dsh-agent-teams/lib/index.js': 'e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856',
     'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887'
   })
   assert.equal(Object.keys(helper.ACCEPTED).length, 12)
@@ -37,6 +37,20 @@ test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof so
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
   const evidence = [...Object.values(accepted), 'Promise.allSettled', '删除前的 `fullValidation`', '74/74', '25.98 ms', '25.92 ms', '169/169', '29/29', '3.54%']
   for (const contract of evidence) assert.ok(review.includes(contract), `v1.0.59 hot/cold review evidence missing: ${contract}`)
+})
+
+test('v1.0.59 cloud performance recovery binds exact optimized sources and unchanged safety gates', () => {
+  const accepted = Object.freeze({
+    'plugins/dsh-agent-teams/lib/index.js': 'e5c233f2511412690ff90b4209df3d31a14aa560cc57bb1b64df7a6e45e3f856',
+    'electron/store/mobile-sync-store.cjs': 'da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba'
+  })
+  for (const [relative, expected] of Object.entries(accepted)) {
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `optimized source drift: ${relative}`)
+  }
+  const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
+  for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', '没有提高阈值', '文件 `fsync` 与原子 rename']) {
+    assert.ok(review.includes(contract), `v1.0.59 performance recovery evidence missing: ${contract}`)
+  }
 })
 
 test('source exclusions are exact components and cannot hide similarly named product paths', () => {
