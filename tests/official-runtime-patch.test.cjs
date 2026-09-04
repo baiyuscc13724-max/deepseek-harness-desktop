@@ -137,6 +137,20 @@ test('installed alpha.5 MCP client and Goal tool are exact complete patched arti
   assert.equal(createHash('sha256').update(readFileSync(goalFile)).digest('hex').toUpperCase(), '742551EB41DDF0FC96D736A888454FCA5801EEA5C5A89800EA774DF12EB7EB23')
 })
 
+test('runtime helper bundling canonicalizes LF and CRLF Function source to one byte-identical artifact', async () => {
+  const { bundleFunctionSource } = await import('../scripts/patch-official-runtime.mjs')
+  const lfText = '(function bundledProbe(value) {\n  return value\n})'
+  const crlfText = lfText.replaceAll('\n', '\r\n')
+  const lfFunction = vm.runInNewContext(lfText)
+  const crlfFunction = vm.runInNewContext(crlfText)
+  assert.doesNotMatch(lfFunction.toString(), /\r/u)
+  assert.match(crlfFunction.toString(), /\r\n/u)
+  const lfOutput = bundleFunctionSource(lfFunction)
+  const crlfOutput = bundleFunctionSource(crlfFunction)
+  assert.equal(Buffer.compare(Buffer.from(lfOutput), Buffer.from(crlfOutput)), 0)
+  assert.doesNotMatch(crlfOutput, /\r/u)
+})
+
 test('alpha.5 chat scroll-state patch is exact-hash bound, fail-closed, idempotent, and leaves alpha.4 untouched', async () => {
   const {
     patchAlpha5ChatScrollSource,
@@ -151,10 +165,12 @@ test('alpha.5 chat scroll-state patch is exact-hash bound, fail-closed, idempote
   assert.equal(createHash('sha256').update(official).digest('hex').toUpperCase(), '9C9874C57B7D3E5A71222A72E0F19ED8D884C40F895D898640C882D49BD1B231')
   const scrollExpected = patchAlpha5ChatScrollSource(official)
   assert.equal(scrollExpected.changed, true)
-  assert.equal(createHash('sha256').update(scrollExpected.source).digest('hex').toUpperCase(), '4C05AE99A177B83E9F32F5D0459F5BBA595D2701A02B6B635CE14FD0416BFF06')
+  assert.equal(createHash('sha256').update(scrollExpected.source).digest('hex').toUpperCase(), '5955FE78B7713E1AA37C274BE282540B1CEA7ADCF8A78B8159E1752426D17540')
+  assert.doesNotMatch(scrollExpected.source, /\r/u)
   const expected = patchAlpha5ChatSentTimeSnapshotSource(scrollExpected.source)
   assert.equal(expected.changed, true)
-  assert.equal(createHash('sha256').update(expected.source).digest('hex').toUpperCase(), '27439B98CFB2A8DA1C4CD3E1CEF17088CFF3DEF636676BDF93939C8E7753D018')
+  assert.equal(createHash('sha256').update(expected.source).digest('hex').toUpperCase(), '5C642BC3C02EF2F1A34A043F1375CD7DF9C7609EB6EFCE64AFA0FD98BDD7709C')
+  assert.doesNotMatch(expected.source, /\r/u)
   assert.equal(patchAlpha5ChatScrollSource(expected.source).changed, false)
   assert.equal(patchAlpha5ChatSentTimeSnapshotSource(expected.source).changed, false)
   assert.equal(restoreAlpha5ChatSentTimeSnapshotSource(restoreAlpha5ChatScrollSource(expected.source)), official)
@@ -180,6 +196,11 @@ test('alpha.5 chat scroll-state patch is exact-hash bound, fail-closed, idempote
     writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-chat', version: '0.1.2-alpha.5' }))
     writeFileSync(file, official)
     assert.equal(await patchInstalledAlpha5ChatScroll(file), true)
+    assert.equal(readFileSync(file, 'utf8'), expected.source)
+    assert.equal(await patchInstalledAlpha5ChatScroll(file), false)
+
+    writeFileSync(file, scrollExpected.source)
+    assert.equal(await patchInstalledAlpha5ChatScroll(file), true, 'the exact scroll-only artifact composes the sent-time patch once')
     assert.equal(readFileSync(file, 'utf8'), expected.source)
     assert.equal(await patchInstalledAlpha5ChatScroll(file), false)
 
@@ -1076,18 +1097,32 @@ test('alpha.5 switcher variants toggle one dropdown from every chip point withou
 })
 
 test('alpha.5 installed subagent header disclosure is exact-hash bound and repeatable', async () => {
-  const { patchInstalledSubagent } = await import('../scripts/patch-official-runtime.mjs')
+  const { patchSubagentSource, patchInstalledSubagent, restoreAlpha5SubagentSource } = await import('../scripts/patch-official-runtime.mjs')
   const fixture = readFileSync(path.resolve(__dirname, '..', 'node_modules', '@deepseek-ai', 'dsh-client-ui-subagent', 'lib', 'client.js'), 'utf8')
+  const once = patchSubagentSource(fixture).source
+  const official = restoreAlpha5SubagentSource(once)
+  assert.equal(createHash('sha256').update(official).digest('hex').toUpperCase(), 'B1C5D6F2F26FD7BA5A8764D75D1043BCAC0C79CC950DC22044BAE23D6BEC8C2B')
+  assert.equal(createHash('sha256').update(once).digest('hex').toUpperCase(), '035C0B528D341F031886BEF5B4910E83BF502748CE6D0633126590A7DB68372D')
+  const fixtureState = fixture === official ? 'official' : fixture === once ? 'patched' : 'drifted'
+  assert.notEqual(fixtureState, 'drifted', 'the installed fixture must be exact official or exact complete patched')
+
   const temp = mkdtempSync(path.join(os.tmpdir(), 'dsh-alpha5-subagent-ui-patch-'))
   const root = path.join(temp, 'dsh-client-ui-subagent'), file = path.join(root, 'lib', 'client.js')
   mkdirSync(path.dirname(file), { recursive: true })
   writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-client-ui-subagent', version: '0.1.2-alpha.5' }))
   try {
     writeFileSync(file, fixture)
-    assert.equal(await patchInstalledSubagent(file), true)
-    const once = readFileSync(file, 'utf8')
-    assert.equal(createHash('sha256').update(once).digest('hex').toUpperCase(), '035C0B528D341F031886BEF5B4910E83BF502748CE6D0633126590A7DB68372D')
+    assert.equal(await patchInstalledSubagent(file), fixtureState === 'official')
+    assert.equal(readFileSync(file, 'utf8'), once)
     assert.equal(await patchInstalledSubagent(file), false)
+
+    writeFileSync(file, official)
+    assert.equal(await patchInstalledSubagent(file), true, 'the exact official artifact patches once regardless of installed fixture state')
+    assert.equal(readFileSync(file, 'utf8'), once)
+    assert.equal(await patchInstalledSubagent(file), false)
+
+    writeFileSync(file, once)
+    assert.equal(await patchInstalledSubagent(file), false, 'the exact complete patched artifact is always idempotent')
     assert.equal(readFileSync(file, 'utf8'), once)
     const wholeChipV1 = once.replace(`\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tcancelHoverOpen();\n\t\t\t\t\t\t\tchangeOpen(!open);\n\t\t\t\t\t\t},`, `\t\t\t\t\t\tonClick: () => {\n\t\t\t\t\t\t\tcancelHoverOpen();\n\t\t\t\t\t\t\tif (openTitle !== void 0) {\n\t\t\t\t\t\t\t\tif (open) changeOpen(false);\n\t\t\t\t\t\t\t\topenTitle();\n\t\t\t\t\t\t\t\treturn;\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\tchangeOpen(!open);\n\t\t\t\t\t\t},`)
     assert.notEqual(wholeChipV1, once)
@@ -1105,7 +1140,7 @@ test('alpha.5 installed subagent header disclosure is exact-hash bound and repea
     writeFileSync(file, disclosureV2)
     assert.equal(await patchInstalledSubagent(file), true, 'the exact prior disclosure composition migrates once')
     assert.equal(readFileSync(file, 'utf8'), once)
-    writeFileSync(file, `${fixture}\n/* drift */`)
+    writeFileSync(file, `${official}\n/* drift */`)
     await assert.rejects(() => patchInstalledSubagent(file), /neither exact official nor an exact complete Desktop catalog artifact/u)
   } finally {
     rmSync(temp, { recursive: true, force: true })

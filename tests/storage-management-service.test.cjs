@@ -33,6 +33,13 @@ function isWithin(target, root) {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
+function remapCanonicalPath(actual, actualRoot, canonicalRoot) {
+  const relative = path.relative(actualRoot, actual)
+  if (relative === '') return canonicalRoot
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return actual
+  return path.join(canonicalRoot, relative)
+}
+
 function durationStats(samples) {
   const sorted = [...samples].sort((left, right) => left - right)
   const at = percentile => sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * percentile) - 1)]
@@ -128,9 +135,99 @@ test('apply requires a live preview and explicit user confirmation', async () =>
     assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), true)
     const result = await service.apply(preview.previewId, { confirmed: true })
     assert.equal(result.preview, false)
-    assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), false)
+    assert.equal(result.applyCapability.supported, false)
+    assert.equal(result.summary.freedBytes, 0)
+    assert.equal(result.applied.every(item => item.applied === false), true)
+    assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64', 'marker.txt')), true)
     assert.equal(await exists(path.join(fixture.homeDir, 'marketplace', 'cache')), true)
     await assert.rejects(service.apply(preview.previewId, { confirmed: true }), /不存在或已过期/)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('management preview/apply preserves identity binding across consistent canonical aliases', async () => {
+  const fixture = await buildHarnessData()
+  try {
+    const actualRoot = path.resolve(await fsPromises.realpath(fixture.root))
+    const canonicalRoot = path.join(path.dirname(actualRoot), `${path.basename(actualRoot)}-canonical-alias`)
+    const scanFs = {
+      lstat: fsPromises.lstat,
+      readdir: fsPromises.readdir,
+      async realpath(target, ...args) {
+        const actual = path.resolve(await fsPromises.realpath(target, ...args))
+        return remapCanonicalPath(actual, actualRoot, canonicalRoot)
+      }
+    }
+    const cleanup = new StorageCleanupService({
+      now: Date.now,
+      version: '1.0.23',
+      platform: 'win32',
+      arch: 'x64',
+      scanFs
+    })
+    const service = serviceFor(fixture, { cleanup })
+    const target = path.join(fixture.runDir, '1.0.20-win32-x64')
+    const preview = await service.preview({ includeOldRuntimes: true, includeCaches: false })
+    assert.equal(preview.deletions.some(item => item.path === target), true)
+    assert.equal(JSON.stringify(preview).includes('identity'), false)
+
+    const result = await service.apply(preview.previewId, { confirmed: true })
+    const refused = result.applied.find(item => item.path === target)
+    assert.equal(refused?.applied, false)
+    assert.equal(refused?.recovery?.state, 'original-retained')
+    assert.equal(result.summary.freedBytes, 0)
+    assert.equal(result.summary.retainedBytes, result.summary.candidateBytes)
+    assert.equal(await exists(path.join(target, 'marker.txt')), true)
+    assert.equal(await exists(path.join(fixture.runDir, '1.0.23-win32-x64', 'marker.txt')), true)
+    assert.equal(await exists(path.join(fixture.homeDir, 'sessions', 's1.json')), true)
+  } finally {
+    await destroyHarnessData(fixture.root)
+  }
+})
+
+test('management apply exposes honest refusal while the reviewer rm-entry attack stays unreachable', async () => {
+  const fixture = await buildHarnessData()
+  const target = path.join(fixture.runDir, '1.0.20-win32-x64')
+  const sessions = path.join(fixture.homeDir, 'sessions')
+  let renameCalls = 0
+  let rmCalls = 0
+  const cleanup = new StorageCleanupService({
+    now: Date.now,
+    version: '1.0.23',
+    platform: 'win32',
+    arch: 'x64',
+    fs: {
+      async rename(source, destination) {
+        renameCalls += 1
+        return fsPromises.rename(source, destination)
+      },
+      async rm(isolationTarget, options) {
+        rmCalls += 1
+        const displaced = `${isolationTarget}-verified-object`
+        await fsPromises.rename(isolationTarget, displaced)
+        await fsPromises.rename(sessions, isolationTarget)
+        return rm(isolationTarget, options)
+      }
+    }
+  })
+  try {
+    const service = serviceFor(fixture, { cleanup })
+    const preview = await service.preview({ includeOldRuntimes: true, includeCaches: false })
+    const result = await service.apply(preview.previewId, { confirmed: true })
+    const refused = result.applied.find(item => item.path === target)
+
+    assert.equal(renameCalls, 0)
+    assert.equal(rmCalls, 0)
+    assert.equal(refused?.applied, false)
+    assert.equal(refused?.freedBytes, 0)
+    assert.equal(refused?.recovery?.state, 'original-retained')
+    assert.equal(result.summary.freedBytes, 0)
+    assert.equal(result.summary.retainedBytes, result.summary.candidateBytes)
+    assert.equal(await exists(path.join(target, 'marker.txt')), true)
+    assert.equal(await exists(path.join(sessions, 's1.json')), true)
+    assert.equal(JSON.stringify(result).includes('identity'), false)
+    assert.equal(JSON.stringify(result).includes('observedMtimeMs'), false)
   } finally {
     await destroyHarnessData(fixture.root)
   }
@@ -144,8 +241,10 @@ test('apply never deletes cleanup candidates that appeared after the confirmed p
     const appearedLater = path.join(fixture.runDir, '0.9.0-win32-x64')
     await mkdir(appearedLater, { recursive: true })
     await writeFile(path.join(appearedLater, 'new.txt'), 'not in preview')
-    await service.apply(preview.previewId, { confirmed: true })
-    assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), false)
+    const result = await service.apply(preview.previewId, { confirmed: true })
+    assert.equal(result.summary.freedBytes, 0)
+    assert.equal(result.applied.every(item => item.applied === false), true)
+    assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64', 'marker.txt')), true)
     assert.equal(await exists(path.join(appearedLater, 'new.txt')), true)
   } finally {
     await destroyHarnessData(fixture.root)
@@ -171,7 +270,7 @@ test('apply skips a same-name target replaced after preview', async () => {
   }
 })
 
-test('automatic maintenance removes only aged application-owned caches', async () => {
+test('automatic maintenance refuses aged cache deletion without a safe recursive primitive', async () => {
   const fixture = await buildHarnessData()
   try {
     const service = serviceFor(fixture)
@@ -188,13 +287,15 @@ test('automatic maintenance removes only aged application-owned caches', async (
     await utimes(cache, old, old)
     const result = await service.maintainCaches()
     assert.equal(result.ok, true)
-    assert.equal(result.deletedEntries, 1)
-    assert.equal(await exists(cache), false)
+    assert.equal(result.deletedEntries, 0)
+    assert.equal(result.freedBytes, 0)
+    assert.equal(await exists(path.join(cache, 'cache.db')), true)
     assert.equal(await exists(path.join(fixture.homeDir, 'marketplace', 'settings.json')), true)
     assert.equal(await exists(path.join(fixture.homeDir, 'sessions', 's1.json')), true)
     assert.equal(await exists(path.join(fixture.homeDir, 'attachments', 'a1.bin')), true)
     assert.equal(await exists(path.join(fixture.runDir, '1.0.20-win32-x64')), true)
-    assert.equal(service.status().automaticCache.lastRun.deletedEntries, 1)
+    assert.equal(service.status().automaticCache.lastRun.deletedEntries, 0)
+    assert.equal(service.status().automaticCache.lastRun.freedBytes, 0)
   } finally {
     await destroyHarnessData(fixture.root)
   }

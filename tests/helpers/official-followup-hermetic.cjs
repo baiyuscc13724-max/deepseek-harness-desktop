@@ -21,7 +21,7 @@ const REJECTED_RUN_ROOT_TOKENS = Object.freeze(['160456', '162000', '164000', '1
 const ACCEPTED = Object.freeze({
   'package.json': 'c2246e173680bf03897f0d87fc6a66b0d252cc1a6c85714f835e9de4c6994014',
   'package-lock.json': 'ab011b915c803ea215874bd688a90a110eb5ddd6dbfabcd3a0d85811dbf39904',
-  'scripts/patch-official-runtime.mjs': '2870605d734d2341b1f8f7d9fa6c89dc96c82f5db6ac7fbaf0b9ddcb81d9e9c9',
+  'scripts/patch-official-runtime.mjs': 'b7b2cb0f4cff2857425d75de8580ebf4155e3657bd3477fc4f92fb43a925e153',
   'scripts/verify-static.mjs': '66585d57d28ce767798d3a4b828f5d04dde4ef3675fbec7bb67c9756bd872e72',
   'plugins/dsh-agent-teams/lib/index.js': '2fa992584f0509a23be0c3f24c2827507a4ef39ba0c21dcac18982f3550d5878',
   'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887',

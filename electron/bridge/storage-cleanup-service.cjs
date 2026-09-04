@@ -3,9 +3,10 @@
 // HarnessData 存储清理服务（批次3的底层模块）。
 //
 // 清理安全约束（严格遵守）：
-//   * dry-run 预览优先：默认 preview=true，只计算并将要删除的条目列出，
-//     绝不真正删除；只有 preview=false 时才执行删除。
-//   * 只能清理这几类内容：
+//   * dry-run 预览优先：默认 preview=true，只计算候选；preview=false 仍须绑定
+//     已确认预览并复核身份。当前 JS 运行时没有安全的递归 delete-by-handle，
+//     因此 apply 会明确拒绝且不执行路径 mutation。
+//   * 只有未来具备可证明 exact-object 删除原语时，才可清理这几类内容：
 //       1) runtime 下「非当前」的旧版本 runtime 目录；
 //       2) dsh-home 下的 marketplace 与 cache 类缓存目录；
 //       3) temp 下由用户显式传入、且超过年龄阈值的条目。
@@ -14,10 +15,10 @@
 //   * 防路径穿越、符号链接和根目录逃逸：所有目标必须受控在 HarnessData 之内，
 //     且不得是符号链接或经符号链接逃逸的路径。
 //
-// 本服务配合 storage-scan-service 读取目录，但删除动作经过严格的
-// apply 白名单判断，防止误删。
+// 本服务配合 storage-scan-service 读取目录；apply 白名单与身份门禁仍完整保留，
+// 但在缺少安全删除原语时只返回可审计的拒绝结果。
 
-const { lstat, realpath, rm } = require('node:fs/promises')
+const { lstat, realpath } = require('node:fs/promises')
 const path = require('node:path')
 const {
   MAX_SCAN_ENTRIES,
@@ -30,16 +31,37 @@ const {
   scanTree
 } = require('./storage-scan-service.cjs')
 
-const CACHE_IDENTITY_KEYS = Object.freeze([
-  'canonicalPath',
+const FILE_IDENTITY_KEYS = Object.freeze([
   'dev',
   'ino',
   'mode',
   'size',
   'mtimeMs',
-  'birthtimeMs',
+  'birthtimeMs'
+])
+
+const ROOT_IDENTITY_KEYS = Object.freeze([
+  'canonicalRootPath',
+  'rootDev',
+  'rootIno',
+  'rootMode',
+  'rootSize',
+  'rootMtimeMs',
+  'rootBirthtimeMs'
+])
+
+const CACHE_IDENTITY_KEYS = Object.freeze([
+  'canonicalPath',
+  ...FILE_IDENTITY_KEYS,
+  ...ROOT_IDENTITY_KEYS,
   'observedMtimeMs'
 ])
+
+// Older builds may have retained these after a rename failure or outcome-unknown.
+// They are recovery-only forever: no planner may turn them back into delete candidates.
+const ISOLATION_DIRECTORY_PREFIX = '.dsh-cleanup-quarantine-'
+const SAFE_RECURSIVE_DELETE_UNAVAILABLE =
+  '当前 Node/Electron 文件系统 API 不提供可绑定 exact object 的跨平台递归删除原语；为保护 sessions、attachments、memories 与当前 runtime，已拒绝 apply，候选保持原位且未释放空间。'
 
 // 从 runtime 目录名解析出版本-平台-架构三元组。
 // 例：1.0.23-win32-x64 -> { version: '1.0.23', platform: 'win32', arch: 'x64' }
@@ -89,6 +111,48 @@ function normalizeCanonicalPath(value) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved
 }
 
+function snapshotFileIdentity(info) {
+  return {
+    dev: String(info.dev),
+    ino: String(info.ino),
+    mode: Number(info.mode),
+    size: Number(info.size),
+    mtimeMs: Number(info.mtimeMs),
+    birthtimeMs: Number(info.birthtimeMs)
+  }
+}
+
+function snapshotRootIdentity(info, canonicalRootPath) {
+  const identity = snapshotFileIdentity(info)
+  return {
+    canonicalRootPath,
+    rootDev: identity.dev,
+    rootIno: identity.ino,
+    rootMode: identity.mode,
+    rootSize: identity.size,
+    rootMtimeMs: identity.mtimeMs,
+    rootBirthtimeMs: identity.birthtimeMs
+  }
+}
+
+function sameIdentityKeys(keys, left, right) {
+  return Boolean(left && right && keys.every(key => left[key] === right[key]))
+}
+
+function sameFileIdentity(left, right) {
+  return sameIdentityKeys(FILE_IDENTITY_KEYS, left, right)
+}
+
+function isCleanupIsolationName(name) {
+  return String(name || '').toLowerCase().startsWith(ISOLATION_DIRECTORY_PREFIX)
+}
+
+function resolveCanonicalContained(candidate, root) {
+  const normalizedRoot = normalizeCanonicalPath(root)
+  const normalizedCandidate = normalizeCanonicalPath(candidate)
+  return resolveContained(normalizedCandidate, normalizedRoot)
+}
+
 function cacheCandidateSignature(candidate) {
   const identity = candidate?.identity || {}
   return JSON.stringify([
@@ -117,15 +181,16 @@ class StorageCleanupService {
    * @param {object} [options]
    *   now: () => number
    *   version/ platform/ arch:  用于识别当前 runtime（默认取 process）。
-   *   fs?: { rm }               删除注入（测试可选）。
    *   scanFs?: { lstat, readdir, realpath } 只读扫描注入（测试可选）。
+   *
+   * Node/Electron 当前没有 cross-platform delete-by-handle/openat/unlinkat。
+   * 因而 apply 只复核授权并明确拒绝，不执行任何可重绑定路径上的 mutation。
    */
   constructor(options = {}) {
     this.now = options.now || (() => Date.now())
     this.version = options.version || '0.0.0'
     this.platform = options.platform || process.platform
     this.arch = options.arch || process.arch
-    this.fs = { rm, ...(options.fs || {}) }
     this.scanFs = options.scanFs || null
   }
 
@@ -225,6 +290,9 @@ class StorageCleanupService {
       if (tempCategory?.exists) {
         for (const entry of tempCategory.entries || []) {
           if (entry.suspicious || entry.protected || entry.protectedDescendant || entry.suspiciousDescendant || entry.truncated) continue
+          // Failed/partial isolation is recovery-only state. Never make its unpredictable
+          // container eligible for a later broad or explicitly named cleanup pass.
+          if (isCleanupIsolationName(entry.name)) continue
           if (!requestedTemp.has(entry.name)) continue
           if (tempAgeMs == null) continue // 未给出年龄阈值则不清理 temp
           if (entry.ageMs == null || entry.ageMs < tempAgeMs) continue
@@ -310,27 +378,49 @@ class StorageCleanupService {
       deletions = deletions.filter(candidate => this.#matchesApproved(candidate, approved.get(candidate.path)))
       for (const candidate of deletions) {
         const expected = approved.get(candidate.path)
-        // 执行删除前再次校验受控、非符号链接、非受保护，并核对文件身份。
+        // 即使最终身份仍匹配，也不能把路径核验冒充成 delete-by-handle。
+        // Node/Electron 没有 cross-platform openat/unlinkat 或递归句柄删除；
+        // rm/rename/rmdir 均可在调用入口被重绑定。因此 fail closed，完全不触发 mutation。
         if (!(await this.#verifyDeletable(candidate.path, rootAbs))) continue
         const finalIdentity = await this.#captureIdentity(candidate.path, rootAbs, candidate.observedMtimeMs)
         if (!finalIdentity || !this.#sameIdentity(expected.identity, finalIdentity)) continue
-        try {
-          await this.fs.rm(candidate.path, { recursive: true, force: true })
-          applied.push({ ...candidate, applied: true })
-        } catch (error) {
-          applied.push({ ...candidate, applied: false, error: safeError(error) })
-        }
+        applied.push({
+          ...candidate,
+          action: 'refused',
+          applied: false,
+          freedBytes: 0,
+          error: SAFE_RECURSIVE_DELETE_UNAVAILABLE,
+          mutation: {
+            rename: 'not-attempted',
+            recursiveDelete: 'unsupported'
+          },
+          recovery: {
+            required: false,
+            state: 'original-retained',
+            path: candidate.path
+          }
+        })
       }
     }
 
+    const candidateBytes = deletions.reduce((sum, item) => sum + (Number(item.size) || 0), 0)
+    const retained = applied.filter(item => !item.applied && item.recovery?.state === 'original-retained')
     return {
       root: rootAbs,
       preview,
       deletions,
       applied: preview ? null : applied,
+      applyCapability: {
+        supported: false,
+        mode: 'preview-only',
+        reason: SAFE_RECURSIVE_DELETE_UNAVAILABLE
+      },
       summary: {
         candidates: deletions.length,
-        freedBytes: deletions.reduce((sum, item) => sum + (item.size || 0), 0)
+        candidateBytes,
+        freedBytes: 0,
+        retainedEntries: preview ? 0 : retained.length,
+        retainedBytes: preview ? 0 : retained.reduce((sum, item) => sum + (Number(item.size) || 0), 0)
       }
     }
   }
@@ -347,7 +437,7 @@ class StorageCleanupService {
       observedMtimeMs: Number.isFinite(Number(entry.mtimeMs)) ? Number(entry.mtimeMs) : null,
       protected: entry.protected || false,
       preview,
-      action: preview ? 'preview' : 'delete'
+      action: preview ? 'preview' : 'verify-only'
     }
   }
 
@@ -362,29 +452,61 @@ class StorageCleanupService {
   }
 
   async #captureIdentity(target, rootAbs, observedMtimeMs) {
+    // lexical gate stays authoritative for caller-controlled paths. Canonical paths are
+    // a second, independent gate and must be compared against the canonical root from
+    // the same capture (Windows may spell TEMP through short/long-name or case aliases).
     const contained = resolveContained(target, rootAbs)
     if (!contained || contained === rootAbs) return null
-    const escape = await isSymlinkEscaping(contained, rootAbs, { fs: this.scanFs })
-    if (escape.escaping || escape.symlink) return null
-    const info = await this.#lstat(contained)
-    if (!info || info.isSymbolicLink() || !info.isDirectory()) return null
-    const canonicalPath = await this.#realpath(contained)
-    if (!canonicalPath || resolveContained(canonicalPath, rootAbs) === null) return null
+
+    const rootInfoBefore = await this.#lstat(rootAbs)
+    if (!rootInfoBefore || rootInfoBefore.isSymbolicLink() || !rootInfoBefore.isDirectory()) return null
+    const canonicalRootBeforeRaw = await this.#realpath(rootAbs)
+    if (!canonicalRootBeforeRaw) return null
+    const canonicalRootBefore = normalizeCanonicalPath(canonicalRootBeforeRaw)
+    const rootIdentityBefore = snapshotFileIdentity(rootInfoBefore)
+
+    const escapeBefore = await isSymlinkEscaping(contained, rootAbs, { fs: this.scanFs })
+    if (escapeBefore.escaping || escapeBefore.symlink) return null
+    const infoBefore = await this.#lstat(contained)
+    if (!infoBefore || infoBefore.isSymbolicLink() || !infoBefore.isDirectory()) return null
+    const canonicalPathBeforeRaw = await this.#realpath(contained)
+    if (!canonicalPathBeforeRaw) return null
+    const canonicalPathBefore = normalizeCanonicalPath(canonicalPathBeforeRaw)
+    const canonicalContainedBefore = resolveCanonicalContained(canonicalPathBefore, canonicalRootBefore)
+    if (!canonicalContainedBefore || canonicalContainedBefore === canonicalRootBefore) return null
+    const identityBefore = snapshotFileIdentity(infoBefore)
+
+    // Re-read both target and root so alias drift, replacement, and reparse races fail
+    // closed before an identity can enter a preview or authorize an apply.
+    const canonicalPathAfterRaw = await this.#realpath(contained)
+    const infoAfter = await this.#lstat(contained)
+    if (!canonicalPathAfterRaw || !infoAfter || infoAfter.isSymbolicLink() || !infoAfter.isDirectory()) return null
+    const canonicalPathAfter = normalizeCanonicalPath(canonicalPathAfterRaw)
+    const identityAfter = snapshotFileIdentity(infoAfter)
+    const escapeAfter = await isSymlinkEscaping(contained, rootAbs, { fs: this.scanFs })
+    if (escapeAfter.escaping || escapeAfter.symlink) return null
+
+    const canonicalRootAfterRaw = await this.#realpath(rootAbs)
+    const rootInfoAfter = await this.#lstat(rootAbs)
+    if (!canonicalRootAfterRaw || !rootInfoAfter || rootInfoAfter.isSymbolicLink() || !rootInfoAfter.isDirectory()) return null
+    const canonicalRootAfter = normalizeCanonicalPath(canonicalRootAfterRaw)
+    const rootIdentityAfter = snapshotFileIdentity(rootInfoAfter)
+    const canonicalContainedAfter = resolveCanonicalContained(canonicalPathAfter, canonicalRootAfter)
+
+    if (canonicalRootBefore !== canonicalRootAfter || !sameFileIdentity(rootIdentityBefore, rootIdentityAfter)) return null
+    if (canonicalPathBefore !== canonicalPathAfter || !sameFileIdentity(identityBefore, identityAfter)) return null
+    if (!canonicalContainedAfter || canonicalContainedAfter === canonicalRootAfter) return null
+
     return {
-      canonicalPath: normalizeCanonicalPath(canonicalPath),
-      dev: String(info.dev),
-      ino: String(info.ino),
-      mode: Number(info.mode),
-      size: Number(info.size),
-      mtimeMs: Number(info.mtimeMs),
-      birthtimeMs: Number(info.birthtimeMs),
+      canonicalPath: canonicalPathAfter,
+      ...identityAfter,
+      ...snapshotRootIdentity(rootInfoAfter, canonicalRootAfter),
       observedMtimeMs: Number.isFinite(Number(observedMtimeMs)) ? Number(observedMtimeMs) : null
     }
   }
 
   #sameIdentity(left, right) {
-    if (!left || !right) return false
-    return CACHE_IDENTITY_KEYS.every(key => left[key] === right[key])
+    return sameIdentityKeys(CACHE_IDENTITY_KEYS, left, right)
   }
 
   #matchesApproved(candidate, approved) {
@@ -406,7 +528,7 @@ class StorageCleanupService {
     const base = path.basename(contained)
     if (contained === rootAbs) return false
     if (PROTECTED_BASENAMES.has(base.toLowerCase())) return false
-    if (base === ROOT_ENTRY_NAMES.runtime) return false
+    if (base === ROOT_ENTRY_NAMES.runtime || isCleanupIsolationName(base)) return false
     const escape = await isSymlinkEscaping(contained, rootAbs, { fs: this.scanFs })
     if (escape.escaping || escape.symlink) return false
     // 若目标本身是符号链接/重解析点直接拒绝（不清链接后的悬挂目标）。
@@ -419,10 +541,6 @@ class StorageCleanupService {
     }
     return true
   }
-}
-
-function safeError(error) {
-  return String(error && error.message ? error.message : error)
 }
 
 module.exports = {

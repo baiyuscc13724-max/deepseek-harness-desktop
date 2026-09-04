@@ -127,6 +127,7 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 ## 12. 缓存维护与磁盘/内存预算
 
 - 自动缓存维护只做 cache-only 窄扫描，并在递归前剪除 runtime、sessions、attachments、memories 及未请求的 temp/workspace。手动 scan/preview/apply 与回滚开关继续保留。
+- Node 24 / Electron 43 没有跨平台 directory-handle 删除原语，因此 `1.0.59` 的 storage cleanup apply 明确为 `preview-only`：完成 canonical root/target、identity、current runtime、protected subtree、symlink/reparse 与二次校验后仍返回 `action=refused`、`applied=false`、`freedBytes=0`、`recovery.state=original-retained`，不调用 `rename`、`rm` 或 `rmdir`。候选和受保护数据都保留，遗留 `.dsh-cleanup-quarantine-` 条目永久不重新进入 planner。
 - shadow oracle 必须逐项等价；任何差异只生成预览并 fail closed，不得直接删除。
 - 明确的固定预算包括：投影缓存 32 MiB、Mobile Sync delta journal 512 KiB、hot/cold 垃圾债务 48 files / 4 MiB 软线与 192 files / 16 MiB 硬线。SSE/client queue、reader anchor、diagnostic、设备 latest frame 与截图引用索引也必须保持实现中的有界策略。
 - 性能指标只用于发现退化，不能覆盖一致性、ACL、引用或回滚失败。缓存/增量路径一旦出现 mismatch，应回退权威读取而不是提高预算或放宽校验。

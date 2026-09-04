@@ -288,7 +288,7 @@ test('alpha.5 scroll, lifecycle, and whole-chip disclosure seams keep independen
   const lifecycleInstalled = fs.readFileSync(path.join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-subagent', 'lib', 'index.js'), 'utf8')
   const lifecyclePatched = patchAlpha5SubagentLifecycleSource(lifecycleInstalled).source
   const subagentUiPatched = patchSubagentSource(fs.readFileSync(SUBAGENT_UI_FILE, 'utf8')).source
-  assert.equal(createHash('sha256').update(chatPatched).digest('hex').toUpperCase(), '27439B98CFB2A8DA1C4CD3E1CEF17088CFF3DEF636676BDF93939C8E7753D018')
+  assert.equal(createHash('sha256').update(chatPatched).digest('hex').toUpperCase(), '5C642BC3C02EF2F1A34A043F1375CD7DF9C7609EB6EFCE64AFA0FD98BDD7709C')
   assert.equal(createHash('sha256').update(lifecyclePatched).digest('hex').toUpperCase(), '875D76C0F97E32F7D5CE8EA2A025CCDA7DDC1E80DAF903AD4D7C090CBCB4C837')
   assert.equal(createHash('sha256').update(subagentUiPatched).digest('hex').toUpperCase(), '035C0B528D341F031886BEF5B4910E83BF502748CE6D0633126590A7DB68372D')
   assert.equal(patchAlpha5ChatScrollSource(chatPatched).changed, false)

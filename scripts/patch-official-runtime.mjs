@@ -72,8 +72,8 @@ function dedentOne(source) {
   return source.split('\n').map(line => line.slice(1)).join('\n')
 }
 
-function bundleFunctionSource(fn) {
-  return fn.toString().split('\n').map(line => `\t\t${line}`).join('\n')
+export function bundleFunctionSource(fn) {
+  return fn.toString().replace(/\r\n?/g, '\n').split('\n').map(line => `\t\t${line}`).join('\n')
 }
 
 export function deriveChatScrollIntent(scrollTop, scrollHeight, clientHeight, observedTop, following) {
@@ -906,6 +906,12 @@ const ALPHA5_CHAT_SCROLL_HELPERS_PATCHED = `		const SCROLL_SAMPLE_INTERVAL_MS = 
 		// Harness Desktop: commit cheap reader/follower intent immediately; sample semantic anchors on a bounded cadence.
 ${bundleFunctionSource(deriveChatScrollIntent)}
 ${bundleFunctionSource(createChatScrollIntentMachine)}
+		/** Active column host when present; otherwise the view-local scroller. */`
+// Restore only the exact pre-canonical Windows composition so local verification can recover the official artifact; installers never accept this as a target hash.
+const ALPHA5_CHAT_SCROLL_HELPERS_LEGACY_CRLF = `		const SCROLL_SAMPLE_INTERVAL_MS = 500;
+		// Harness Desktop: commit cheap reader/follower intent immediately; sample semantic anchors on a bounded cadence.
+${bundleFunctionSource(deriveChatScrollIntent).replace(/\n/g, '\r\n')}
+${bundleFunctionSource(createChatScrollIntentMachine).replace(/\n/g, '\r\n')}
 		/** Active column host when present; otherwise the view-local scroller. */`
 const ALPHA5_CHAT_SCROLL_LAYOUT_ORIGINAL = `(0, react.useLayoutEffect)(() => {
 				if (scrollSamplePendingRef.current) return;
@@ -1842,14 +1848,16 @@ export function restoreAlpha5ChatSentTimeSnapshotSource(source) {
 }
 
 export function restoreAlpha5ChatScrollSource(source) {
-  const completeCount = ALPHA5_CHAT_SCROLL_COMPLETE.filter(fragment => source.includes(fragment)).length
-  if (completeCount === 0) {
+  const matchedHelperPatches = [ALPHA5_CHAT_SCROLL_HELPERS_PATCHED, ALPHA5_CHAT_SCROLL_HELPERS_LEGACY_CRLF].filter(fragment => source.includes(fragment))
+  const completeTail = ALPHA5_CHAT_SCROLL_COMPLETE.slice(1)
+  const presentTailCount = completeTail.filter(fragment => source.includes(fragment)).length
+  if (matchedHelperPatches.length === 0 && presentTailCount === 0) {
     if (ALPHA5_CHAT_SCROLL_MARKERS.some(marker => source.includes(marker))) {
       throw new Error('Pinned DSH alpha.5 chat scroll-state patch is incomplete; refusing an unsafe restore.')
     }
     return source
   }
-  if (completeCount !== ALPHA5_CHAT_SCROLL_COMPLETE.length) {
+  if (matchedHelperPatches.length !== 1 || presentTailCount !== completeTail.length) {
     throw new Error('Pinned DSH alpha.5 chat scroll-state patch is incomplete; refusing an unsafe restore.')
   }
   let output = source
@@ -1857,7 +1865,7 @@ export function restoreAlpha5ChatScrollSource(source) {
     [ALPHA5_CHAT_SCROLL_FOLLOW_PATCHED, ALPHA5_CHAT_SCROLL_FOLLOW_ORIGINAL, 'resize follow guard'],
     [ALPHA5_CHAT_SCROLL_HANDLER_PATCHED, ALPHA5_CHAT_SCROLL_HANDLER_ORIGINAL, 'scroll sampling lifecycle'],
     [ALPHA5_CHAT_SCROLL_LAYOUT_PATCHED, ALPHA5_CHAT_SCROLL_LAYOUT_ORIGINAL, 'layout follow guard'],
-    [ALPHA5_CHAT_SCROLL_HELPERS_PATCHED, ALPHA5_CHAT_SCROLL_HELPERS_ORIGINAL, 'helper anchor']
+    [matchedHelperPatches[0], ALPHA5_CHAT_SCROLL_HELPERS_ORIGINAL, 'helper anchor']
   ]) output = replaceAlpha5ChatScrollFragment(output, patched, original, label)
   if (ALPHA5_CHAT_SCROLL_MARKERS.some(marker => output.includes(marker))) {
     throw new Error('Pinned DSH alpha.5 chat scroll-state restore left patch markers behind.')
@@ -2512,6 +2520,40 @@ export function patchSubagentSource(source) {
   return { source: live.source, changed: changed || live.changed }
 }
 
+export function restoreAlpha5SubagentSource(source) {
+  const sourceHash = sourceSha256(source)
+  if (sourceHash === OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.official) return source
+  if (sourceHash !== OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.patched) {
+    throw new Error('Pinned DSH alpha.5 subagent UI source is neither exact official nor exact complete patched artifact; refusing an unsafe restore.')
+  }
+  let output = source
+  for (const [patched, original, label] of [
+    [SUBAGENT_DISCLOSURE_MENU_PATCHED, SUBAGENT_DISCLOSURE_MENU_ORIGINAL, 'controlled catalog menu id'],
+    [SUBAGENT_DISCLOSURE_CLICK_PATCHED, SUBAGENT_DISCLOSURE_CLICK_ORIGINAL, 'whole-chip disclosure click'],
+    [SUBAGENT_DISCLOSURE_EXPANDED_PATCHED, SUBAGENT_DISCLOSURE_EXPANDED_ORIGINAL, 'disclosure ARIA relationship'],
+    [SUBAGENT_DISCLOSURE_ID_PATCHED, SUBAGENT_DISCLOSURE_ID_ORIGINAL, 'stable disclosure controls id'],
+    [SUBAGENT_DISCLOSURE_MOTION_PATCHED, SUBAGENT_DISCLOSURE_MOTION_ORIGINAL, 'reduced-motion trigger'],
+    [SUBAGENT_DISCLOSURE_FOCUS_PATCHED, SUBAGENT_DISCLOSURE_FOCUS_ORIGINAL, 'visible trigger focus'],
+    [SUBAGENT_DISCLOSURE_SWITCHER_WIDTH_PATCHED, SUBAGENT_DISCLOSURE_SWITCHER_WIDTH_ORIGINAL, '44px switcher width'],
+    [SUBAGENT_DISCLOSURE_TOUCH_PATCHED, SUBAGENT_DISCLOSURE_TOUCH_ORIGINAL, '44px trigger height'],
+    [SUBAGENT_TEAM_LIVE_ARIA_PATCHED, SUBAGENT_TEAM_LIVE_ARIA_ORIGINAL, 'realtime trigger label'],
+    [SUBAGENT_TEAM_LIVE_RUNNING_KEY_PATCHED, SUBAGENT_TEAM_LIVE_RUNNING_KEY_ORIGINAL, 'realtime running count'],
+    [SUBAGENT_TEAM_LIVE_COUNT_PATCH, SUBAGENT_TEAM_LIVE_COUNT_ANCHOR, 'realtime total count'],
+    [`${SUBAGENT_TEAM_LIVE_STATE_ANCHOR}\n${SUBAGENT_TEAM_LIVE_STATE_PATCH}`, SUBAGENT_TEAM_LIVE_STATE_ANCHOR, 'realtime state bridge']
+  ]) {
+    const first = output.indexOf(patched)
+    if (first < 0) continue
+    if (output.indexOf(patched, first + patched.length) >= 0) {
+      throw new Error(`Pinned DSH alpha.5 subagent UI ${label} is ambiguous; refusing an unsafe restore.`)
+    }
+    output = output.slice(0, first) + original + output.slice(first + patched.length)
+  }
+  if (sourceSha256(output) !== OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.official) {
+    throw new Error('Pinned DSH alpha.5 subagent UI restore output hash changed; refusing an unsafe restore.')
+  }
+  return output
+}
+
 export function patchAgentLoopCancellationSource(source) {
   let output = source
   let changed = false
@@ -2632,8 +2674,8 @@ function sourceSha256(source) {
 
 const OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES = Object.freeze({
   official: '9C9874C57B7D3E5A71222A72E0F19ED8D884C40F895D898640C882D49BD1B231',
-  scrollPatched: '4C05AE99A177B83E9F32F5D0459F5BBA595D2701A02B6B635CE14FD0416BFF06',
-  patched: '27439B98CFB2A8DA1C4CD3E1CEF17088CFF3DEF636676BDF93939C8E7753D018',
+  scrollPatched: '5955FE78B7713E1AA37C274BE282540B1CEA7ADCF8A78B8159E1752426D17540',
+  patched: '5C642BC3C02EF2F1A34A043F1375CD7DF9C7609EB6EFCE64AFA0FD98BDD7709C',
   anchors: Object.freeze([
     'const SCROLL_SAMPLE_INTERVAL_MS = 500;',
     'function ChatView({ useSession, useChat, useChatNode, useChatNodeProcess, useSessions',
