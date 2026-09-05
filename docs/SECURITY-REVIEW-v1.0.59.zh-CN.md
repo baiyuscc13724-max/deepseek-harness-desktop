@@ -1,6 +1,6 @@
 # Harness Desktop v1.0.59 安全审查
 
-审查日期：2026-09-04
+审查日期：2026-09-05
 
 审查对象：Harness Desktop `1.0.59` 候选源码、官方 Harness `0.1.2-alpha.5` 依赖与补丁、Agent Teams 自动接力/扩员/生命周期/权威存储/投影、长会话与移动工作台、Schedule、Mobile Sync v6、设备预览与证据存储，以及正式发布器的安全边界。
 
@@ -38,7 +38,17 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 - 短期 Host receipt 绑定精确 Desktop origin/webContents、设置内容与 epoch，TTL 为 15 秒且只能消费一次；错误 origin、设置漂移、过期、重放、未知 id 和旧 epoch 都 fail closed。
 - 真正的 team grant 只可在直接用户建队、精确计划提交或两阶段 Resume 边界派生，并同时绑定 root、canonical project、活动 Goal、team、pause epoch、plan/settings hash 与 authorization epoch。普通 Goal round、routing 声明和进度消息不能补发缺失或已撤销 grant。
 - 没有新的 durable transition 或 eligibility 变化时，空 automatic round 直接 park，零追加预算、零新 wake、零重复 store 写入和零重复 publication。只有 claim-bound 任务提交、成员失败或依赖满足关系改变等已持久化事实，才允许每个 transition 至多补充一轮。
-- Stop、显式关闭自动接力、Host/runtime 重启撤销、handoff/adopt、跨项目、pause epoch 或授权 epoch 变化、计划/设置漂移、能力未知、文件冲突、非 `none` effect 和 `outcome_unknown` 都撤销或阻断自动继续。预算不能因 Resume 或重新提交计划而重置。
+- Stop、显式关闭自动接力、Host/runtime 重启撤销、handoff/adopt、跨项目、pause epoch 或授权 epoch 变化、计划/设置漂移、能力未知、文件冲突、非 `none` effect，以及没有被当前精确进程内恢复尝试围栏覆盖的 `outcome_unknown`，都撤销或阻断自动继续。预算不能因 Resume 或重新提交计划而重置。
+
+### 3.1 明确失败成员的自动恢复
+
+- `team_member_recover` 仍只接受精确存活的顶层 Root。直接用户轮次可执行；非直接用户轮次必须同时证明当前是 Host 承认的同一 armed Goal round，且 Root 的全部未关闭团队形成完整、活动、可信的 autopilot grant group。
+- 自动路径逐项重验同一 root、canonical project、Goal identity/objective/round cap、pause epoch、authorization epoch、活动且 hash-bound 的 plan、已验证能力、无文件冲突、全部 effect policy=`none`、精确 failed member、未完成任务、claim/lease 与容量。任一 Stop、跨项目、未知能力/成本、副作用、冲突、stale claim/revision 或既有未收敛恢复 receipt 均 fail closed。
+- 可继续的原 session 且唯一活动 claim/lease 未变时，只允许一次自动 `retry`；同一成员的该次 retry 已确认送达后再次失败，Host 以 `AGENT_TEAMS_AUTOMATIC_RETRY_EXHAUSTED` 拒绝第二次自动 retry，并要求同一安全 Goal round 直接 `replace`，不要求用户选择或发送同意短语。replace 会撤销旧 claim/lease、保留 checkpoint/生命周期审计，并把相同未完成任务预绑定给一个用户可见的同级成员。
+- 每次恢复先写 durable receipt 再 dispatch。模块内 `AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS` 只在精确调用进行期间，以 team/request/input hash/root/member/action/revision/pause epoch 共同匹配当前尝试；这只避免已围栏的本次 `prepared`/`outcome_unknown` 自我撤销 grant，不把模型输入升级为 Host 事实。`finally` 按对象 identity 删除记录；进程重启、调用结束或不匹配时，durable `outcome_unknown` 立即重新阻断 autopilot。`prepared + dispatchOutcome=not_started + retryable=true` 因尚未发生 dispatch 可安全原样续跑。
+- Agent Teams 页面不再为结果明确的 retry/replace 再弹第二层确认。Root 的手动后备按钮单击即提交，操作中禁用全部恢复按钮、切换工作文案，并在容器暴露 `aria-busy`，完成后使用 live status/alert 直接反馈；移动布局保持单列与至少 44px 命中区。只有 `outcome_unknown` 的 delivered/not-delivered 对账继续保留直接用户确认，且不会重发模型调用。
+- 本轮 canonical-LF 身份：Host `plugins/dsh-agent-teams/lib/index.js` = `0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4`；Client `plugins/dsh-agent-teams/lib/client.js` = `5a6a9ed1b2019d99495e3cfa680f945f08c6cc11e551347d16f645ff3904a271`；定向测试 `tests/agent-teams-autopilot.test.cjs` = `1010d340b1ed3f2b109b620e1e15e4e36a609e36a2f2725674e05419af71ba51`、`tests/agent-teams-runtime.test.cjs` = `83c90b12b8c866ba051bd2637b81455f0978dd2a9a30337eda2cbda68ee25666`、`tests/agent-teams-tools.test.cjs` = `2ec27df1801025fd3159c77cfdd7dc473ec3a4f8dad1fda3a2ab8a9185402752`、`tests/agent-teams-ui.test.cjs` = `f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4`。
+- 精确门禁结果：autopilot 65/65、UI 40/40、tools 16/16、domain 79/79、runtime 37/37，均为 0 fail/0 skip；runtime 单文件由 Node 测试进程自然退出，没有使用 `--test-force-exit`。
 
 ## 4. 重任务扩员、admission 与外部副作用
 
@@ -83,9 +93,9 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 ### 8.1 第二轮持久化优化的安全等价复核
 
-本轮独立逐项审查产品 `+574/-104` 与回归 `+510/-9` 差异，并在产品文件和性能测试只读的条件下接受以下两个 canonical-LF 源身份：
+第二轮持久化优化已独立逐项审查其产品与回归差异；当前 Host 在该等价性能实现上叠加 §3.1 的自动恢复权限围栏，性能合同文件保持不变。冻结以下两个 canonical-LF 源身份：
 
-- `plugins/dsh-agent-teams/lib/index.js`：`a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b`
+- `plugins/dsh-agent-teams/lib/index.js`：`0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4`
 - `tests/agent-teams-store-performance.test.cjs`：`68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887`
 
 独立复核确认性能恢复没有缩小权威数据域、耐久边界或拒绝条件：
@@ -120,10 +130,10 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 ### 10.1 本轮云端性能恢复的等价复核
 
-- canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
+- canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
 - Windows / Node `v24.16.0` 保持原始样本与断言。此前云端证据已把 65-root 冷投影中位数由 `58.280 ms` 降至 `40.422 ms`，并把 1307-session changed commit p95 由 `12.672 ms` 降至 `9.952 ms`、128-event journal commit p95 由 `10.920 ms` 降至 `6.277 ms`；Mobile Sync 已通过固定门槛。当前 exact 候选进一步在本地原合同下得到 65-root 冷投影中位数 `30.416 ms` 和 146-team mutation p95 `22.67 ms`，门槛仍分别为 `<=60 ms` 与 `<75 ms`。相关 37 个 Mobile Sync 测试、74 个 hot/cold 测试与全部 Agent Teams 投影测试通过。
 - 没有提高阈值、减少样本、增加 warmup、sleep、跳过测试或更改 smoke 分组；内建缓存候选就是刚完成授权的同一未逸出 canonical 对象，任一 shadow/注入候选仍须逐字节/哈希等价，Mobile Sync 每次 applied commit 仍完成文件 `fsync` 与原子 rename。
-- 前一云端 run 还证明 macOS/Linux ordinary phase 在完成前 17 个有序文件后由测试自建但未释放的 Cordis root fiber 阻塞，而不是产品断言慢。JSON output boundary 现在以 `finally` 等待 `runtime.fiber.dispose()`，optional-provider 探针以 `t.after` 等待所有 root fiber settle；没有使用 `--test-force-exit`、缩短测试、吞掉活动 handle 或重分组。单文件 37/37 通过并自然退出。
+- 前一云端 run 还证明 macOS/Linux ordinary phase 在完成前 17 个有序文件后由测试自建但未释放的 Cordis 子插件 fiber/fixture 资源阻塞，而不是产品断言慢。Cordis 的 root `runtime.fiber.dispose()` 实际映射为 restart，不能作为关闭手段；JSON output boundary 现在保留 `runtime.plugin(...)` 返回的真实子 fiber，在 `finally` 先注销临时 tool，再按逆序等待每个 `fiber.dispose()`。其余 fixture 显式关闭 admission、store、订阅与 effect cleanup；没有使用 `--test-force-exit`、缩短测试、吞掉活动 handle 或重分组。单文件 37/37 通过并由 Node 进程自然退出。
 
 ## 11. preview/evidence 分域与延迟 GC
 

@@ -25,7 +25,7 @@ alpha2Audit('accepted alpha.2 source, static gate, migration and publication inp
 
 test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof sources without moving history', () => {
   const accepted = Object.freeze({
-    'plugins/dsh-agent-teams/lib/index.js': 'a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b',
+    'plugins/dsh-agent-teams/lib/index.js': '0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4',
     'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887'
   })
   assert.equal(Object.keys(helper.ACCEPTED).length, 12)
@@ -41,19 +41,30 @@ test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof so
 
 test('v1.0.59 cloud performance recovery binds exact optimized sources and unchanged safety gates', () => {
   const accepted = Object.freeze({
-    'plugins/dsh-agent-teams/lib/index.js': 'a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b',
-    'electron/store/mobile-sync-store.cjs': 'da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba'
+    'plugins/dsh-agent-teams/lib/index.js': '0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4',
+    'plugins/dsh-agent-teams/lib/client.js': '5a6a9ed1b2019d99495e3cfa680f945f08c6cc11e551347d16f645ff3904a271',
+    'electron/store/mobile-sync-store.cjs': 'da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba',
+    'tests/agent-teams-autopilot.test.cjs': '1010d340b1ed3f2b109b620e1e15e4e36a609e36a2f2725674e05419af71ba51',
+    'tests/agent-teams-runtime.test.cjs': '83c90b12b8c866ba051bd2637b81455f0978dd2a9a30337eda2cbda68ee25666',
+    'tests/agent-teams-tools.test.cjs': '2ec27df1801025fd3159c77cfdd7dc473ec3a4f8dad1fda3a2ab8a9185402752',
+    'tests/agent-teams-ui.test.cjs': 'f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4'
   })
   for (const [relative, expected] of Object.entries(accepted)) {
     assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `optimized source drift: ${relative}`)
   }
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
-  for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', 'manifest descriptor chain', '同一 canonical text', '`WeakMap` identity', '没有提高阈值', '文件 `fsync` 与原子 rename', 'runtime.fiber.dispose()', '--test-force-exit']) {
+  for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', 'manifest descriptor chain', '同一 canonical text', '`WeakMap` identity', '没有提高阈值', '文件 `fsync` 与原子 rename', 'AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS', '`aria-busy`', '65/65', '40/40', '16/16', '79/79', '37/37', '`fiber.dispose()`', '--test-force-exit']) {
     assert.ok(review.includes(contract), `v1.0.59 performance recovery evidence missing: ${contract}`)
   }
   const runtimeTest = fs.readFileSync(path.join(ROOT, 'tests', 'agent-teams-runtime.test.cjs'), 'utf8')
-  assert.match(runtimeTest, /finally \{\s*await runtime\.fiber\.dispose\(\)\s*\}/u)
-  assert.match(runtimeTest, /t\.after\(async \(\) => \{ await Promise\.all\(contexts\.map\(value => value\.fiber\.dispose\(\)\)\) \}\)/u)
+  assert.match(runtimeTest, /const fibers = \[\]/u)
+  assert.match(runtimeTest, /disposeTool = runtime\.tools\.register/u)
+  assert.match(runtimeTest, /disposeTool\?\.\(\)/u)
+  assert.match(runtimeTest, /for \(const fiber of fibers\.reverse\(\)\) await fiber\.dispose\(\)/u)
+  assert.match(runtimeTest, /for \(const cleanup of effectCleanups\.reverse\(\)\) await cleanup\(\)/u)
+  assert.match(runtimeTest, /authorityStore\?\.close\(\)/u)
+  assert.match(runtimeTest, /t\.after\(\(\) => admission\.close\(\)\)/u)
+  assert.doesNotMatch(runtimeTest, /await runtime\.fiber\.dispose\(\)/u)
 })
 
 test('source exclusions are exact components and cannot hide similarly named product paths', () => {

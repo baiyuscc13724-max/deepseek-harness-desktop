@@ -23,7 +23,7 @@ const ACCEPTED = Object.freeze({
   'package-lock.json': 'ab011b915c803ea215874bd688a90a110eb5ddd6dbfabcd3a0d85811dbf39904',
   'scripts/patch-official-runtime.mjs': 'b7b2cb0f4cff2857425d75de8580ebf4155e3657bd3477fc4f92fb43a925e153',
   'scripts/verify-static.mjs': '66585d57d28ce767798d3a4b828f5d04dde4ef3675fbec7bb67c9756bd872e72',
-  'plugins/dsh-agent-teams/lib/index.js': 'a279f058702cc8b5ce14a2f469fedede8a13ad4bc1b40ec8771528ad484e460b',
+  'plugins/dsh-agent-teams/lib/index.js': '0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4',
   'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887',
   'tests/official-alpha2-static-release-contract.test.cjs': '9babbbd8f5cc901befba380595cd0bfc8fb37793ee016b872c9fcd55c409e2cb',
   'tests/official-alpha2-runtime-migration.test.cjs': 'd002a0d0b19674d07beda48c892b181cedb58bcc1cf7cdfeeaa84c4c34298472',

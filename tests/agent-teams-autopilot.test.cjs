@@ -7,6 +7,7 @@ const { performance } = require('node:perf_hooks')
 const { pathToFileURL } = require('node:url')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
+const queueSubagentPrompt = Symbol.for('dsh.subagent.queuePrompt')
 const NOW = '2026-09-01T00:00:00.000Z'
 const AUTHORIZATION_EPOCH = 'a'.repeat(32)
 
@@ -1289,6 +1290,131 @@ test('a non-admitted automatic recommit is side-effect free and the next exact G
   assert.notEqual(rebound.autopilot.planHashAtGrant, originalPlanHash)
   assert.equal(rebound.autopilot.planHashAtGrant, committed.plan.hash)
   assert.deepEqual(rebound.autopilot.wakes, [deliveredWake], 'the already-admitted wake survives the rejected ordinary turn')
+})
+
+test('an exact safe automatic Goal round authorizes failed-member recovery without another user message', async () => {
+  const mod = await loadPlugin('automatic-member-recovery-authority')
+  const value = fixture({ rootStatus: 'running', memberState: 'failed', budget: 2 })
+  const runtime = fakeRuntime(value.root, value.document, value.goal)
+  const execution = { agent: value.root, events: value.root.session.events, turnKey: 'automatic-member-recovery-turn' }
+  const authority = mod.exactGoalRoundRootAuthority(runtime.ctx, execution)
+  assert.ok(authority)
+  const document = runtime.store.snapshot()
+  const allowed = mod.assertAutomaticMemberRecoveryAllowed(runtime.ctx, document, document.teams[0], value.root, authority)
+  assert.equal(allowed.goal.id, value.goal.id)
+  assert.deepEqual(allowed.grantGroup.map(team => team.id), [document.teams[0].id])
+})
+
+test('an authorized automatic retry preserves autopilot only through its exact in-flight recovery receipt', async () => {
+  const mod = await loadPlugin('automatic-member-recovery-in-flight')
+  const value = fixture({ rootStatus: 'running', memberState: 'failed', budget: 2 })
+  const runtime = fakeRuntime(value.root, value.document, value.goal)
+  const authority = mod.exactGoalRoundRootAuthority(runtime.ctx, { agent: value.root, events: value.root.session.events, turnKey: 'automatic-member-retry-in-flight' })
+  const team = runtime.store.snapshot().teams[0]
+  const member = team.members.find(candidate => candidate.kind === 'worker')
+  const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 1_000 })
+  let observedInFlight = false
+  runtime.ctx.subagents[queueSubagentPrompt] = async (_lead, childId) => {
+    const inFlight = runtime.store.snapshot()
+    const receipt = inFlight.teams[0].memberRecoveries.find(candidate => candidate.requestId === 'automatic-member-retry-request')
+    assert.equal(receipt.status, 'outcome_unknown')
+    assert.equal(receipt.dispatchOutcome, 'outcome_unknown')
+    observedInFlight = mod.rootHasSafeAutopilotAuthority(inFlight, value.root)
+    assert.equal(admission.noteStart({ id: childId, runId: 'automatic-member-retry-run' }), true)
+    assert.equal(admission.noteEnd({ id: childId, runId: 'automatic-member-retry-run' }), true)
+    return 'delivered'
+  }
+  try {
+    const result = await mod.recoverFailedMember(runtime.ctx, runtime.store, admission, value.root, {
+      teamId: team.id,
+      memberId: member.id,
+      action: 'retry',
+      requestId: 'automatic-member-retry-request',
+      expectedRevision: team.revision,
+      automaticContinuation: true,
+      automaticGoalRoundAuthority: authority
+    }, new AbortController().signal)
+    assert.equal(observedInFlight, true, 'the exact process-local attempt prevents self-revocation while its fenced dispatch is running')
+    assert.equal(result.recovery.status, 'delivered')
+    assert.equal(mod.rootHasSafeAutopilotAuthority(runtime.store.snapshot(), value.root), true)
+    await runtime.store.mutate(document => {
+      const failedAgain = document.teams[0].members.find(candidate => candidate.id === member.id)
+      failedAgain.state = 'failed'
+      failedAgain.updatedAt = NOW
+      document.teams[0].updatedAt = NOW
+    })
+    const failedAgain = runtime.store.snapshot().teams[0]
+    await assert.rejects(
+      mod.recoverFailedMember(runtime.ctx, runtime.store, admission, value.root, {
+        teamId: failedAgain.id,
+        memberId: member.id,
+        action: 'retry',
+        requestId: 'automatic-member-second-retry-request',
+        expectedRevision: failedAgain.revision,
+        automaticContinuation: true,
+        automaticGoalRoundAuthority: authority
+      }, new AbortController().signal),
+      error => error?.code === 'AGENT_TEAMS_AUTOMATIC_RETRY_EXHAUSTED'
+    )
+    assert.equal(runtime.store.snapshot().teams[0].memberRecoveries.length, 1, 'an automatic second retry cannot create another durable attempt')
+  } finally {
+    admission.close()
+  }
+})
+
+test('an automatic recovery dispatch that becomes outcome_unknown immediately loses autopilot eligibility', async () => {
+  const mod = await loadPlugin('automatic-member-recovery-unknown')
+  const value = fixture({ rootStatus: 'running', memberState: 'failed', budget: 2 })
+  const runtime = fakeRuntime(value.root, value.document, value.goal)
+  const authority = mod.exactGoalRoundRootAuthority(runtime.ctx, { agent: value.root, events: value.root.session.events, turnKey: 'automatic-member-retry-unknown' })
+  const team = runtime.store.snapshot().teams[0]
+  const member = team.members.find(candidate => candidate.kind === 'worker')
+  const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 1_000 })
+  runtime.ctx.subagents[queueSubagentPrompt] = async (_lead, childId) => {
+    assert.equal(admission.noteStart({ id: childId, runId: 'automatic-member-unknown-run' }), true)
+    assert.equal(admission.noteEnd({ id: childId, runId: 'automatic-member-unknown-run' }), true)
+    throw Object.assign(new Error('delivery acknowledgement unavailable'), { code: 'RECOVERY_DELIVERY_UNKNOWN' })
+  }
+  try {
+    await assert.rejects(
+      mod.recoverFailedMember(runtime.ctx, runtime.store, admission, value.root, {
+        teamId: team.id,
+        memberId: member.id,
+        action: 'retry',
+        requestId: 'automatic-member-unknown-request',
+        expectedRevision: team.revision,
+        automaticContinuation: true,
+        automaticGoalRoundAuthority: authority
+      }, new AbortController().signal),
+      error => error?.code === 'RECOVERY_DELIVERY_UNKNOWN'
+    )
+    const after = runtime.store.snapshot()
+    assert.equal(after.teams[0].memberRecoveries[0].status, 'outcome_unknown')
+    assert.equal(mod.rootHasSafeAutopilotAuthority(after, value.root), false, 'unknown delivery is never covered by stale process-local authority')
+  } finally {
+    admission.close()
+  }
+})
+
+test('automatic failed-member recovery remains fail-closed outside the exact safe grant', async t => {
+  const mod = await loadPlugin('automatic-member-recovery-boundaries')
+  const cases = [
+    ['missing exact Goal-round authority', value => ({ authority: undefined, expectedCode: 'AGENT_TEAMS_DIRECT_HUMAN_REQUIRED' })],
+    ['cross-project authority', (value, authority) => ({ authority: { ...authority, projectKey: '0'.repeat(64) }, expectedCode: 'AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN' })],
+    ['nonordinary external effect', (value, authority) => { value.document.teams[0].tasks[0].externalEffects[0].policy = 'confirm_each'; value.document.teams[0].plan.hash = planHash(value.document.teams[0]); value.document.teams[0].plan.authorization.confirmedPlanHash = value.document.teams[0].plan.hash; value.document.teams[0].autopilot.planHashAtGrant = value.document.teams[0].plan.hash; return { authority, expectedCode: 'AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED' } }],
+    ['unresolved recovery receipt', (value, authority) => { value.document.teams[0].memberRecoveries.push({ status: 'outcome_unknown' }); return { authority, expectedCode: 'AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED' } }]
+  ]
+  for (const [name, mutate] of cases) await t.test(name, () => {
+    const value = fixture({ rootStatus: 'running', memberState: 'failed', budget: 2 })
+    const runtime = fakeRuntime(value.root, value.document, value.goal)
+    const authority = mod.exactGoalRoundRootAuthority(runtime.ctx, { agent: value.root, events: value.root.session.events, turnKey: `automatic-member-recovery-risk-${name}` })
+    const prepared = mutate(value, authority)
+    const document = structuredClone(value.document)
+    assert.throws(
+      () => mod.assertAutomaticMemberRecoveryAllowed(runtime.ctx, document, document.teams[0], value.root, prepared.authority),
+      error => error?.code === prepared.expectedCode
+    )
+  })
 })
 
 test('admitted recommit safety failures still revoke live grants for scope Stop capability and effect risks', async t => {

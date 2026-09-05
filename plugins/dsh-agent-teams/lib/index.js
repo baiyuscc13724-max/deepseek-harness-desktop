@@ -110,6 +110,7 @@ const MODEL_TIERS = Object.freeze(["main", "subagent"]);
 const MANAGED_MEMBER_DENIED_TOOLS = Object.freeze(["subagent", "subagent_fork", "workflow", "ralph"]);
 const MANAGED_MEMBER_DENIED_TOOL_NAMES = new Set(MANAGED_MEMBER_DENIED_TOOLS);
 const PROVISIONING_MEMBER_SESSION_IDS = new Set();
+const AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS = new Map();
 const PROVIDER_ID = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
 const MODEL_ID = /^\S{1,256}$/u;
 const TASK_STATES = Object.freeze(["pending", "in_progress", "submitted", "completed", "cancelled"]);
@@ -5924,7 +5925,7 @@ function finalizedAutopilotRoutingReceipt(document, team, goal) {
 }
 function directHumanAutopilotPlanBinding(team) {
   if (effectiveTeamState(team) !== "active" || team.closure !== undefined || team.handoff !== undefined
-    || (team.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")
+    || memberRecoveryBlocksAutopilot(team)
     || (team.provisioningQueue ?? []).some((entry) => entry.status === "outcome_unknown")
     || !planCapabilitiesAreVerified(team) || !planFilesAreConflictFree(team) || !planEffectsAreOrdinary(team)) return undefined;
   if (teamHasEstablishedWorker(team)) return planAuthorizationSupportsAutopilot(team) ? { status: "active", planHash: team.plan.hash } : undefined;
@@ -6064,7 +6065,7 @@ function bindAgentTeamAutopilotPlan(team, goal) {
     || !teamHasEstablishedWorker(team) || !planAuthorizationSupportsAutopilot(team)
     || !planCapabilitiesAreVerified(team) || !planFilesAreConflictFree(team) || !planEffectsAreOrdinary(team)
     || team.closure !== undefined || team.handoff !== undefined || effectiveTeamState(team) !== "active"
-    || (team.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")) return false;
+    || memberRecoveryBlocksAutopilot(team)) return false;
   autopilot.status = "active";
   autopilot.planHashAtGrant = team.plan.hash;
   return true;
@@ -6167,6 +6168,19 @@ function planAuthorizationSupportsAutopilot(team) {
     && authorization.source !== "unknown"
     && ["permissions", "files", "cost", "externalSideEffects"].every((field) => authorization[field] !== "unknown");
 }
+function automaticMemberRecoveryAttemptKey(teamId, requestId) {
+  return JSON.stringify([teamId, requestId]);
+}
+function memberRecoveryBlocksAutopilot(team) {
+  return (team.memberRecoveries ?? []).some((receipt) => {
+    if (!["outcome_unknown", "prepared"].includes(receipt.status)) return false;
+    if (receipt.status === "prepared" && receipt.dispatchOutcome === "not_started" && receipt.retryable === true) return false;
+    const attempt = AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS.get(automaticMemberRecoveryAttemptKey(team.id, receipt.requestId));
+    return attempt === undefined || attempt.inputHash !== receipt.inputHash || attempt.rootSessionId !== team.rootLeadSessionId
+      || attempt.memberId !== receipt.memberId || attempt.action !== receipt.action || attempt.expectedRevision !== receipt.teamRevision
+      || attempt.pauseEpoch !== receipt.pauseEpoch;
+  });
+}
 function teamHasSafeAutopilotAuthority(team, root) {
   if (effectiveTeamState(team) !== "active" || team.rootLeadSessionId !== root.id) return false;
   const projectKey = optionalProjectKeyForRoot(root);
@@ -6174,7 +6188,7 @@ function teamHasSafeAutopilotAuthority(team, root) {
   return team.closure === undefined && team.handoff === undefined && teamHasEstablishedWorker(team)
     && planAuthorizationSupportsAutopilot(team) && planCapabilitiesAreVerified(team)
     && planFilesAreConflictFree(team) && planEffectsAreOrdinary(team)
-    && !(team.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")
+    && !memberRecoveryBlocksAutopilot(team)
     && !(team.provisioningQueue ?? []).some((entry) => entry.status === "outcome_unknown");
 }
 function rootHasSafeAutopilotAuthority(document, root) {
@@ -7518,17 +7532,17 @@ function reconcileSafePlanAuthorization(team, timestamp = now()) {
   }
   return changed;
 }
-function assertExactAutomaticGoalRound(ctx, lead, authority) {
-  if (!isRecord(authority)) reject("automatic plan recommit requires the exact admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+function assertExactAutomaticGoalRound(ctx, lead, authority, action = "automatic plan recommit") {
+  if (!isRecord(authority)) reject(`${action} requires the exact admitted Goal round`, "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
   const exact = exactGoalRoundRootAuthority(ctx, { agent: lead, turnKey: authority.turnKey });
   if (exact === undefined) {
-    reject("automatic plan recommit requires the exact admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+    reject(`${action} requires the exact admitted Goal round`, "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
   }
   if (exact.projectKey !== authority.projectKey) {
-    reject("automatic plan recommit requires the same canonical project scope", "AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN");
+    reject(`${action} requires the same canonical project scope`, "AGENT_TEAMS_CROSS_PROJECT_FORBIDDEN");
   }
   if (Object.keys(exact).some((key) => exact[key] !== authority[key])) {
-    reject("automatic plan recommit requires the exact admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+    reject(`${action} requires the exact admitted Goal round`, "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
   }
   return ctx.goals.get(lead);
 }
@@ -7563,7 +7577,7 @@ function automaticPlanRecommitGrantGroup(document, team, lead, goal, authority) 
       || autopilot.expectedMaxGoalRounds !== goal.maxGoalRounds
       || autopilot.pauseEpochAtGrant !== (candidate.pauseEpoch ?? 0)
       || candidate.closure !== undefined || candidate.handoff !== undefined
-      || (candidate.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")) {
+      || memberRecoveryBlocksAutopilot(candidate)) {
       reject("automatic plan recommit grant scope changed", "AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED");
     }
     if (candidate !== team && agentTeamAutopilotInvalidReason(candidate, lead, goal, document.settings) !== undefined) {
@@ -7585,6 +7599,20 @@ function assertAutomaticPlanRecommitAllowed(ctx, document, team, lead, authority
   if (!planCapabilitiesAreVerified(team)) reject("automatic plan recommit cannot expand unknown capabilities", "AGENT_TEAMS_CAPABILITY_UNKNOWN");
   if (!planFilesAreConflictFree(team)) reject("automatic plan recommit requires conflict-free file ownership", "AGENT_TEAMS_FILE_CONFLICT");
   if (!planEffectsAreOrdinary(team)) reject("automatic plan recommit is limited to effect-free internal work", "AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED");
+  return { goal, grantGroup };
+}
+function assertAutomaticMemberRecoveryAllowed(ctx, document, team, lead, authority) {
+  requireLiveRootLead(ctx, team, lead);
+  requireActiveTeam(team);
+  const goal = assertExactAutomaticGoalRound(ctx, lead, authority, "automatic member recovery");
+  const grantGroup = automaticPlanRecommitGrantGroup(document, team, lead, goal, authority);
+  if (team.autopilot?.status !== "active" || !grantGroup.includes(team)) {
+    reject("automatic member recovery requires the exact complete active autopilot grant group", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+  }
+  const invalidReason = grantGroup.map((candidate) => agentTeamAutopilotInvalidReason(candidate, lead, goal, document.settings)).find((reason) => reason !== undefined);
+  if (invalidReason !== undefined || !teamHasSafeAutopilotAuthority(team, lead)) {
+    reject(`automatic member recovery authority changed${invalidReason === undefined ? "" : `: ${invalidReason}`}`, "AGENT_TEAMS_AUTOPILOT_SCOPE_CHANGED");
+  }
   return { goal, grantGroup };
 }
 function rebindAutomaticPlanGrantGroup(grantGroup, team, planHash) {
@@ -8468,7 +8496,7 @@ function memberRecoveryPrompt(team, member, tasks, action) {
     return `- ${task.id}: ${task.title}${checkpoint === undefined ? "" : `\n  Recovery context (unverified): ${checkpoint.slice(0, 1_200)}`}`;
   }).join("\n");
   return [
-    `Direct-human member recovery (${action}) for Agent Team ${team.id}.`,
+    `Authorized member recovery (${action}) for Agent Team ${team.id}.`,
     `Continue only the durable tasks listed below. Inspect their current Host state before writing.`,
     taskLines,
     `Do not create hidden subagents or a nested team. Preserve claimId/leaseEpoch for retry; replacement must claim each pending task before work.`,
@@ -8537,14 +8565,25 @@ function rollbackUnstartedReplacement(team, receipt, timestamp) {
   }
 }
 async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
+  if (input.automaticContinuation === true && input.automaticGoalRoundAuthority === undefined) {
+    reject("automatic member recovery requires the exact admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+  }
   const action = assertEnum(input.action, MEMBER_RECOVERY_ACTIONS, "action") ?? input.action;
   const requestId = nonEmptyString(input.requestId, "requestId", 256), teamId = nonEmptyString(input.teamId, "teamId", 256), memberId = nonEmptyString(input.memberId, "memberId", 256);
   const expectedRevision = positiveInteger(input.expectedRevision, "expectedRevision");
   const inputHash = memberRecoveryInputHash({ action, teamId, memberId, expectedRevision });
-  return queueTeamOperation(store.filePath, teamId, async () => {
+  const automaticAttemptKey = input.automaticContinuation === true ? automaticMemberRecoveryAttemptKey(teamId, requestId) : undefined;
+  const automaticAttempt = automaticAttemptKey === undefined ? undefined : { inputHash, rootSessionId: lead.id, memberId, action, expectedRevision, pauseEpoch: undefined };
+  try {
+    return await queueTeamOperation(store.filePath, teamId, async () => {
     const prepared = await store.runOperation(() => store.mutate((document) => {
       assertEnabled(document);
       const team = findTeam(document, teamId); requireLiveRootLead(ctx, team, lead); requireActiveTeam(team);
+      if (input.automaticContinuation === true) {
+        assertAutomaticMemberRecoveryAllowed(ctx, document, team, lead, input.automaticGoalRoundAuthority);
+        automaticAttempt.pauseEpoch = team.pauseEpoch ?? 0;
+        AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS.set(automaticAttemptKey, automaticAttempt);
+      }
       team.memberRecoveries ??= [];
       const replay = team.memberRecoveries.find((receipt) => receipt.requestId === requestId);
       if (replay !== undefined) {
@@ -8552,9 +8591,12 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
         return { replay: true, receipt: clone(replay) };
       }
       if (team.memberRecoveries.some((receipt) => receipt.memberId === memberId && ["prepared", "outcome_unknown"].includes(receipt.status))) reject("a prior member recovery is unresolved; reconcile the exact receipt before another attempt", "AGENT_TEAMS_RECOVERY_OUTCOME_UNKNOWN");
-      if (team.revision !== expectedRevision) reject("team changed before member recovery; refresh and confirm again", "AGENT_TEAMS_STALE_TEAM");
+      if (team.revision !== expectedRevision) reject("team changed before member recovery; refresh current state and retry", "AGENT_TEAMS_STALE_TEAM");
       const member = team.members.find((candidate) => candidate.id === memberId);
       if (member?.kind !== "worker" || member.state !== "failed") reject("only an exact failed worker may be recovered", "AGENT_TEAMS_MEMBER_NOT_FAILED");
+      if (input.automaticContinuation === true && action === "retry" && team.memberRecoveries.some((receipt) => receipt.memberId === memberId && receipt.action === "retry" && receipt.status === "delivered" && receipt.dispatchOutcome === "accepted")) {
+        reject("the safe automatic retry was already used for this failed member; replace it without asking the user", "AGENT_TEAMS_AUTOMATIC_RETRY_EXHAUSTED");
+      }
       const tasks = team.tasks.filter((task) => task.assigneeSessionId === member.sessionId && !taskIsTerminal(task));
       if (tasks.length === 0) reject("failed member has no unfinished durable task to recover", "AGENT_TEAMS_TASK_BINDING_REQUIRED");
       const activeTasks = tasks.filter((task) => task.state === "in_progress");
@@ -8686,7 +8728,7 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
                   for (const taskId of liveReceipt.taskIds) {
                     const task = liveTeam.tasks.find((candidate) => candidate.id === taskId);
                     boundedPush(task.interruptionHistory, { kind: "member_replaced", at: timestamp, attempt: task.attempt ?? 0, claimId: task.claimId, leaseEpoch: task.leaseEpoch ?? 0, reason: `recovery request ${requestId}` }, MAX_TASK_INTERRUPTION_HISTORY);
-                    task.state = "pending"; task.assigneeSessionId = placeholderSessionId; task.claimedAt = undefined; task.claimId = undefined; clearTaskTerminalMetadata(task); task.releasedAt = timestamp; task.releaseReason = "failed member replaced by explicit direct-human recovery; prior claim and lease revoked"; task.updatedAt = timestamp; bumpTaskRevision(task);
+                    task.state = "pending"; task.assigneeSessionId = placeholderSessionId; task.claimedAt = undefined; task.claimId = undefined; clearTaskTerminalMetadata(task); task.releasedAt = timestamp; task.releaseReason = "failed member replaced by authorized recovery; prior claim and lease revoked"; task.updatedAt = timestamp; bumpTaskRevision(task);
                   }
                   liveTeam.members.push(replacement);
                 }
@@ -8794,7 +8836,12 @@ async function recoverFailedMember(ctx, store, admission, lead, input, signal) {
     } finally {
       if (provisioningSessionId !== undefined) PROVISIONING_MEMBER_SESSION_IDS.delete(provisioningSessionId);
     }
-  });
+    });
+  } finally {
+    if (automaticAttemptKey !== undefined && AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS.get(automaticAttemptKey) === automaticAttempt) {
+      AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS.delete(automaticAttemptKey);
+    }
+  }
 }
 
 async function reconcileMemberRecovery(ctx, store, lead, input, admission = createTeamTurnAdmission()) {
@@ -10355,13 +10402,13 @@ function teamSystemPrompt(store) {
     "Keep durable team task state synchronized at every handoff: members must explicitly complete finished tasks before their final report, and the root lead must reconcile every task before retiring members or closing the team. A report or successful subagent turn is not completion evidence. Graceful retirement and shutdown require no unfinished owned work; while automatic continuation is live, graceful retirement also refuses to remove the last assignable worker if unfinished unclaimed tasks remain. Assign another worker or reconcile that work first. Force shutdown remains an explicit recovery path and records unfinished work as cancelled rather than leaving permanent pending tasks.",
     "Once an Agent Team is established for the current goal, the root lead defaults to coordination only: decompose the user's objective into substantive outcomes, persist and assign durable tasks, coordinate dependencies and handoffs, monitor and reconcile task state, review and accept member deliverables, then perform final integration and user-facing synthesis. The root lead must not personally implement, research, design, test, or otherwise substitute for a core professional deliverable that is assigned or should be assigned to a member role. If substantive coverage is missing, create or restructure the relevant durable task and assign or expand the visible team instead of absorbing that work; the root may make only minimal glue changes required to integrate accepted member outputs.",
     autopilotPolicy.enabled
-      ? `Agent Team waiting is event-driven, and the trusted Host automatic-continuation preference is ON with a fixed budget of at most ${autopilotPolicy.maxAdditionalRounds} extra goal rounds. First inspect team_status: only when every open team reports autopilot.status=active and every unfinished safe internal task is either owned by a live worker or blocked on such work may you end the current turn without polling team_status and without asking the user to send ‘continue’. The Host parks normal waiting; it is not a blocked Goal outcome. Only a new claim-bound durable task submission, a worker transition to failed, or a durable dependency/reference/satisfaction change wakes the exact fixed root through the established work-transition path. A first canonical durable expansion proposal is the sole additional structural-review wake. Worker release, ready/idle transitions, checkpoints, and duplicate projections do not spend a round. Reordered or synonymous duplicate expansion proposals also do not spend a round. If the goal's configured round slice is exhausted, the Host grants exactly one additional round for that durable transition. This grant is not a timer, retry loop, or permission upgrade: missing/revoked grants, paused teams, cross-project scope, unknown capabilities, file conflicts, non-none/outcome_unknown effects, explicit Stop/resume, real safety blockers, permission anomalies, recovery, handoff, confirmation boundaries, or the finite budget remain stopped and require manual recovery.`
+      ? `Agent Team waiting is event-driven, and the trusted Host automatic-continuation preference is ON with a fixed budget of at most ${autopilotPolicy.maxAdditionalRounds} extra goal rounds. First inspect team_status: only when every open team reports autopilot.status=active and every unfinished safe internal task is either owned by a live worker or blocked on such work may you end the current turn without polling team_status and without asking the user to send ‘continue’. The Host parks normal waiting; it is not a blocked Goal outcome. Only a new claim-bound durable task submission, a worker transition to failed, or a durable dependency/reference/satisfaction change wakes the exact fixed root through the established work-transition path. A first canonical durable expansion proposal is the sole additional structural-review wake. Worker release, ready/idle transitions, checkpoints, and duplicate projections do not spend a round. Reordered or synonymous duplicate expansion proposals also do not spend a round. If the goal's configured round slice is exhausted, the Host grants exactly one additional round for that durable transition. This grant is not a timer, retry loop, or permission upgrade: missing/revoked grants, paused teams, cross-project scope, unknown capabilities, file conflicts, non-none/outcome_unknown effects, explicit Stop/resume, real safety blockers, permission anomalies, orphan/outcome_unknown recovery, handoff, external confirmation boundaries, or the finite budget remain stopped and require manual recovery.`
       : "The trusted Host automatic-continuation preference is OFF. Do not end a coordinator turn on the assumption that worker progress will wake it, and do not claim that the Host will extend goal rounds. Finish currently actionable coordination in this turn; if a safe team must continue across future rounds, explain that automatic continuation can be explicitly enabled in Agent Teams settings. Never repeatedly ask the user to send ‘continue’ as a substitute for that setting.",
     "A missing/revoked grant means the scheduler has no wake/state-hash authority and cannot park an armed Goal: never manually resume that Goal or treat ordinary Goal rounds, team_status reads, or coordinator progress messages as autopilot wakes. One globally saved Desktop Host proof may derive an exact complete root-team grant group only at a direct-human team creation, direct-human plan commit, or committed two-phase Resume boundary, and only while every team remains safe; a direct-human plan recommit may rebind an already-live complete group without another settings Save. Lifecycle cleanup revokes persisted team grants locally but keeps the global proof, and only a later exact direct-human boundary may safely rederive them; Stop recovery is limited to committed two-phase Resume with a current proof. Handoff, scope/Goal drift, true terminal safety revocation, unknown capability, file conflict, or non-ordinary effect still fail closed and are never overridden by the global default.",
     "A team's durable tasks and member roles must collectively cover the substantive outputs required to satisfy the user's goal, each with a real deliverable and observable acceptance criteria. Never create decorative, token, or review-only members while leaving the core professional output to the root lead; if the work does not justify delegating its substantive production, do not create a team.",
     "Only the outermost top-level root lead/brain evaluates each ordinary direct-user goal using a strict three-level gate. Level 1 — main model: Complete simple, tightly coupled, or non-parallel work alone. Level 2 — ordinary subagent: when only one auxiliary executor is needed, use an official normal subagent or subagent_fork even if that single helper must be continuable or work across multiple turns. Level 3 — Agent Team: in automatic mode, proactively choose one Agent Team creation path only when the goal normally has at least two sustained, genuinely independent workstreams that need delegation to different visible managed members; the root/lead's own work or coordination does not count as the second workstream. The work must also require ongoing coordination across turns, such as shared tasks, dependencies, handoffs, or status tracking. An explicit user request for a team may still be followed, but automatic mode must not create a one-worker team. Parallelism by itself is not enough for a team; the user does not need to say ‘create a team’, design members, or know the team tools. Never create a team merely to fill seats, demonstrate the feature, or make routine work look parallel. When an active team's objective needs another delegation, it must be added as a visible managed member rather than a hidden ordinary subagent. Managed team members must never create teams or fan out through subagent, subagent_fork, workflow, or ralph; if they need more parallel work, they must report that need to the root, which decides whether to spawn another visible member under maxActiveTurns. A member may report only from its own in-progress task through team_expansion_request; the request is a proposal, never authority to spawn.",
     "When a new team already has a complete bounded task/member plan that fits the configured bootstrap capacity described above, call team_bootstrap directly with a stable request_id and do not call team_start first. Otherwise team_start creates a draft: persist tasks, then use team_plan_commit with the exact plan revision and confirmed_plan_hash before any team_spawn. Without durable successful worker-publication history that CAS persists phase committed; the first fully successful spawn records publication and activates it, while later recommit persists active even after every published worker gracefully retires. Provisioning or initial publication/work-followup failure never establishes this history. Upgraded retired workers without the new marker qualify only through a task submission/result or checkpoint bound to their exact historical claim; retired state alone and former-root adoption history do not qualify. Both committed and active pass new claim/spawn execution gates. New team creation and bootstrap require either the current direct-human root turn or the exact admitted automatic continuation of the same root's active, armed goal; every other non-human turn remains forbidden. After that authorized establishment and one successful worker publication, the same exact live root may recommit a later draft during an automatic goal round without another user message only while the team remains active and unpaused in the same canonical project, every capability is individually verified, file scopes are conflict-free, cost stays within the direct user's ordinary default AI-routing grant, every effect policy is none, and no outcome is unknown. Public spawn always requires non-empty persisted task_ids, and the Host atomically pre-binds those tasks with the member placeholder before child creation. Bootstrap validates its pure plan and exact real workspace before terminalizing its routing receipt, persists all tasks before starting members, and exact replay reuses its plan. If pre-publication start fails, correct the cause and replay the same request_id; if a member may exist or was published, use the returned recovery/reconciliation path instead of replaying Bootstrap. Never call team_status/team_spawn after a bootstrap error that returned no team_id. A queued team_message is transport-accepted only and is not proof that its body reached the recipient model. Neither path may bypass capacity checks, file-scope separation, capability preflight, or explicit review of partial/uncertain starts.",
-    "An ordinary internal team that the direct user explicitly requested needs no redundant confirmation for a dynamically safe automatic-round recommit. Plan authority remains explicitly host_verified, human_attested, or unknown: a continuing/default grant stays human_attested and never becomes Host proof. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. New team creation and bootstrap remain behind the direct-human-or-exact-admitted-goal-round gate. Stop recovery/resume, handoff/adopt/recover, resolve_unknown, cross-project scope, unknown/unavailable or separately billed capabilities, conflicting files, and confirm_each/idempotent/forbidden effects remain behind their stricter direct-human or Host gates. An already active main-tier worker does not itself create a new cost grant or block safe continuation.",
+    "An ordinary effect-free internal team needs no redundant confirmation for a dynamically safe automatic-round recommit. When a worker is definitively failed and the exact active autopilot grant, Goal round, file scopes, capabilities, and effect-free plan remain valid, use team_member_recover automatically in that Goal round. Retry once when the exact failed session and unchanged claim/lease remain viable; otherwise replace it with one visible same-level member. Choose from the live Host state and never ask the user to send a recovery phrase or choose the safe internal action. Plan authority remains explicitly host_verified, human_attested, or unknown: a continuing/default grant stays human_attested and never becomes Host proof. Tool/model booleans can create only human_attested facts, never host_verified facts, and can never bulk-upgrade unknown capability records. Any material change to task scope, file ownership, capability/permission facts, model-cost class, or external effects returns the plan to draft and requires a fresh exact-hash CAS commit. New team creation and bootstrap remain behind the direct-human-or-exact-admitted-goal-round gate. Stop recovery/resume, handoff/adopt/orphan recovery, outcome_unknown reconciliation, cross-project scope, unknown/unavailable or separately billed capabilities, conflicting files, and confirm_each/idempotent/forbidden effects remain behind their stricter direct-human or Host gates. An already active main-tier worker does not itself create a new cost grant or block safe continuation.",
     "A task claim returns claimId and leaseEpoch. Members must echo both for checkpoint, submission, or release; stale attempts are rejected and only an exact submission replay is a no-op. Worker complete moves the task only to submitted/in-review and appends an immutable claim-bound submission event. It does not complete the task, unlock dependencies, or permit graceful retirement. Only a later fixed-root accept of the current submission moves it to authoritative completed and appends acceptance; reject/reopen/cancel never erase older lifecycle events. Member checkpoints and next steps are unverified annotations separate from the five task states (pending, in_progress, submitted, completed, cancelled). External effect keys are Host-derived from stable team/task/effect identity. Only participating idempotency protocols can claim exactly-once; outcome_unknown blocks retry until an exact direct-human root resolves it.",
     "Team ownership may move only through team_handoff then team_adopt: both require direct-human root turns, the team must be durably paused, source and target must be exact live roots with the same canonical projectKey, and adoption must present the short-lived single-use token. Adoption increments pauseEpoch, revokes every old claim/lease, retires old-parent workers for bounded audit history, safely releases unfinished work to pending, and never wakes anyone automatically. Unknown scope and cross-project adoption fail closed.",
     "For every team_expansion_request, the fixed root lead approves only when the remaining outcomes are genuinely parallel and independent, inputs and acceptance criteria are explicit, file/external-resource ownership does not conflict, the handoff context is small, critical-path reduction or independent-review value materially exceeds coordination cost, and current member/turn/task budget is sufficient. The Host compares proposed file scopes with other in-progress task files and checks proposal-internal resource hierarchy, but existing external-resource ownership is not persisted and must be verified by the root. If a broad source task is split, first release/restructure it so its in-progress file scope no longer overlaps; then call team_task_create for each accepted durable outcome and only then call team_spawn for visible same-level peers. If a provider admission fails definitively before dispatch, the exact spawn identity remains in a bounded FIFO provisioning queue and retries only after a real later capacity/lifecycle release; do not ask for continue, retry manually, or create a duplicate member. Stop, revoked authority, stale plan/scope, unsafe capability/effect/conflict state, and dispatch outcome_unknown stay fail-closed. If the proposal is rejected, explain the reason to the requester. Never invent a leader→group-leader→hidden-worker hierarchy.",
@@ -11484,9 +11531,15 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
   }));
   ctx.tools.register(defineTool({
     name: "team_member_recover",
-    description: "Explicitly retry an exact failed continuable member or replace it with one visible same-level member. Requires the current direct-human root turn, a stable request_id, and exact team revision. Retry preserves task claims and leases. Replace durably revokes prior claims, preserves audit/checkpoint evidence, and pre-binds the same tasks before starting the replacement. Replays never duplicate a model turn or member.",
+    description: "Retry an exact failed continuable member or replace it with one visible same-level member. A direct-human root turn is accepted, and a safe active autopilot grant automatically authorizes the exact admitted Goal round without another user message; choose retry once for a viable unchanged failed session, otherwise replace automatically. Retry preserves task claims and leases. Replace durably revokes prior claims, preserves audit/checkpoint evidence, and pre-binds the same tasks before starting the replacement. Replays never duplicate a model turn or member; unsafe scope, effects, conflicts, or uncertain outcomes still fail closed.",
     parameters: { team_id: { type: "string", required: true }, member_id: { type: "string", required: true }, action: { type: "string", required: true, enum: MEMBER_RECOVERY_ACTIONS }, request_id: { type: "string", required: true }, expected_revision: { type: "number", required: true } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => { requireDirectHumanRoot(ctx, execution); return publicResult(await recoverFailedMember(ctx, store, admission, execution.agent, { teamId: args.team_id, memberId: args.member_id, action: args.action, requestId: args.request_id, expectedRevision: args.expected_revision }, signal)); }),
+    execute: run(async (args, execution, signal) => {
+      if (!ctx.agents.roots().includes(execution.agent)) reject("member recovery requires the exact top-level root agent", "AGENT_TEAMS_UNAUTHORIZED");
+      const directHuman = hasDirectHumanRootAuthority(ctx, execution);
+      const automaticGoalRoundAuthority = directHuman ? undefined : exactGoalRoundRootAuthority(ctx, execution);
+      if (!directHuman && automaticGoalRoundAuthority === undefined) reject("member recovery requires a direct-human turn or the exact safe admitted Goal round", "AGENT_TEAMS_DIRECT_HUMAN_REQUIRED");
+      return publicResult(await recoverFailedMember(ctx, store, admission, execution.agent, { teamId: args.team_id, memberId: args.member_id, action: args.action, requestId: args.request_id, expectedRevision: args.expected_revision, automaticContinuation: !directHuman, automaticGoalRoundAuthority }, signal));
+    }),
     presentCall: (args) => present(args.action === "replace" ? "Replace failed team member" : "Retry failed team member", args.member_id),
   }));
   ctx.tools.register(defineTool({
@@ -11973,7 +12026,7 @@ function attachAuthorizedAgentTeamAutopilot(ctx, document, scope, settings, auth
   }
   const grants = openTeams.map((candidate) => {
     if (effectiveTeamState(candidate) !== "active" || candidate.projectKey !== scope.projectKey || candidate.closure !== undefined || candidate.handoff !== undefined
-      || (candidate.memberRecoveries ?? []).some((receipt) => receipt.status === "outcome_unknown" || receipt.status === "prepared")) {
+      || memberRecoveryBlocksAutopilot(candidate)) {
       reject("automatic continuation can authorize only the exact safe open team group", "AGENT_TEAMS_HOST_AUTHORIZATION_MISMATCH");
     }
     const routingReceipt = [...document.routingReceipts].reverse().find((receipt) => receipt.teamId === candidate.id
@@ -13341,6 +13394,7 @@ export {
   exactDirectHumanAutopilotGrantIntent,
   agentTeamAutopilotGrantForCreation,
   exactGoalRoundRootAuthority,
+  assertAutomaticMemberRecoveryAllowed,
   hasExactGoalRoundRootAuthority,
   hasTeamCreationRootAuthority,
   normalizeExpansionRequest,

@@ -116,11 +116,13 @@ async function crossRealDshJsonOutputBoundary(value) {
     import('@deepseek-ai/dsh-tools')
   ])
   const runtime = new Context()
+  const fibers = []
+  let disposeTool
   try {
-    runtime.plugin(SystemPrompt)
-    runtime.plugin(ToolRuntime)
+    fibers.push(runtime.plugin(SystemPrompt))
+    fibers.push(runtime.plugin(ToolRuntime))
     await new Promise(resolve => setImmediate(resolve))
-    runtime.tools.register(defineTool({
+    disposeTool = runtime.tools.register(defineTool({
       name: 'agent_teams_output_boundary',
       description: 'Exercise the installed DSH tool output boundary.',
       parameters: {},
@@ -134,7 +136,8 @@ async function crossRealDshJsonOutputBoundary(value) {
       signal: new AbortController().signal
     })
   } finally {
-    await runtime.fiber.dispose()
+    disposeTool?.()
+    for (const fiber of fibers.reverse()) await fiber.dispose()
   }
 }
 
@@ -638,7 +641,7 @@ test('project task wake session evidence scan is bounded to a recent tail window
   assert.equal(acknowledgements[0].outcome, 'delivered')
 })
 
-test('team worker admission is globally bounded, exact-root fair, and run-id precise', async () => {
+test('team worker admission is globally bounded, exact-root fair, and run-id precise', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-fairness=${Date.now()}-${Math.random()}`)
   assert.equal(mod.GLOBAL_TEAM_ACTIVE_ACTIVATIONS, 8)
   assert.equal(mod.MAX_TEAM_ADMISSION_QUEUE, 32)
@@ -646,6 +649,7 @@ test('team worker admission is globally bounded, exact-root fair, and run-id pre
   assert.equal(mod.TEAM_ADMISSION_TIMEOUT_MS, 30_000)
 
   const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 8, maxQueuedPerRoot: 4, waitMs: 1_000 })
+  t.after(() => admission.close())
   const rootA = { id: 'fair-root-a' }
   const rootB = { id: 'fair-root-b' }
   const order = []
@@ -680,9 +684,10 @@ test('team worker admission is globally bounded, exact-root fair, and run-id pre
   admission.close()
 })
 
-test('team worker admission bounds queues and removes cancelled, timed-out, and closed waiters', async () => {
+test('team worker admission bounds queues and removes cancelled, timed-out, and closed waiters', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-bounds=${Date.now()}-${Math.random()}`)
   const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 2, maxQueuedPerRoot: 1, waitMs: 20 })
+  t.after(() => admission.close())
   const blocker = { id: 'queue-blocker' }
   const sameIdOld = { id: 'same-root-id' }
   const sameIdReplacement = { id: 'same-root-id' }
@@ -723,9 +728,10 @@ test('team worker admission bounds queues and removes cancelled, timed-out, and 
   assert.equal(admission.noteEnd({ id: 'close-blocker', runId: 'close-run' }), true)
 })
 
-test('team worker admission holds eight active leases and admits the ninth in fair FIFO order', async () => {
+test('team worker admission holds eight active leases and admits the ninth in fair FIFO order', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-eight-nine=${Date.now()}-${Math.random()}`)
   const admission = mod.createTeamTurnAdmission({ limit: 8, maxQueued: 16, maxQueuedPerRoot: 8, waitMs: 1_000 })
+  t.after(() => admission.close())
   const roots = [{ id: 'fifo-root-a' }, { id: 'fifo-root-b' }]
   const order = []
   for (let index = 0; index < 8; index += 1) {
@@ -753,7 +759,7 @@ test('team worker admission holds eight active leases and admits the ninth in fa
   assert.equal(admission.snapshot().active, 0)
 })
 
-test('team worker admission fake clock keeps 29.9 seconds eligible and times out exactly at 30 seconds', async () => {
+test('team worker admission fake clock keeps 29.9 seconds eligible and times out exactly at 30 seconds', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-boundary=${Date.now()}-${Math.random()}`)
   let clock = 0
   const timers = []
@@ -765,6 +771,7 @@ test('team worker admission fake clock keeps 29.9 seconds eligible and times out
     await Promise.resolve()
   }
   const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 4, maxQueuedPerRoot: 2, waitMs: 30_000, setTimer, clearTimer })
+  t.after(() => admission.close())
   const blockerRoot = { id: 'boundary-blocker' }, waitingRoot = { id: 'boundary-waiter' }
   await admission.run(blockerRoot, 'boundary-active', new AbortController().signal, async () => admission.noteStart({ id: 'boundary-active', runId: 'boundary-run' }))
   let callbackCalls = 0
@@ -780,9 +787,10 @@ test('team worker admission fake clock keeps 29.9 seconds eligible and times out
   assert.equal(admission.noteEnd({ id: 'boundary-active', runId: 'boundary-run' }), true)
 })
 
-test('accepted-without-start is quarantined until exact late lifecycle or generation-bound drain', async () => {
+test('accepted-without-start is quarantined until exact late lifecycle or generation-bound drain', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-quarantine=${Date.now()}-${Math.random()}`)
   const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 4, maxQueuedPerRoot: 2, waitMs: 20 })
+  t.after(() => admission.close())
   const root = { id: 'quarantine-root' }
   let calls = 0
   assert.equal(await admission.run(root, 'quarantine-child', new AbortController().signal, async () => { calls += 1; return 'accepted' }), 'accepted')
@@ -808,9 +816,10 @@ test('accepted-without-start is quarantined until exact late lifecycle or genera
   assert.equal(admission.snapshot().active, 0)
 })
 
-test('same-child admission waits for exact old end and an unresolved reservation rejects duplicate dispatch', async () => {
+test('same-child admission waits for exact old end and an unresolved reservation rejects duplicate dispatch', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-same-child=${Date.now()}-${Math.random()}`)
   const admission = mod.createTeamTurnAdmission({ limit: 2, maxQueued: 4, maxQueuedPerRoot: 3, waitMs: 1_000 })
+  t.after(() => admission.close())
   const root = { id: 'same-child-root' }
   await admission.run(root, 'same-child', new AbortController().signal, async () => admission.noteStart({ id: 'same-child', runId: 'old-exact-run' }))
   let followerCalls = 0
@@ -837,9 +846,10 @@ test('same-child admission waits for exact old end and an unresolved reservation
   assert.equal(admission.snapshot().active, 0)
 })
 
-test('stale lifecycle ends cannot release a newer lease and exact persisted runs can be adopted', async () => {
+test('stale lifecycle ends cannot release a newer lease and exact persisted runs can be adopted', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-stale-adopt=${Date.now()}-${Math.random()}`)
   const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 4, maxQueuedPerRoot: 2, waitMs: 1_000 })
+  t.after(() => admission.close())
   const root = { id: 'adopt-root' }, foreignRoot = { id: 'foreign-adopt-root' }
   await admission.run(root, 'reused-child', new AbortController().signal, async () => admission.noteStart({ id: 'reused-child', runId: 'old-run' }))
   assert.equal(admission.noteEnd({ id: 'reused-child', runId: 'old-run' }), true)
@@ -860,9 +870,10 @@ test('stale lifecycle ends cannot release a newer lease and exact persisted runs
   assert.ok(admission.snapshot().rejectedEnds >= 2)
 })
 
-test('admission publishes one monotonic immutable release event only for an exact lifecycle release', async () => {
+test('admission publishes one monotonic immutable release event only for an exact lifecycle release', async t => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?worker-admission-release-events=${Date.now()}-${Math.random()}`)
   const admission = mod.createTeamTurnAdmission({ limit: 1, maxQueued: 2, maxQueuedPerRoot: 2, waitMs: 1_000 })
+  t.after(() => admission.close())
   const root = { id: 'release-root' }
   const events = []
   const unsubscribe = admission.subscribeRelease(event => events.push(event))
@@ -1041,6 +1052,7 @@ test('provider backpressure persists FIFO peer intents and retries each exact id
     await scheduler?.flush()
     scheduler?.close()
     admission.close()
+    store?.close()
     await rm(rootDir, { recursive: true, force: true })
   }
 })
@@ -1448,7 +1460,10 @@ test('model tools create a team, spawn independent members, and relay with non-u
     assert.match(enabledPrompt, /already active main-tier worker does not itself create a new cost grant or block safe continuation/u)
     assert.match(enabledPrompt, /continuing\/default grant stays human_attested and never becomes Host proof/u)
     assert.match(enabledPrompt, /New team creation and bootstrap remain behind the direct-human-or-exact-admitted-goal-round gate/u)
-    assert.match(enabledPrompt, /Stop recovery\/resume, handoff\/adopt\/recover, resolve_unknown, cross-project scope/u)
+    assert.match(enabledPrompt, /worker is definitively failed.*use team_member_recover automatically in that Goal round/u)
+    assert.match(enabledPrompt, /never ask the user to send a recovery phrase/u)
+    assert.match(enabledPrompt, /Stop recovery\/resume, handoff\/adopt\/orphan recovery, outcome_unknown reconciliation, cross-project scope/u)
+    assert.match(tools.get('team_member_recover').description, /safe active autopilot grant automatically authorizes the exact admitted Goal round without another user message/u)
     assert.match(tools.get('team_plan_commit').description, /later automatic goal round may recommit without a new user message only for the same exact live root and canonical project/u)
     assert.match(tools.get('team_plan_commit').description, /Continuing\/default authority remains human_attested, never host_verified/u)
     assert.match(enabledPrompt, /Never invent a leader→group-leader→hidden-worker hierarchy/u)
@@ -2899,9 +2914,10 @@ test('external store edits are refreshed and preserved by the next serialized mu
 test('explicit user stop cancels queued wakeups and leaves paused work dormant', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-teams-user-stop-'))
   const file = path.join(root, 'storages', 'agent_teams.json')
+  let store, admission, unsubscribe
   try {
     const mod = await import(`${pathToFileURL(pluginFile).href}?user-stop=${Date.now()}-${Math.random()}`)
-    const store = new mod.AgentTeamsStore(file)
+    store = new mod.AgentTeamsStore(file)
     await store.init()
     await store.mutate(document => { document.settings.enabled = true })
     const leadSession = { id: 'stopped-root', header: { cwd: root } }
@@ -2929,11 +2945,11 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
     }
     let resolvePaused
     const paused = new Promise(resolve => { resolvePaused = resolve })
-    const unsubscribe = store.subscribe(document => {
+    unsubscribe = store.subscribe(document => {
       const current = document.teams.find(candidate => candidate.id === team.id)
       if (current?.state === 'paused' && current.members.find(member => member.sessionId === 'stop-child')?.state === 'ready') resolvePaused()
     })
-    const admission = mod.createTeamTurnAdmission({ limit: 1, waitMs: 1_000 })
+    admission = mod.createTeamTurnAdmission({ limit: 1, waitMs: 1_000 })
     const blocker = { id: 'stop-admission-blocker' }
     await admission.run(blocker, 'stop-blocker-child', new AbortController().signal, async () => admission.noteStart({ id: 'stop-blocker-child', runId: 'stop-blocker-run' }))
     const queuedWorker = admission.run(lead, 'stop-queued-child', new AbortController().signal, async () => assert.fail('explicit Stop must cancel queued worker admission'))
@@ -2960,6 +2976,9 @@ test('explicit user stop cancels queued wakeups and leaves paused work dormant',
     )
     assert.equal((await store.read(document => document.teams.find(candidate => candidate.id === team.id).state)), 'paused')
   } finally {
+    unsubscribe?.()
+    admission?.close()
+    store?.close()
     await rm(root, { recursive: true, force: true })
   }
 })
@@ -3334,15 +3353,21 @@ test('bootstrap capacity counts 7/8 and 8/8 managed peers while allowing more du
     assert.equal(new Set(eight.team.tasks.map(task => task.id)).size, 9)
     assert.equal(starts.length, 15)
   } finally {
+    store.close()
     await rm(root, { recursive: true, force: true })
   }
 })
 
 test('resolveProjectFoundationHostOptions reads the optional service through the Cordis lookup only', async t => {
   const { Context } = await import('@deepseek-ai/cordis')
-  const contexts = []
-  const context = () => { const value = new Context(); contexts.push(value); return value }
-  t.after(async () => { await Promise.all(contexts.map(value => value.fiber.dispose())) })
+  const cleanups = []
+  const context = () => new Context()
+  const provide = (ctx, value) => { cleanups.push(ctx.provide('projectFoundations', value)) }
+  let probeFiber
+  t.after(async () => {
+    if (probeFiber !== undefined) await probeFiber.dispose()
+    for (const cleanup of cleanups.reverse()) await cleanup()
+  })
   const mod = await import(`${pathToFileURL(pluginFile).href}?foundation-host-options=${Date.now()}-${Math.random()}`)
   const source = await readFile(pluginFile, 'utf8')
   assert.doesNotMatch(source, /ctx\.projectFoundations\?\./u, 'apply must never touch the optional service by direct property access')
@@ -3356,7 +3381,7 @@ test('resolveProjectFoundationHostOptions reads the optional service through the
   const withGet = context()
   assert.deepEqual(mod.resolveProjectFoundationHostOptions({ get: () => undefined }), {})
   const weird = context()
-  weird.provide('projectFoundations', 'not-a-record')
+  provide(weird, 'not-a-record')
   assert.deepEqual(mod.resolveProjectFoundationHostOptions(weird), {})
 
   // An active record provider is projected onto exactly the fixed Host fields.
@@ -3367,7 +3392,7 @@ test('resolveProjectFoundationHostOptions reads the optional service through the
     runnerEvidence: { evidence: true },
     extra: 'never projected'
   }
-  provided.provide('projectFoundations', record)
+  provide(provided, record)
   assert.deepEqual(mod.resolveProjectFoundationHostOptions(provided), {
     runner: record.runner,
     connector: record.connector,
@@ -3376,7 +3401,7 @@ test('resolveProjectFoundationHostOptions reads the optional service through the
 
   // A disabled connector is dropped while runner and evidence stay projected.
   const disabled = context()
-  disabled.provide('projectFoundations', { runner: record.runner, connector: { enabled: false }, runnerEvidence: record.runnerEvidence })
+  provide(disabled, { runner: record.runner, connector: { enabled: false }, runnerEvidence: record.runnerEvidence })
   assert.deepEqual(mod.resolveProjectFoundationHostOptions(disabled), {
     runner: record.runner,
     connector: undefined,
@@ -3387,7 +3412,7 @@ test('resolveProjectFoundationHostOptions reads the optional service through the
   // a real Cordis fiber while ctx.get stays the non-throwing optional boundary.
   const runtime = context()
   const attempts = []
-  runtime.plugin({
+  probeFiber = runtime.plugin({
     name: 'foundation-host-options-probe',
     inject: {},
     apply(fiberCtx) {
