@@ -45,7 +45,7 @@ test('v1.0.59 cloud performance recovery binds exact optimized sources and uncha
     'plugins/dsh-agent-teams/lib/client.js': '5a6a9ed1b2019d99495e3cfa680f945f08c6cc11e551347d16f645ff3904a271',
     'electron/store/mobile-sync-store.cjs': 'da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba',
     'tests/agent-teams-autopilot.test.cjs': '1010d340b1ed3f2b109b620e1e15e4e36a609e36a2f2725674e05419af71ba51',
-    'tests/agent-teams-runtime.test.cjs': '0f798f6d02fdc88d1cdefc2f9369a44015f6396845a1df094345022142ec6528',
+    'tests/agent-teams-runtime.test.cjs': 'f4ba310e52610a29bd79cfba37f4995e5f05d47a738319202ae5a61315147e68',
     'tests/agent-teams-tools.test.cjs': '2ec27df1801025fd3159c77cfdd7dc473ec3a4f8dad1fda3a2ab8a9185402752',
     'tests/agent-teams-ui.test.cjs': 'f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4'
   })

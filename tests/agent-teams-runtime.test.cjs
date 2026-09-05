@@ -9,6 +9,9 @@ const { pathToFileURL } = require('node:url')
 
 const pluginFile = path.resolve(__dirname, '..', 'plugins', 'dsh-agent-teams', 'lib', 'index.js')
 const queueSubagentPrompt = Symbol.for('dsh.subagent.queuePrompt')
+// Wake-only fixtures need an absolute Host path in the current OS dialect.
+// These tests perform no workspace I/O; do not substitute a Windows drive on Unix.
+const fixtureWorkspace = name => path.resolve(os.tmpdir(), 'agent-teams-runtime-fixture', name)
 
 function request(method, url, body) {
   const payload = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
@@ -188,9 +191,9 @@ test('durable project task wakes deliver only to the exact live same-project roo
     return createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
   }
   const accepted = []
-  const target = { id: 'wake-target', status: 'idle', session: { header: { cwd: 'C:/project-a' } }, async followup(message) { accepted.push(message) } }
-  const failed = { id: 'wake-failed', status: 'running', session: { header: { cwd: 'C:/project-a' } }, async steer() { throw new Error('inbox refused') } }
-  const foreign = { id: 'wake-foreign', status: 'idle', session: { header: { cwd: 'C:/project-b' } }, async followup() { throw new Error('cross-project wake') } }
+  const target = { id: 'wake-target', status: 'idle', session: { header: { cwd: fixtureWorkspace('project-a') } }, async followup(message) { accepted.push(message) } }
+  const failed = { id: 'wake-failed', status: 'running', session: { header: { cwd: fixtureWorkspace('project-a') } }, async steer() { throw new Error('inbox refused') } }
+  const foreign = { id: 'wake-foreign', status: 'idle', session: { header: { cwd: fixtureWorkspace('project-b') } }, async followup() { throw new Error('cross-project wake') } }
   const acknowledgements = []
   const wake = {
     claim() {
@@ -203,7 +206,7 @@ test('durable project task wakes deliver only to the exact live same-project roo
     ack(input) { acknowledgements.push(input) }
   }
   const result = await mod.dispatchProjectTaskWakeSignals({ agents: { roots: () => [target, failed, foreign] } }, {
-    wake, projectRef: 'project-ref', dispatcherRef: 'dispatcher-ref', canonicalProjectKey: projectKey('C:/project-a'), actorRefForSessionId: id => `actor:${id}`
+    wake, projectRef: 'project-ref', dispatcherRef: 'dispatcher-ref', canonicalProjectKey: projectKey(fixtureWorkspace('project-a')), actorRefForSessionId: id => `actor:${id}`
   })
   assert.deepEqual(result, { claimed: 3, delivered: 1, retryable: 1 })
   assert.match(accepted[0].content[0].text, /wake-target-ref/u)
@@ -218,7 +221,7 @@ test('durable project task wakes deliver only to the exact live same-project roo
 test('durable project task wake delivery deduplicates inbox and session evidence and fences uncertain enqueue', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-dedup=${Date.now()}-${Math.random()}`)
   const wakeMessage = wakeRef => ({ source: { kind: 'coordinator', summary: 'Project tasks' }, content: [{ type: 'text', text: `[Project task wake ${wakeRef}] already queued` }] })
-  const cwd = 'C:/wake-dedup'
+  const cwd = fixtureWorkspace('wake-dedup')
   let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
   if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
   const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
@@ -259,7 +262,7 @@ test('unknown project wake reconciliation distinguishes exact delivery, complete
 
 test('restart reconciles every same-project root waiter before dispatching that project once', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-multi-root-restart=${Date.now()}-${Math.random()}`)
-  const cwd = 'C:/wake-shared-project'
+  const cwd = fixtureWorkspace('wake-shared-project')
   const roots = [
     { id: 'wake-root-a', status: 'idle', session: { header: { cwd } } },
     { id: 'wake-root-b', status: 'running', session: { header: { cwd } } }
@@ -286,7 +289,7 @@ test('project task wake pumps are singleflight per canonical project lane', asyn
   let release
   const gate = new Promise(resolve => { release = resolve })
   let claims = 0
-  const target = { id: 'singleflight-target', status: 'idle', session: { header: { cwd: 'C:/singleflight' } }, async followup() { await gate } }
+  const target = { id: 'singleflight-target', status: 'idle', session: { header: { cwd: fixtureWorkspace('singleflight') } }, async followup() { await gate } }
   let normalized = target.session.header.cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
   if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
   const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
@@ -463,7 +466,7 @@ test('project root recovery scheduler uses bounded backoff, drains exact targets
 
 test('project root recovery scheduler enforces the durable effect budget while unknown results remain observer-only', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-root-recovery-budget=${Date.now()}-${Math.random()}`)
-  const cwd = 'C:/project-root-recovery-budget'
+  const cwd = fixtureWorkspace('project-root-recovery-budget')
   let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
   if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
   const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
@@ -532,7 +535,7 @@ test('explicit Stop removes queued project wakes and fences enqueue resolution b
   let releaseEnqueue, enqueueStarted
   const enqueueGate = new Promise(resolve => { releaseEnqueue = resolve })
   const started = new Promise(resolve => { enqueueStarted = resolve })
-  const session = { id: 'wake-stop-root', header: { cwd: 'C:/wake-stop' }, events: [] }
+  const session = { id: 'wake-stop-root', header: { cwd: fixtureWorkspace('wake-stop') }, events: [] }
   const inbox = {
     nextTurn: [], nextStep: [],
     remove(id) {
@@ -562,19 +565,27 @@ test('explicit Stop removes queued project wakes and fences enqueue resolution b
     canonicalProjectKey, dispatcherRef: 'stop-race-dispatcher', actorRefForSessionId: id => `actor:${id}`,
     wake: { claim: () => [{ wakeRef: 'wake-stop-race', actorRef: `actor:${root.id}` }], ack: input => acknowledgements.push(input) }
   })
-  await started
-  assert.equal(inbox.nextTurn.length, 1)
-  handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
-  assert.equal(inbox.nextTurn.length, 0, 'Stop must remove queued project wake messages')
-  releaseEnqueue()
-  const result = await dispatch
-  assert.deepEqual(result, { claimed: 1, delivered: 0, retryable: 0 })
-  assert.equal(acknowledgements[0].outcome, 'paused')
+  try {
+    await Promise.race([
+      started,
+      dispatch.then(() => assert.fail('wake dispatch ended before enqueue started; check fixture Host path and project identity'))
+    ])
+    assert.equal(inbox.nextTurn.length, 1)
+    handlers['session/event'](session, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+    assert.equal(inbox.nextTurn.length, 0, 'Stop must remove queued project wake messages')
+    releaseEnqueue()
+    const result = await dispatch
+    assert.deepEqual(result, { claimed: 1, delivered: 0, retryable: 0 })
+    assert.equal(acknowledgements[0].outcome, 'paused')
+  } finally {
+    releaseEnqueue()
+    await dispatch
+  }
 })
 
 test('Stop after wake claim but before exact-root lookup acknowledges the claimed lease as paused', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-stop-after-claim=${Date.now()}-${Math.random()}`)
-  const session = { id: 'wake-stop-after-claim-root', header: { cwd: 'C:/wake-stop-after-claim' }, events: [] }
+  const session = { id: 'wake-stop-after-claim-root', header: { cwd: fixtureWorkspace('wake-stop-after-claim') }, events: [] }
   const root = { id: session.id, session, status: 'idle', inbox: { nextTurn: [], nextStep: [], remove() { return false } }, cancel() {}, async followup() { assert.fail('stopped root must not enqueue') } }
   let normalized = session.header.cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
   if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
@@ -603,7 +614,7 @@ test('Stop after wake claim but before exact-root lookup acknowledges the claime
 
 test('Stop cancels top-level project launch and admission even when the root owns no private Agent Team', async () => {
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-stop-without-team=${Date.now()}-${Math.random()}`)
-  const session = { id: 'project-only-root', header: { cwd: 'C:/project-only-stop' }, events: [] }
+  const session = { id: 'project-only-root', header: { cwd: fixtureWorkspace('project-only-stop') }, events: [] }
   const root = { id: session.id, session, cancel() { assert.fail('private-team inbox cancellation is unnecessary without a team') } }
   const handlers = {}, stopped = [], cancelled = []
   const ctx = {
@@ -624,7 +635,7 @@ test('project task wake session evidence scan is bounded to a recent tail window
   const mod = await import(`${pathToFileURL(pluginFile).href}?project-task-wake-tail=${Date.now()}-${Math.random()}`)
   const wakeRef = 'wake-old-history'
   const wakeMessage = { source: { kind: 'coordinator', summary: 'Project tasks' }, content: [{ type: 'text', text: `[Project task wake ${wakeRef}] old` }] }
-  const cwd = 'C:/wake-tail'
+  const cwd = fixtureWorkspace('wake-tail')
   let normalized = cwd.replace(/\\/gu, '/').replace(/\/+$/u, '')
   if (process.platform === 'win32') normalized = normalized.toLocaleLowerCase('en-US')
   const canonicalProjectKey = createHash('sha256').update(JSON.stringify(['agent-teams-project-v1', normalized])).digest('hex')
