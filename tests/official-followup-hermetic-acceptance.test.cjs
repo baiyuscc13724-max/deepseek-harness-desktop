@@ -25,7 +25,7 @@ alpha2Audit('accepted alpha.2 source, static gate, migration and publication inp
 
 test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof sources without moving history', () => {
   const accepted = Object.freeze({
-    'plugins/dsh-agent-teams/lib/index.js': '29d31ac112eb98a416332e56b3a995e3854a8360ace93ee985240b8b053d0f08',
+    'plugins/dsh-agent-teams/lib/index.js': '7b5e141f1907fefbc5528481a816ab10df9022aecfd2b850db7b41f057a14134',
     'tests/agent-teams-store-performance.test.cjs': '68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887'
   })
   assert.equal(Object.keys(helper.ACCEPTED).length, 12)
@@ -35,17 +35,17 @@ test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof so
   }
   assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
-  const evidence = [...Object.values(accepted), 'Promise.allSettled', '删除前的 `fullValidation`', '74/74', '20.14 ms', '12/12', '30.416 ms', '169/169', '29/29', '3.54%']
+  const evidence = [...Object.values(accepted), 'Promise.allSettled', 'closeAndSettle()', '删除前的 `fullValidation`', '74/74', '20.14 ms', '12/12', '30.416 ms', '169/169', '29/29', '3.54%']
   for (const contract of evidence) assert.ok(review.includes(contract), `v1.0.59 hot/cold review evidence missing: ${contract}`)
 })
 
 test('v1.0.59 cloud performance recovery binds exact optimized sources and unchanged safety gates', () => {
   const accepted = Object.freeze({
-    'plugins/dsh-agent-teams/lib/index.js': '29d31ac112eb98a416332e56b3a995e3854a8360ace93ee985240b8b053d0f08',
+    'plugins/dsh-agent-teams/lib/index.js': '7b5e141f1907fefbc5528481a816ab10df9022aecfd2b850db7b41f057a14134',
     'plugins/dsh-agent-teams/lib/client.js': '5a6a9ed1b2019d99495e3cfa680f945f08c6cc11e551347d16f645ff3904a271',
     'electron/store/mobile-sync-store.cjs': 'da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba',
     'tests/agent-teams-autopilot.test.cjs': '1010d340b1ed3f2b109b620e1e15e4e36a609e36a2f2725674e05419af71ba51',
-    'tests/agent-teams-runtime.test.cjs': '83c90b12b8c866ba051bd2637b81455f0978dd2a9a30337eda2cbda68ee25666',
+    'tests/agent-teams-runtime.test.cjs': '2693690692ace7360a4de7c7e8dd36cb35b55c87ba0b83f6584e80b695a9b025',
     'tests/agent-teams-tools.test.cjs': '2ec27df1801025fd3159c77cfdd7dc473ec3a4f8dad1fda3a2ab8a9185402752',
     'tests/agent-teams-ui.test.cjs': 'f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4'
   })

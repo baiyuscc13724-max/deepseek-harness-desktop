@@ -164,6 +164,8 @@ test('apply injects one Host wake scheduler into every project task mutation pro
   assert.match(source, /do \{[\s\S]*?state\.pending = false;[\s\S]*?\} while \(state\.pending\)[\s\S]*?if \(state\.pending\) startDrain\(projectRef, state\)/u)
   assert.match(source, /state\.timer = setTimer\([\s\S]*?state\.timer\?\.unref\?\.\(\)/u)
   assert.equal(source.match(/wakeScheduler: projectTaskWakeScheduler/gu)?.length, 3)
+  assert.match(source, /async closeAndSettle\(\) \{[\s\S]*?this\.close\(\);[\s\S]*?await this\._settleRetentionMaintenance\(\);/u)
+  assert.match(source, /await store\.closeAndSettle\(\);/u, 'plugin disposal must settle in-flight retention I/O before the Runtime child can exit')
 })
 
 test('project task wake scheduler fails closed once when Host readiness rejects', async () => {

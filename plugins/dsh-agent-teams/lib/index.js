@@ -4214,6 +4214,10 @@ class AgentTeamsStore {
     if (instances?.size === 0) STORE_INSTANCES.delete(this.filePath);
     cancelStoreRetentionMaintenance(this.filePath);
   }
+  async closeAndSettle() {
+    this.close();
+    await this._settleRetentionMaintenance();
+  }
   isEnabled() {
     return this.document.settings.enabled === true;
   }
@@ -13335,7 +13339,7 @@ function apply(ctx, config = {}) {
         projectEntryRegistry.close(),
         projectEntry.close(),
       ]);
-      store.close();
+      await store.closeAndSettle();
     };
   }, "agent-teams collaboration presence");
   registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization, authorizationProvider);
