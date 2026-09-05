@@ -42,8 +42,8 @@ test('Unix smoke diagnostic is bounded, branch-only and cannot package or publis
   assert.equal(job['timeout-minutes'], 7)
   assert.deepEqual(job.steps.filter(step => step.run).map(step => [step.run, step['timeout-minutes']]), [
     ['npm ci', 3],
-    ['node --test --test-timeout=90000 tests/agent-teams-plugin-service.test.cjs', 2],
-    ['node --test --test-timeout=90000 tests/agent-teams-runtime.test.cjs', 2]
+    ['node --test --test-concurrency=1 tests/agent-teams-store-performance.test.cjs', 2],
+    ['node --test --test-concurrency=1 tests/mobile-sync-store.test.cjs', 2]
   ])
   assert.equal(job.steps.at(-1).if, '${{ !cancelled() }}')
 })

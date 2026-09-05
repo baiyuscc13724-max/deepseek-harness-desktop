@@ -22,10 +22,10 @@ jobs:
       - name: Install exact dependencies
         timeout-minutes: 3
         run: npm ci
-      - name: Diagnose plugin-service natural exit
+      - name: Diagnose original Agent Teams storage contract
         timeout-minutes: 2
-        run: node --test --test-timeout=90000 tests/agent-teams-plugin-service.test.cjs
-      - name: Diagnose runtime test progress and natural exit
+        run: node --test --test-concurrency=1 tests/agent-teams-store-performance.test.cjs
+      - name: Diagnose original Mobile Sync storage contract
         if: ${{ !cancelled() }}
         timeout-minutes: 2
-        run: node --test --test-timeout=90000 tests/agent-teams-runtime.test.cjs
+        run: node --test --test-concurrency=1 tests/mobile-sync-store.test.cjs
