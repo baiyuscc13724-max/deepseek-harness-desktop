@@ -1,0 +1,31 @@
+name: Diagnose Unix smoke (no publication)
+
+on:
+  push:
+    branches: [diagnostic/unix-smoke-v1059]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          lfs: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install exact dependencies
+        timeout-minutes: 3
+        run: npm ci
+      - name: Diagnose plugin-service natural exit
+        timeout-minutes: 2
+        run: node --test --test-timeout=90000 tests/agent-teams-plugin-service.test.cjs
+      - name: Diagnose runtime test progress and natural exit
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        run: node --test --test-timeout=90000 tests/agent-teams-runtime.test.cjs

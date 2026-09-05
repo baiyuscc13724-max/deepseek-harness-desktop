@@ -32,6 +32,22 @@ const {
 const root = path.resolve(__dirname, '..')
 const read = file => readFileSync(path.join(root, file), 'utf8')
 
+test('Unix smoke diagnostic is bounded, branch-only and cannot package or publish', () => {
+  const workflow = YAML.parse(read('.github/workflows/diagnose-unix-smoke.yml'))
+  assert.deepEqual(workflow.on, { push: { branches: ['diagnostic/unix-smoke-v1059'] } })
+  assert.deepEqual(workflow.permissions, { contents: 'read' })
+  assert.deepEqual(Object.keys(workflow.jobs), ['diagnose'])
+  const job = workflow.jobs.diagnose
+  assert.equal(job['runs-on'], 'ubuntu-latest')
+  assert.equal(job['timeout-minutes'], 7)
+  assert.deepEqual(job.steps.filter(step => step.run).map(step => [step.run, step['timeout-minutes']]), [
+    ['npm ci', 3],
+    ['node --test --test-timeout=90000 tests/agent-teams-plugin-service.test.cjs', 2],
+    ['node --test --test-timeout=90000 tests/agent-teams-runtime.test.cjs', 2]
+  ])
+  assert.equal(job.steps.at(-1).if, '${{ !cancelled() }}')
+})
+
 const expectedPhases = [
   'local-source-gates',
   'desktop-cloud-builds',
