@@ -3230,7 +3230,7 @@ async function writeImmutableArtifact(layoutRoot, reference, bytes, { beforeRena
     if (tempOwned) await rm(temp, { force: true }).catch(() => undefined);
   }
 }
-async function replaceAtomicArtifact(filePath, bytes) {
+async function prepareAtomicArtifact(filePath, bytes) {
   await mkdir(dirname(filePath), { recursive: true });
   const temp = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   let handle;
@@ -3241,18 +3241,34 @@ async function replaceAtomicArtifact(filePath, bytes) {
     await handle.sync();
     await handle.close();
     handle = undefined;
-    await rename(temp, filePath);
-    tempOwned = false;
-    const [verification] = await Promise.allSettled([
-      readFile(filePath),
-      syncStoreDirectory(dirname(filePath)),
-    ]);
-    if (verification.status === "rejected") throw verification.reason;
-    if (!verification.value.equals(bytes)) throw new TypeError(`atomic Agent Teams artifact failed verification at ${filePath}`);
-  } finally {
+  } catch (error) {
     await handle?.close().catch(() => undefined);
-    if (tempOwned) await rm(temp, { force: true }).catch(() => undefined);
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
   }
+  return {
+    async commit() {
+      if (!tempOwned) throw new TypeError(`atomic Agent Teams artifact preparation was already committed at ${filePath}`);
+      await rename(temp, filePath);
+      tempOwned = false;
+      const [verification] = await Promise.allSettled([
+        readFile(filePath),
+        syncStoreDirectory(dirname(filePath)),
+      ]);
+      if (verification.status === "rejected") throw verification.reason;
+      if (!verification.value.equals(bytes)) throw new TypeError(`atomic Agent Teams artifact failed verification at ${filePath}`);
+    },
+    async dispose() {
+      if (!tempOwned) return;
+      tempOwned = false;
+      await rm(temp, { force: true }).catch(() => undefined);
+    },
+  };
+}
+async function replaceAtomicArtifact(filePath, bytes) {
+  const prepared = await prepareAtomicArtifact(filePath, bytes);
+  try { await prepared.commit(); }
+  finally { await prepared.dispose(); }
 }
 function filesystemPathIdentityKey(value, platform = process.platform) {
   const literal = String(value);
@@ -4753,10 +4769,15 @@ class AgentTeamsStore {
     });
     const manifestArtifact = jsonArtifact(manifest);
     const manifestDescriptor = { path: `manifests/manifest-${generation}-${manifestArtifact.hash}.json`, hash: manifestArtifact.hash, bytes: manifestArtifact.size, generation };
-    // These two content-addressed artifacts are still unreachable. Let their full
-    // temp/wx/write/file-fsync/rename/readback paths overlap, but never let either
-    // branch escape: pointer visibility remains strictly after both have settled.
-    const [hotWrite, manifestWrite] = await Promise.allSettled([
+    const priorRetentionFloor = this.pointer?.retentionFloorGeneration
+      ?? (this.pointer === undefined ? 1 : Math.max(1, this.pointer.generation - (HOT_COLD_RETENTION_COMPLETE_GENERATIONS - 1)));
+    const retentionFloorGeneration = Math.max(priorRetentionFloor, generation - (HOT_COLD_RETENTION_MAX_COMPLETE_GENERATIONS - 1));
+    const pointer = validateHotColdPointer({ version: HOT_COLD_POINTER_VERSION, generation, manifest: manifestDescriptor, retentionFloorGeneration });
+    const pointerArtifact = jsonArtifact(pointer);
+    // These content-addressed artifacts and the replaceable pointer temp are still
+    // unreachable. Overlap their temp/write/file-fsync paths, but expose the pointer
+    // only after both immutable artifacts have settled and the hot bytes revalidate.
+    const [hotWrite, manifestWrite, pointerWrite] = await Promise.allSettled([
       (async () => {
         await this.#fault("before-hot-document-write");
         return writeImmutableArtifact(this.layout.root, hot.path, hotArtifact.bytes, {
@@ -4769,45 +4790,49 @@ class AgentTeamsStore {
           beforeRename: () => this.#fault(`before-immutable-rename:${manifestDescriptor.path}`),
         });
       })(),
+      prepareAtomicArtifact(this.layout.pointerPath, pointerArtifact.bytes),
     ]);
-    if (hotWrite.status === "rejected") throw hotWrite.reason;
-    await this.#fault("after-hot-document");
-    const physicalHot = validateHotDocument(await parseVerifiedArtifact(this.layout.root, hot), { generation });
-    const physicalTeamCache = new Map();
-    const physicalLoader = (entry) => {
-      if (!physicalTeamCache.has(entry.id)) {
-        const team = entry.storage === "hot"
-          ? this.#assertTeamMatchesEntry(clone(physicalHot.teams.find((candidate) => candidate.id === entry.id)), entry)
-          : this.#teamForEntrySync(entry, physicalHot);
-        physicalTeamCache.set(entry.id, team);
+    const preparedPointer = pointerWrite.status === "fulfilled" ? pointerWrite.value : undefined;
+    try {
+      if (hotWrite.status === "rejected") throw hotWrite.reason;
+      await this.#fault("after-hot-document");
+      const physicalHot = validateHotDocument(await parseVerifiedArtifact(this.layout.root, hot), { generation });
+      const physicalTeamCache = new Map();
+      const physicalLoader = (entry) => {
+        if (!physicalTeamCache.has(entry.id)) {
+          const team = entry.storage === "hot"
+            ? this.#assertTeamMatchesEntry(clone(physicalHot.teams.find((candidate) => candidate.id === entry.id)), entry)
+            : this.#teamForEntrySync(entry, physicalHot);
+          physicalTeamCache.set(entry.id, team);
+        }
+        return physicalTeamCache.get(entry.id);
+      };
+      for (const entry of entries) if (entry.storage === "hot" || fullTeams.has(entry.id)) physicalLoader(entry);
+      // The complete index and logical teams were validated immediately before the
+      // write. No local reference to `entries` escapes across that boundary; the
+      // physical loader then validates and rebuilds every newly written team against
+      // its exact entry, so repeating the global index walk cannot add a safety check.
+      if (promotionDocument !== undefined) {
+        const reconstructed = assembleStoreDocument(header, entries.map((entry) => physicalLoader(entry)));
+        validateStoreDocument(reconstructed);
+        const reconstructedJson = JSON.stringify(reconstructed), sourceJson = JSON.stringify(promotionDocument);
+        const reconstructedProjections = JSON.stringify(rootProjectionHashes(reconstructed)), sourceProjections = JSON.stringify(rootProjectionHashes(promotionDocument));
+        if (reconstructedJson !== sourceJson || reconstructedProjections !== sourceProjections) throw new TypeError(`Agent Teams v8 migration shadow comparison diverged (document ${sha256Bytes(Buffer.from(reconstructedJson))}/${sha256Bytes(Buffer.from(sourceJson))}; projections ${sha256Bytes(Buffer.from(reconstructedProjections))}/${sha256Bytes(Buffer.from(sourceProjections))})`);
+        const rebuiltEntries = reconstructed.teams.map((team, ordinal) => buildTeamLedgerEntry(team, ordinal, team.state === "closed" ? "closed" : "hot", team.state === "closed" ? entries[ordinal].shard : undefined));
+        if (documentMerkleHash(header, rebuiltEntries) !== manifest.documentHash || documentSecurityHash(header, rebuiltEntries) !== manifest.securityHash) throw new TypeError("Agent Teams v8 migration hash or security epoch diverged");
       }
-      return physicalTeamCache.get(entry.id);
-    };
-    for (const entry of entries) if (entry.storage === "hot" || fullTeams.has(entry.id)) physicalLoader(entry);
-    // The complete index and logical teams were validated immediately before the
-    // write. No local reference to `entries` escapes across that boundary; the
-    // physical loader then validates and rebuilds every newly written team against
-    // its exact entry, so repeating the global index walk cannot add a safety check.
-    if (promotionDocument !== undefined) {
-      const reconstructed = assembleStoreDocument(header, entries.map((entry) => physicalLoader(entry)));
-      validateStoreDocument(reconstructed);
-      const reconstructedJson = JSON.stringify(reconstructed), sourceJson = JSON.stringify(promotionDocument);
-      const reconstructedProjections = JSON.stringify(rootProjectionHashes(reconstructed)), sourceProjections = JSON.stringify(rootProjectionHashes(promotionDocument));
-      if (reconstructedJson !== sourceJson || reconstructedProjections !== sourceProjections) throw new TypeError(`Agent Teams v8 migration shadow comparison diverged (document ${sha256Bytes(Buffer.from(reconstructedJson))}/${sha256Bytes(Buffer.from(sourceJson))}; projections ${sha256Bytes(Buffer.from(reconstructedProjections))}/${sha256Bytes(Buffer.from(sourceProjections))})`);
-      const rebuiltEntries = reconstructed.teams.map((team, ordinal) => buildTeamLedgerEntry(team, ordinal, team.state === "closed" ? "closed" : "hot", team.state === "closed" ? entries[ordinal].shard : undefined));
-      if (documentMerkleHash(header, rebuiltEntries) !== manifest.documentHash || documentSecurityHash(header, rebuiltEntries) !== manifest.securityHash) throw new TypeError("Agent Teams v8 migration hash or security epoch diverged");
+      if (manifestWrite.status === "rejected") throw manifestWrite.reason;
+      if (pointerWrite.status === "rejected") throw pointerWrite.reason;
+      await this.#fault("after-manifest-document");
+      artifactBytes += hot.bytes + manifestDescriptor.bytes;
+      artifactFiles += 2;
+      await this.#fault("before-manifest-switch");
+      await preparedPointer.commit();
+    } catch (error) {
+      await preparedPointer?.dispose();
+      throw error;
     }
-    if (manifestWrite.status === "rejected") throw manifestWrite.reason;
-    await this.#fault("after-manifest-document");
-    artifactBytes += hot.bytes + manifestDescriptor.bytes;
-    artifactFiles += 2;
-    const priorRetentionFloor = this.pointer?.retentionFloorGeneration
-      ?? (this.pointer === undefined ? 1 : Math.max(1, this.pointer.generation - (HOT_COLD_RETENTION_COMPLETE_GENERATIONS - 1)));
-    const retentionFloorGeneration = Math.max(priorRetentionFloor, generation - (HOT_COLD_RETENTION_MAX_COMPLETE_GENERATIONS - 1));
-    const pointer = validateHotColdPointer({ version: HOT_COLD_POINTER_VERSION, generation, manifest: manifestDescriptor, retentionFloorGeneration });
-    const pointerArtifact = jsonArtifact(pointer);
-    await this.#fault("before-manifest-switch");
-    await replaceAtomicArtifact(this.layout.pointerPath, pointerArtifact.bytes);
+    await preparedPointer.dispose();
     const stamp = await this.#currentFileStamp(this.layout.pointerPath);
     const publication = hotColdPublication(pointer, manifest, hotDocument, entries);
     this._adoptHotColdPublication(publication, stamp, { preserveRetention: true });

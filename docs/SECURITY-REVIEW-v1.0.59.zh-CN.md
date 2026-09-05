@@ -47,7 +47,7 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 - 可继续的原 session 且唯一活动 claim/lease 未变时，只允许一次自动 `retry`；同一成员的该次 retry 已确认送达后再次失败，Host 以 `AGENT_TEAMS_AUTOMATIC_RETRY_EXHAUSTED` 拒绝第二次自动 retry，并要求同一安全 Goal round 直接 `replace`，不要求用户选择或发送同意短语。replace 会撤销旧 claim/lease、保留 checkpoint/生命周期审计，并把相同未完成任务预绑定给一个用户可见的同级成员。
 - 每次恢复先写 durable receipt 再 dispatch。模块内 `AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS` 只在精确调用进行期间，以 team/request/input hash/root/member/action/revision/pause epoch 共同匹配当前尝试；这只避免已围栏的本次 `prepared`/`outcome_unknown` 自我撤销 grant，不把模型输入升级为 Host 事实。`finally` 按对象 identity 删除记录；进程重启、调用结束或不匹配时，durable `outcome_unknown` 立即重新阻断 autopilot。`prepared + dispatchOutcome=not_started + retryable=true` 因尚未发生 dispatch 可安全原样续跑。
 - Agent Teams 页面不再为结果明确的 retry/replace 再弹第二层确认。Root 的手动后备按钮单击即提交，操作中禁用全部恢复按钮、切换工作文案，并在容器暴露 `aria-busy`，完成后使用 live status/alert 直接反馈；移动布局保持单列与至少 44px 命中区。只有 `outcome_unknown` 的 delivered/not-delivered 对账继续保留直接用户确认，且不会重发模型调用。
-- 本轮 canonical-LF 身份：Host `plugins/dsh-agent-teams/lib/index.js` = `0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4`；Client `plugins/dsh-agent-teams/lib/client.js` = `5a6a9ed1b2019d99495e3cfa680f945f08c6cc11e551347d16f645ff3904a271`；定向测试 `tests/agent-teams-autopilot.test.cjs` = `1010d340b1ed3f2b109b620e1e15e4e36a609e36a2f2725674e05419af71ba51`、`tests/agent-teams-runtime.test.cjs` = `83c90b12b8c866ba051bd2637b81455f0978dd2a9a30337eda2cbda68ee25666`、`tests/agent-teams-tools.test.cjs` = `2ec27df1801025fd3159c77cfdd7dc473ec3a4f8dad1fda3a2ab8a9185402752`、`tests/agent-teams-ui.test.cjs` = `f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4`。
+- 本轮 canonical-LF 身份：Host `plugins/dsh-agent-teams/lib/index.js` = `29d31ac112eb98a416332e56b3a995e3854a8360ace93ee985240b8b053d0f08`；Client `plugins/dsh-agent-teams/lib/client.js` = `5a6a9ed1b2019d99495e3cfa680f945f08c6cc11e551347d16f645ff3904a271`；定向测试 `tests/agent-teams-autopilot.test.cjs` = `1010d340b1ed3f2b109b620e1e15e4e36a609e36a2f2725674e05419af71ba51`、`tests/agent-teams-runtime.test.cjs` = `83c90b12b8c866ba051bd2637b81455f0978dd2a9a30337eda2cbda68ee25666`、`tests/agent-teams-tools.test.cjs` = `2ec27df1801025fd3159c77cfdd7dc473ec3a4f8dad1fda3a2ab8a9185402752`、`tests/agent-teams-ui.test.cjs` = `f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4`。
 - 精确门禁结果：autopilot 65/65、UI 40/40、tools 16/16、domain 79/79、runtime 37/37，均为 0 fail/0 skip；runtime 单文件由 Node 测试进程自然退出，没有使用 `--test-force-exit`。
 
 ## 4. 重任务扩员、admission 与外部副作用
@@ -95,7 +95,7 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 第二轮持久化优化已独立逐项审查其产品与回归差异；当前 Host 在该等价性能实现上叠加 §3.1 的自动恢复权限围栏，性能合同文件保持不变。冻结以下两个 canonical-LF 源身份：
 
-- `plugins/dsh-agent-teams/lib/index.js`：`0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4`
+- `plugins/dsh-agent-teams/lib/index.js`：`29d31ac112eb98a416332e56b3a995e3854a8360ace93ee985240b8b053d0f08`
 - `tests/agent-teams-store-performance.test.cjs`：`68323e2eecd9e410d75547301275859d681dfac54527fbc36729228596d3a887`
 
 独立复核确认性能恢复没有缩小权威数据域、耐久边界或拒绝条件：
@@ -108,7 +108,7 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 - hard watermark 不等待 soft job：下一次真实写在写入第一个新 artifact 前仍同步刷新 reachability，并在超线时执行完整同步 sweep 或 fail closed refusal。保留集合仍是 current+4 个完整 generation 与 depth 5 的 manifest-only 线索，两次可重启 rollback、promotion source/sentinel、Unicode、task/claim/lease/OCC 历史均未降级。
 - exact-origin fast path 只对刚完成首轮 adopt 且对象 identity、stamp 与 branch descriptor 全部一致的提交者生效，并执行等价 retention normalization；活动团队 mutation 若保持全部 closed entry 的相同对象 identity 与 canonical 顺序，可直接复用 catalog descriptor，否则仍回退到完整 JSON 等价比较。ledger projection identity 也只按同一不可变 generation entry 的 `WeakMap` identity 复用；任何新 entry 都重建 member/ownership hash。peer store、listener/SSE、rollback、init、failure 和外部分支继续走完整 adoption。一次 mutation 仍只产生一次 publication。
 
-性能合同保持 45 次、丢弃前 5 次、p95 `<75 ms`、写入 `<30%`，没有 sleep、额外 warmup、样本减少、阈值或 runner 重分类。Windows `10.0.22621` / Node `v24.16.0` 以原合同复验当前候选：完整 store 为 74/74、0 skip，目标 p95 为 `22.67 ms`，写入仍为 `5290/149443`（`3.54%`）；65-root 完整投影专项为 12/12，冷 miss 中位数 `30.416 ms`，缓存 65 项仍为 `2705970` bytes，RSS 增长 `405504` bytes。上一轮 security/OCC/Stop accepted 矩阵 169/169、authorization/projection/SSE 专项 29/29 与 official hermetic acceptance 继续作为未放宽的基线；`node scripts/verify-static.mjs`、Node syntax 与 MinGit `diff --check` 仍是正式发布前门禁。既有 historical-audit skip 继续由 `DSH_HISTORICAL_ALPHA2_AUDIT` 显式门控，没有改成通过，也没有掩盖产品测试失败。
+性能合同保持 45 次、丢弃前 5 次、p95 `<75 ms`、写入 `<30%`，没有 sleep、额外 warmup、样本减少、阈值或 runner 重分类。Windows `10.0.22621` / Node `v24.16.0` 以原合同复验当前候选：完整 store 为 74/74、0 skip，目标 p95 为 `20.14 ms`，写入仍为 `5290/149443`（`3.54%`）；65-root 完整投影专项为 12/12，冷 miss 中位数 `30.416 ms`，缓存 65 项仍为 `2705970` bytes，RSS 增长 `405504` bytes。上一轮 security/OCC/Stop accepted 矩阵 169/169、authorization/projection/SSE 专项 29/29 与 official hermetic acceptance 继续作为未放宽的基线；`node scripts/verify-static.mjs`、Node syntax 与 MinGit `diff --check` 仍是正式发布前门禁。既有 historical-audit skip 继续由 `DSH_HISTORICAL_ALPHA2_AUDIT` 显式门控，没有改成通过，也没有掩盖产品测试失败。
 
 ## 9. Root 投影缓存与 SSE 清理
 
@@ -130,8 +130,9 @@ v1.0.59 候选源码继续以 fail closed、单一权威、逐码点身份和可
 
 ### 10.1 本轮云端性能恢复的等价复核
 
-- canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `0147491698e0f5d700998ec1b71edc879a1e2d2290b90676c937c0c1639b82d4`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
-- Windows / Node `v24.16.0` 保持原始样本与断言。此前云端证据已把 65-root 冷投影中位数由 `58.280 ms` 降至 `40.422 ms`，并把 1307-session changed commit p95 由 `12.672 ms` 降至 `9.952 ms`、128-event journal commit p95 由 `10.920 ms` 降至 `6.277 ms`；Mobile Sync 已通过固定门槛。当前 exact 候选进一步在本地原合同下得到 65-root 冷投影中位数 `30.416 ms` 和 146-team mutation p95 `22.67 ms`，门槛仍分别为 `<=60 ms` 与 `<75 ms`。相关 37 个 Mobile Sync 测试、74 个 hot/cold 测试与全部 Agent Teams 投影测试通过。
+- canonical-LF 身份：`plugins/dsh-agent-teams/lib/index.js` = `29d31ac112eb98a416332e56b3a995e3854a8360ace93ee985240b8b053d0f08`；`electron/store/mobile-sync-store.cjs` = `da403e440f5d6c5a8f066e1af8773e32c1b662ef23968f31d84d8679ab33a1ba`。
+- Windows / Node `v24.16.0` 保持原始样本与断言。此前云端证据已把 65-root 冷投影中位数由 `58.280 ms` 降至 `40.422 ms`，并把 1307-session changed commit p95 由 `12.672 ms` 降至 `9.952 ms`、128-event journal commit p95 由 `10.920 ms` 降至 `6.277 ms`；Mobile Sync 已通过固定门槛。当前 exact 候选进一步在本地原合同下得到 65-root 冷投影中位数 `30.416 ms` 和 146-team mutation p95 `20.14 ms`，门槛仍分别为 `<=60 ms` 与 `<75 ms`。相关 37 个 Mobile Sync 测试、74 个 hot/cold 测试与全部 Agent Teams 投影测试通过。
+- run `33944441121` 的 Windows runner 曾得到 `80.47 ms`，暴露了串行 pointer 文件同步对慢速云端磁盘的敏感性。当前实现以 `prepareAtomicArtifact` 先写入并 `fsync` pointer 临时文件，并通过同一个 `Promise.allSettled` 与不可见的 hot/manifest 制品并行；只有两个不可变制品全部 settle、hot 物理回读及 manifest 分支验证完成后才执行 pointer rename。任一提交前失败会清理 pointer 临时文件且不改变可见 pointer，文件 `fsync`、回读校验、崩溃边界和原子提交语义均未删减。
 - 没有提高阈值、减少样本、增加 warmup、sleep、跳过测试或更改 smoke 分组；内建缓存候选就是刚完成授权的同一未逸出 canonical 对象，任一 shadow/注入候选仍须逐字节/哈希等价，Mobile Sync 每次 applied commit 仍完成文件 `fsync` 与原子 rename。
 - 前一云端 run 还证明 macOS/Linux ordinary phase 在完成前 17 个有序文件后由测试自建但未释放的 Cordis 子插件 fiber/fixture 资源阻塞，而不是产品断言慢。Cordis 的 root `runtime.fiber.dispose()` 实际映射为 restart，不能作为关闭手段；JSON output boundary 现在保留 `runtime.plugin(...)` 返回的真实子 fiber，在 `finally` 先注销临时 tool，再按逆序等待每个 `fiber.dispose()`。其余 fixture 显式关闭 admission、store、订阅与 effect cleanup；没有使用 `--test-force-exit`、缩短测试、吞掉活动 handle 或重分组。单文件 37/37 通过并由 Node 进程自然退出。
 
