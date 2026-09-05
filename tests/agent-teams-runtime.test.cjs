@@ -3038,6 +3038,13 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
     const task = (await tools.get('team_task_create').execute({ team_id: started.team.id, title: 'Resume only after explicit confirmation' }, { agent: lead, signal: new AbortController().signal })).task
     const planned = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
     await tools.get('team_plan_commit').execute({ team_id: started.team.id, expected_revision: planned.team.plan.revision, confirmed_plan_hash: planned.team.plan.hash }, { agent: lead, signal: new AbortController().signal })
+    const passive = await tools.get('team_status').execute({ team_id: started.team.id, wait_for_change: true }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(passive.wait.reason, 'attention') // no worker exists: do not hang
+    assert.equal(passive.team.id, started.team.id)
+    const cancelledSignal = new AbortController(); cancelledSignal.abort()
+    const cancelledWait = await tools.get('team_status').execute({ team_id: started.team.id, wait_for_change: true }, { agent: lead, signal: cancelledSignal.signal })
+    assert.equal(cancelledWait.wait.reason, 'cancelled')
+    assert.equal(cancelledWait.team, undefined)
 
     const stopEvent = { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } }
     session.events.push(stopEvent)
@@ -3069,6 +3076,36 @@ test('tool lifecycle stays consistently paused from explicit Stop through status
     assert.equal(duplicateResume.reused, true)
     const statusAfterDuplicateResume = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
     assert.equal(statusAfterDuplicateResume.team.status, 'active')
+
+    // Stop is an execution fence, not a requirement to restart discarded work.
+    session.events.push(stopEvent)
+    handlers.get('session/event')(session, stopEvent)
+    session.events.push({ type: 'turn/start', data: {} }, { type: 'user/message', data: { source: { kind: 'goal' } } })
+    const stoppedAgain = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead })
+    assert.equal(stoppedAgain.team.status, 'paused')
+    // A non-human/closed turn cannot grant paused cleanup authority.
+    await assert.rejects(tools.get('team_shutdown').execute({ team_id: started.team.id, force: true }, { agent: lead }), error => error?.code === 'AGENT_TEAMS_PAUSED')
+    openDirectHumanTurn(lead)
+    await assert.rejects(tools.get('team_shutdown').execute({ team_id: started.team.id }, { agent: lead }), error => error?.code === 'AGENT_TEAMS_UNFINISHED_TASKS')
+    const cancelled = await fixedRootTaskUpdate(tools, started.team.id, task.id, 'cancel', { agent: lead })
+    assert.equal(cancelled.task.state, 'cancelled')
+    assert.ok(cancelled.task.lifecycleLedger.some(event => event.kind === 'cancel'))
+    const afterCancel = await tools.get('team_status').execute({ team_id: started.team.id }, { agent: lead })
+    assert.equal(afterCancel.team.status, 'paused')
+    assert.equal(afterCancel.team.pauseEpoch, cancelled.operation.pauseEpoch)
+    const closed = await tools.get('team_shutdown').execute({ team_id: started.team.id }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(closed.team.status, 'closed')
+    assert.equal(closed.team.pauseEpoch, afterCancel.team.pauseEpoch)
+
+    const abandoned = await startTeam(tools, { objective: 'Discard without resume' }, { agent: lead })
+    const abandonedTask = (await tools.get('team_task_create').execute({ team_id: abandoned.team.id, title: 'Never restart this work' }, { agent: lead })).task
+    session.events.push(stopEvent)
+    handlers.get('session/event')(session, stopEvent)
+    openDirectHumanTurn(lead)
+    await tools.get('team_status').execute({ team_id: abandoned.team.id }, { agent: lead })
+    const forced = await tools.get('team_shutdown').execute({ team_id: abandoned.team.id, force: true }, { agent: lead, signal: new AbortController().signal })
+    assert.equal(forced.team.status, 'closed')
+    assert.equal(forced.team.tasks.find(item => item.id === abandonedTask.id).state, 'cancelled')
   } finally {
     for (const cleanup of cleanups.reverse()) await cleanup()
     if (previousHome === undefined) delete process.env.DSH_HOME

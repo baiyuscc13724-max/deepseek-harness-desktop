@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-web-search",
-  "version": "1.0.59",
+  "version": "1.0.60",
   "description": "Account-free public web search provider for Harness Desktop.",
   "type": "module",
   "main": "lib/index.js",

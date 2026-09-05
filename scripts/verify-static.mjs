@@ -438,8 +438,8 @@ for (const file of smokeFiles) {
 const [ordinarySmokePhase, performanceSmokePhase] = smokePlan.phases
 if (ordinarySmokePhase.command !== process.execPath || performanceSmokePhase.command !== process.execPath || ordinarySmokePhase.options.cwd !== root || performanceSmokePhase.options.cwd !== root || ordinarySmokePhase.options.shell !== false || performanceSmokePhase.options.shell !== false || ordinarySmokePhase.options.stdio !== 'inherit' || performanceSmokePhase.options.stdio !== 'inherit') throw new Error('Smoke phases must use fresh Node processes at the exact repository root with inherited stdio and shell disabled.')
 if (JSON.stringify(ordinarySmokePhase.args) !== JSON.stringify(['--test', ...smokePlan.partition.ordinary]) || JSON.stringify(performanceSmokePhase.args) !== JSON.stringify(['--test', '--test-concurrency=1', ...smokePlan.partition.performance])) throw new Error('Smoke phases must run ordinary tests first and timing-sensitive tests serially without name filters.')
-const DESKTOP_RELEASE_CANDIDATE_VERSION = '1.0.59'
-const PREVIOUS_STABLE_DESKTOP_VERSION = '1.0.58'
+const DESKTOP_RELEASE_CANDIDATE_VERSION = '1.0.60'
+const PREVIOUS_STABLE_DESKTOP_VERSION = '1.0.59'
 if (pkg.scripts?.['test:right-workspace-electron'] !== 'node scripts/test-right-workspace-electron.cjs') throw new Error('The real Electron right-workspace geometry gate is missing.')
 if (!/^\d+\.\d+\.\d+$/u.test(pkg.version)) throw new Error(`Expected a stable semantic package version, received ${pkg.version}`)
 if (pkg.version !== DESKTOP_RELEASE_CANDIDATE_VERSION) throw new Error(`Desktop release candidate identity must remain ${DESKTOP_RELEASE_CANDIDATE_VERSION}, received ${pkg.version}`)

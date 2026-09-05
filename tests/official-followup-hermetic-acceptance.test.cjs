@@ -11,6 +11,32 @@ const helper = require('./helpers/official-followup-hermetic.cjs')
 const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const ROOT = path.resolve(__dirname, '..')
+// Candidate source freeze, not Host approval or publication evidence. Preserve
+// the immutable 1.0.59 maps below; only this exact reviewed successor may differ.
+const REVIEWED_1060 = Object.freeze({
+  'README.md': '59f251c15078b8e3f92dd8e0d652968505d507cea4e77a950e58cf3a2cceacdd',
+  'CHANGELOG.md': '2e5c87a7d8a3539543666103b1809aa380a3600b79cf8a5542fd03b06f1d102a',
+  'release-notes.md': '5d931061a0965bafb90d93d176034da309abcf0cc3ca997b2e23d3fad21dceb0',
+  'plugins/dsh-agent-teams/lib/index.js': '9698de8919a116da4ea2b0872746f48b9016cb976cb4e842199910f379e1a5f4',
+  'plugins/dsh-agent-teams/lib/client.js': 'ad7b41e84cdead0988d005e67a5906b862075648a174a2b4526566e1ead2810e',
+  'tests/agent-teams-runtime.test.cjs': 'cbb737b7b5a597f35ede0ee693ed8be2e1956ba9d6ca7cf24b18e1880a82de80',
+  'tests/agent-teams-domain.test.cjs': '9d73575a69be0b1fba2fdd8335f708fa50f5c70395cdcdd0c6d625519b26f323',
+  'tests/agent-teams-passive-wait.test.cjs': '66f44e567dd83e32625f270417176ae27451a5afa24c954c7257023fdb62f942',
+  'tests/agent-teams-scope-reminder.test.cjs': 'de35cc8f72269eaaac381fa66947d893f91d83679fc936efc0eced82c79f73f0'
+})
+function reviewedCurrentHash(relative, historical) {
+  const version = require('../package.json').version
+  if (version === '1.0.59') return historical
+  assert.equal(version, '1.0.60', 'a later release needs its own reviewed source freeze')
+  return REVIEWED_1060[relative] ?? historical
+}
+test('v1.0.60 narrow successor binds its implementation and new proofs without replacing historical acceptance', () => {
+  const review = fs.readFileSync(path.join(ROOT, 'docs/SECURITY-REVIEW-v1.0.60.zh-CN.md'), 'utf8')
+  for (const [relative, expected] of Object.entries(REVIEWED_1060)) {
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, relative)), expected, relative)
+    assert.ok(review.includes(expected), `current source review missing ${relative}`)
+  }
+})
 function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`) }
 async function lockFixture(t) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'official-alpha2-lock-')); t.after(() => fsp.rm(root, { recursive: true, force: true }))
@@ -31,7 +57,7 @@ test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof so
   assert.equal(Object.keys(helper.ACCEPTED).length, 12)
   for (const [relative, expected] of Object.entries(accepted)) {
     assert.equal(helper.ACCEPTED[relative], expected, `reviewed acceptance drift: ${relative}`)
-    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `reviewed source drift: ${relative}`)
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), reviewedCurrentHash(relative, expected), `reviewed source drift: ${relative}`)
   }
   assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
@@ -50,7 +76,7 @@ test('v1.0.59 cloud performance recovery binds exact optimized sources and uncha
     'tests/agent-teams-ui.test.cjs': 'f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4'
   })
   for (const [relative, expected] of Object.entries(accepted)) {
-    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `optimized source drift: ${relative}`)
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), reviewedCurrentHash(relative, expected), `optimized source drift: ${relative}`)
   }
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
   for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', 'manifest descriptor chain', '同一 canonical text', '`WeakMap` identity', '没有提高阈值', '文件 `fsync` 与原子 rename', '`prepareAtomicArtifact`', 'pointer 临时文件', '`80.47 ms`', 'AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS', '`aria-busy`', '65/65', '40/40', '16/16', '79/79', '37/37', '`fiber.dispose()`', '--test-force-exit']) {
@@ -176,7 +202,7 @@ test('matrix is eight independent processes, includes pet/mobile/New Session/per
 
 test('publication scan binds accepted hashes and classifies every stale historical token', () => {
   const rows = helper.scanPublicationDocs(ROOT); assert.equal(rows.length, 3)
-  for (const row of rows) { assert.equal(row.sha256, helper.ACCEPTED[row.file]); assert.ok(row.stale.every(item => item.classification === 'superseded-history')) }
+  for (const row of rows) { assert.equal(row.sha256, reviewedCurrentHash(row.file, helper.ACCEPTED[row.file])); assert.ok(row.stale.every(item => item.classification === 'superseded-history')) }
 })
 
 test('CLI and executor require fresh roots, exact npm commands, full audit env, receipts and zero-skip enforcement', () => {

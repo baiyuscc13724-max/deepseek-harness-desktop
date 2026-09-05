@@ -21,22 +21,22 @@
 
 ## 下载
 
-下一发布候选：**v1.0.59** · 上一稳定版：**v1.0.58** · [查看候选更新内容](release-notes.md)
+下一发布候选：**v1.0.60** · 上一稳定版：**v1.0.59** · [查看候选更新内容](release-notes.md)
 
-> 已发布的 `v1.0.58`、其精确 Tag、Release 资产、组件、签名 Android APK、`release-manifest.json` 与 stable feeds 保持不可变。候选 `v1.0.59` 将官方 Harness 完整依赖图升级到 `0.1.2-alpha.5`，增强 Agent Teams 的全局自动接力、精确 lifecycle/admission、实时状态、Unicode 路径边界与热冷账本；投影缓存默认关闭并提供 `disabled | shadow | enabled` 可回滚三态，空 automatic round 不耗 Goal 追加预算。发送后控制、长会话最新区域和整枚“子代理会话：可继续”芯片也按单一键盘/至少 44×44 目标收敛，同时为 Mobile Sync、Schedule、设备预览和缓存维护补齐无损可靠性与性能改进。
+> 候选 `v1.0.60` 维持官方 Harness `0.1.2-alpha.5` 依赖，只修复团队范围扩张提醒、当前回合静默等待、停止后直接安全取消与关闭。不包含已取消的浏览器、离屏或原生预览任务；已发布版本的 Tag 与资产不移动、不覆盖。
 >
-> `v1.0.59` 尚未发布，也尚未进入 stable feed。下表继续提供不可变的 `v1.0.58` 稳定资产；新版本只有在安全审查、全量与移动门禁、正式云构建/签名和双云核对全部完成后，才会由唯一 resumable publisher 创建并让客户端发现。完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
+> `v1.0.60` 尚未发布，也尚未进入 stable feed。下表继续提供不可变的 `v1.0.59` 稳定资产；新版本只有在安全审查、全量与移动门禁、正式云构建/签名和双云核对全部完成后，才会由唯一 resumable publisher 创建并让客户端发现。完成前请以[永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest)为准。
 >
 > 此前的官方 `0.1.2-alpha.4` 与更早版本仅保留为可复核的历史迁移基线，不再描述当前候选运行时。
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-win-x64.exe) |
-| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-portable-x64.exe) |
-| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-mac-arm64.dmg) |
-| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Desktop-1.0.58-mac-x64.dmg) |
-| Android 手机端 1.0.58 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Mobile-1.0.58-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/Harness-Mobile-1.0.58-android-universal.apk.sha256) |
-| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.58/SHA256SUMS.txt) |
+| Windows 中文安装版 | 日常使用；会创建快捷方式并保留原安装位置 | [下载安装包](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.59/Harness-Desktop-1.0.59-win-x64.exe) |
+| Windows 便携版 | 不想安装；下载后直接运行 | [下载便携版](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.59/Harness-Desktop-1.0.59-portable-x64.exe) |
+| macOS Apple Silicon | M1/M2/M3/M4 系列 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.59/Harness-Desktop-1.0.59-mac-arm64.dmg) |
+| macOS Intel | Intel 处理器 Mac | [下载 DMG](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.59/Harness-Desktop-1.0.59-mac-x64.dmg) |
+| Android 手机端 1.0.59 | 扫码配对、四域工作台、原生输入、受限文档上传与固定手机控制 | [下载签名 APK](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.59/Harness-Mobile-1.0.59-android-universal.apk) · [SHA-256](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.59/Harness-Mobile-1.0.59-android-universal.apk.sha256) |
+| SHA-256 校验文件 | 手动核对本次桌面安装包完整性 | [下载校验文件](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/download/v1.0.59/SHA256SUMS.txt) |
 
 [进入永久最新版下载页](https://github.com/baiyuscc13724-max/deepseek-harness-desktop/releases/latest) · Windows 10/11 x64
 

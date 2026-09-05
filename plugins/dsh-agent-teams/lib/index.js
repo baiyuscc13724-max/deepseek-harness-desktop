@@ -2026,6 +2026,25 @@ function deriveAttention(team, teams = [team]) {
   if (failedDependencyTasks.length > 0) codes.push("failed_dependency");
   return { required: codes.length > 0, codes, failedMembers, unconfirmedMembers, strandedTasks, releasedTasks, failedDeliveries, submittedTasks, blockedTasks, failedDependencyTasks, bootstrapIncomplete, planDraft, capabilityUnknownTasks, outcomeUnknownTasks, provisioningOutcomeUnknown };
 }
+function projectTeamScope(team) {
+  // A task is not a user requirement. This is an observed work-plan baseline,
+  // not a semantic verdict that the user approved (or rejected) later scope.
+  const published = team.members.filter(member => member.kind === "worker")
+    .map(member => Date.parse(member.publishedAt)).filter(Number.isFinite);
+  const startedAt = published.length === 0 ? undefined : Math.min(...published);
+  const datedTasks = team.tasks.filter(task => Number.isFinite(Date.parse(task.createdAt)));
+  const baselineKnown = startedAt !== undefined && datedTasks.length === team.tasks.length;
+  const addedTaskCount = baselineKnown ? datedTasks.filter(task => Date.parse(task.createdAt) > startedAt).length : undefined;
+  return {
+    objective: team.objective ?? team.name,
+    baselineKnown,
+    ...(baselineKnown ? { initialTaskCount: team.tasks.length - addedTaskCount, addedTaskCount } : {}),
+    totalTaskCount: team.tasks.length,
+    remainingTaskCount: team.tasks.filter(task => !taskIsTerminal(task)).length,
+    reviewRecommended: baselineKnown && addedTaskCount > 0,
+    ...(baselineKnown && addedTaskCount > 0 ? { notice: "Tasks were added after work started. Compare them with the team's original objective and the user's latest request. Internal task growth is not proof of new user requirements; defer unrelated findings instead of automatically expanding the project." } : {}),
+  };
+}
 function projectTeam(team, nameTeams = []) {
   const members = team.members.map((member) => {
     const lifecycleState = effectiveMemberState(team, member);
@@ -2078,6 +2097,7 @@ function projectTeam(team, nameTeams = []) {
     state: lifecycleState,
     leadSessionId: team.rootLeadSessionId,
     objective: team.objective ?? team.name,
+    scope: projectTeamScope(team),
     status: lifecycleState,
     ...(team.closure === undefined ? {} : { closureOutcome: team.closure.outcome }),
     revision: team.revision ?? 1,
@@ -2434,6 +2454,7 @@ function projectTeamForUi(team, nameTeams = []) {
     rootLeadSessionId: team.rootLeadSessionId,
     name: team.name,
     objective: team.objective,
+    scope: projectTeamScope(team),
     revision: team.revision ?? 1,
     state: lifecycleState,
     status: lifecycleState,
@@ -3451,6 +3472,7 @@ function buildTeamLedgerEntry(team, ordinal, storage, artifact) {
     rootLeadSessionId: team.rootLeadSessionId,
     name: team.name,
     objective: team.objective,
+    scope: projectTeamScope(team),
     revision: team.revision ?? 1,
     state: team.state,
     createdAt: team.createdAt,
@@ -6225,8 +6247,11 @@ function rootHasSafeAutopilotAuthority(document, root) {
   return owned.length > 0 && owned.every((team) => teamHasSafeAutopilotAuthority(team, root));
 }
 function rootCanAutonomouslyWait(document, root) {
+  return rootCanWaitForWork(document, root, true);
+}
+function rootCanWaitForWork(document, root, requireAuthority) {
   const owned = document.teams.filter((team) => team.rootLeadSessionId === root.id && effectiveTeamState(team) === "active");
-  if (owned.length === 0 || !owned.every((team) => teamHasSafeAutopilotAuthority(team, root))) return false;
+  if (owned.length === 0 || requireAuthority && !owned.every((team) => teamHasSafeAutopilotAuthority(team, root))) return false;
   const teamsById = new Map(document.teams.map((team) => [team.id, team]));
   const ownedById = new Map(owned.map((team) => [team.id, team]));
   let hasLiveProducer = false;
@@ -6236,7 +6261,7 @@ function rootCanAutonomouslyWait(document, root) {
     if (settled.has(key)) return settled.get(key);
     if (visiting.has(key) || task.state === "submitted" || task.state === "cancelled") return false;
     if (taskSatisfiesDependency(task)) return true;
-    if (!ownedById.has(team.id) || !teamHasSafeAutopilotAuthority(team, root)) return false;
+    if (!ownedById.has(team.id) || requireAuthority && !teamHasSafeAutopilotAuthority(team, root)) return false;
     const assignee = task.assigneeSessionId === undefined ? undefined : memberOf(team, task.assigneeSessionId);
     if (task.state === "in_progress") {
       const live = memberCanStillProduceTaskProgress(assignee);
@@ -6277,6 +6302,67 @@ function rootCanAutonomouslyWait(document, root) {
   };
   const unfinished = owned.flatMap((team) => team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => ({ team, task })));
   return unfinished.length > 0 && unfinished.every(({ team, task }) => resolvesToLiveProducer(team, task)) && hasLiveProducer;
+}
+// Passive observation holds the current authorized tool call. It never mutates
+// a Goal, creates a wake, authorizes work, or resumes a paused team. In
+// particular, it does not pretend a missing autopilot grant is valid.
+function createTeamChangeWaiter(ctx, store) {
+  const pending = new Map();
+  let disposed = false;
+  return {
+    wait(root, teamId, signal) {
+      if (disposed) reject("team observation is disposed", "AGENT_TEAMS_CLOSING");
+      if (!signal || typeof signal.addEventListener !== "function") reject("passive waiting requires a cancellable tool turn", "AGENT_TEAMS_DRIVER_REQUIRED");
+      const initial = storeReadView(store);
+      const selected = resolveTeamForCaller(initial, optionalString(teamId, "teamId", 256), root.id);
+      requireLiveRootLead(ctx, selected, root);
+      const projectKey = projectKeyForRoot(root);
+      if (pending.has(root.id)) reject("one passive wait is already pending for this root", "AGENT_TEAMS_WAIT_PENDING");
+      return new Promise((resolve) => {
+        let previous = initial, done = false, unsubscribe = () => {};
+        const finish = (reason) => {
+          if (done) return;
+          done = true;
+          unsubscribe();
+          signal.removeEventListener("abort", onAbort);
+          pending.delete(root.id);
+          resolve({ reason, teamId: selected.id });
+        };
+        const onAbort = () => finish("cancelled");
+        const inspect = (current) => {
+          if (done) return;
+          const team = current.teams.find(candidate => candidate.id === selected.id);
+          if (ctx.agents.get(root.id) !== root || !ctx.agents.roots().includes(root)
+            || projectKeyForRoot(root) !== projectKey || !team || team.rootLeadSessionId !== root.id
+            || team.projectKey !== selected.projectKey) { finish("scope_changed"); return; }
+          if (effectiveTeamState(team) !== "active") { finish("stopped"); return; }
+          if (agentTeamAutopilotWakeRoots(previous, current).includes(root.id)) { finish("changed"); return; }
+          // If no producer remains, return an actionable state rather than hang.
+          // This completes the same tool call; it never allocates a Goal round.
+          if (!rootCanWaitForWork(current, root, false)) { finish("attention"); return; }
+          previous = current;
+        };
+        pending.set(root.id, finish);
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener("abort", onAbort, { once: true });
+        const observe = document => {
+          try { inspect(document ?? storeReadView(store)); }
+          catch { finish("unavailable"); }
+        };
+        try {
+          unsubscribe = store.subscribe(observe);
+          // Subscribe may synchronously deliver its initial snapshot.
+          if (done) unsubscribe();
+          if (signal.aborted) onAbort();
+          else observe();
+        } catch { finish("unavailable"); }
+      });
+    },
+    dispose() {
+      disposed = true;
+      for (const finish of [...pending.values()]) finish("cancelled");
+    },
+  };
 }
 function taskDependenciesAreSatisfied(document, team, task) {
   const local = new Map(team.tasks.map((candidate) => [candidate.id, candidate]));
@@ -7234,6 +7320,20 @@ function requireActiveTeam(team) {
 }
 function requireOpenTeam(team) {
   if (team.state === "closed") reject("team is closed", "AGENT_TEAMS_CLOSING");
+}
+// Stopping execution must not prevent an explicitly authorized root from
+// discarding work. This capability is derived by the public handler, never an
+// argument accepted from a model, and does not resume the team or its workers.
+function requireTeamCleanupState(team, allowPausedCleanup) {
+  if (allowPausedCleanup === true && (team.state === "paused" || USER_PAUSED_TEAMS.has(team.id))) return;
+  requireActiveTeam(team);
+}
+function authorizePausedTeamCleanup(ctx, execution) {
+  // No extra store read: it could let a queued message overtake shutdown.
+  // Exact team ownership and Stop/OCC are checked inside the serialized write.
+  return ctx.agents.get(execution.agent.id) === execution.agent
+    && ctx.agents.roots().includes(execution.agent)
+    && hasDirectHumanRootAuthority(ctx, execution);
 }
 function terminalizeTeamTasks(team, timestamp = now(), reason = "team closed before unfinished work was completed") {
   const cancelledTaskIds = [];
@@ -9187,7 +9287,7 @@ async function createTask(store, caller, input) {
     team.tasks.push(task);
     markPlanDraft(team);
     team.updatedAt = timestamp;
-    return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams) };
+    return { teamId: team.id, task: deriveTaskAcrossTeams(task, team, document.teams), scope: projectTeamScope(team) };
   });
 }
 
@@ -9352,7 +9452,7 @@ async function updateTask(store, caller, input) {
     const fixedRootCommandRequired = input.requireFixedRootCommand === true && FIXED_ROOT_TASK_COMMANDS.has(action) && (action !== "release" || isLead);
     let fixedRootCommand = prepareFixedRootTaskCommand(team, task, action, requestedState, input, document, fixedRootCommandRequired);
     if (fixedRootCommand?.replay !== undefined) return fixedRootCommand.replay;
-    requireActiveTeam(team);
+    requireTeamCleanupState(team, isLead && action === "cancel" && input.allowPausedCleanup === true);
     fixedRootCommand = validateNewFixedRootTaskCommand(team, task, action, fixedRootCommand);
     const blockedBy = deriveTaskAcrossTeams(task, team, document.teams).blockedBy;
     let fixedRootNoOp = false;
@@ -9890,7 +9990,7 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal, authoriz
     const preflight = await store.read((document) => {
       const team = findTeam(document, teamId);
       requireLiveRootLead(ctx, team, lead);
-      if (team.state !== "closing") requireActiveTeam(team);
+      if (team.state !== "closing") requireTeamCleanupState(team, input.allowPausedCleanup);
       const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
       if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
       const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
@@ -9901,27 +10001,31 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal, authoriz
     return store.mutate((document) => {
       const team = findTeam(document, teamId);
       requireLiveRootLead(ctx, team, lead);
-      if (team.state !== "closing") requireActiveTeam(team);
+      if (team.state !== "closing") requireTeamCleanupState(team, input.allowPausedCleanup);
       const unacceptedTaskIds = team.tasks.filter(taskAwaitsAcceptance).map((task) => task.id);
       if (!force && unacceptedTaskIds.length > 0) reject(`team has submitted tasks awaiting independent lead acceptance: ${unacceptedTaskIds.join(", ")}`, "AGENT_TEAMS_ACCEPTANCE_REQUIRED");
       const unfinishedTaskIds = team.tasks.filter((task) => !taskIsTerminal(task)).map((task) => task.id);
       if (!force && unfinishedTaskIds.length > 0) reject(`team has unfinished tasks; complete or cancel them before graceful shutdown: ${unfinishedTaskIds.join(", ")}`, "AGENT_TEAMS_UNFINISHED_TASKS");
       const workers = team.members.filter((member) => member.kind === "worker" && member.state !== "retired");
       if (!force && workers.some(memberRetirementBlocksRetry)) reject("a prior graceful team shutdown still lacks exact lifecycle resolution; use force only after confirming every target worker", "AGENT_TEAMS_SHUTDOWN_UNCONFIRMED");
+      const wasPaused = team.state === "paused" || USER_PAUSED_TEAMS.has(team.id);
+      const pauseEpoch = team.pauseEpoch ?? 0;
       team.state = "closing";
       const preparedWorkers = workers.map((member) => {
         const priorState = member.state;
-        markMemberShuttingDown(member, force, { pauseEpoch: team.pauseEpoch ?? 0, scope: "team" });
+        markMemberShuttingDown(member, force || wasPaused, { pauseEpoch, scope: "team" });
         return { ...clone(member), priorState, retirementIntentId: member.retirement?.intentId };
       });
       team.updatedAt = now();
-      return { teamId: team.id, workers: preparedWorkers };
+      return { teamId: team.id, workers: preparedWorkers, wasPaused, pauseEpoch };
     });
   }));
 
   let drainError;
   let outcomes = [];
-  if (force) {
+  // A paused team is drained without sending retirement prompts or waking it.
+  const drainOnly = force || prepared.wasPaused;
+  if (drainOnly) {
     const admissionBindings = prepared.workers.map((member) => ({ childId: member.sessionId, generation: admission?.current?.(member.sessionId)?.generation }));
     try {
       await drainContinuableChildrenWithDeadline(ctx, lead, prepared.workers.map((member) => member.sessionId), signal);
@@ -9964,8 +10068,10 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal, authoriz
   const result = await queueTeamOperation(store.filePath, prepared.teamId, () => store.runOperation(() => store.mutate((document) => {
     const team = findTeam(document, prepared.teamId);
     if (team.state === "closed") return { team: projectTeam(team), failures: [] };
+    requireLiveRootLead(ctx, team, lead);
+    if ((team.pauseEpoch ?? 0) !== prepared.pauseEpoch) reject("team stop epoch changed during cleanup", "AGENT_TEAMS_PAUSED");
     const failures = [];
-    if (force) {
+    if (drainOnly) {
       for (const preparedMember of prepared.workers) {
         const member = memberOf(team, preparedMember.sessionId);
         if (member === undefined) continue;
@@ -10021,7 +10127,7 @@ async function shutdownTeam(ctx, store, admission, lead, input, signal, authoriz
     const shouldClose = failures.length === 0 && team.members.filter((member) => member.kind === "worker").every((member) => member.state === "retired");
     if (shouldClose) closeTeamRecord(team, force ? "team was force-closed before unfinished work completed" : "team closed after all tracked work was submitted, accepted, or explicitly cancelled", { forced: force });
     else {
-      team.state = failures.length === 0 ? "closing" : "active";
+      team.state = prepared.wasPaused ? "paused" : failures.length === 0 ? "closing" : "active";
       team.updatedAt = now();
       team.closure = failures.length === 0 ? undefined : { outcome: "failed", attemptedAt: team.updatedAt, reason: "team shutdown failed before every member retirement was confirmed", forced: force, cancelledTaskIds: [], failures: failures.map((failure) => String(failure).slice(0, 4_096)) };
     }
@@ -10430,6 +10536,8 @@ function teamSystemPrompt(store) {
     "Before substantive work on every ordinary direct-human root turn, and before first creating an Agent Team during an exact admitted continuation of that root's active, armed goal, apply the three-level gate below and persist exactly one Host-scoped routing decision for that root/turn/project: all three levels call team_route_goal first; for Level 3, team_start/team_bootstrap then finalize that same immutable decision with the creation outcome and Host-validated team. Decision content is model-declared; the receipt is an audit record only, does not force or prove model-route selection, and model input cannot choose another root, project, turn, or team scope. When Level 3 conditions are met, choose exactly one creation path in that same authorized turn: use team_bootstrap when the complete bounded task/member plan is already known; otherwise use team_start and then the existing task/spawn tools. Never ask the user to send “continue” merely to cross from an admitted automatic goal round into safe internal team creation. Never call both team_start and team_bootstrap for the same team, and never replace the required visible managed members with multiple hidden ordinary subagents.",
     "Keep durable team task state synchronized at every handoff: members must explicitly complete finished tasks before their final report, and the root lead must reconcile every task before retiring members or closing the team. A report or successful subagent turn is not completion evidence. Graceful retirement and shutdown require no unfinished owned work; while automatic continuation is live, graceful retirement also refuses to remove the last assignable worker if unfinished unclaimed tasks remain. Assign another worker or reconcile that work first. Force shutdown remains an explicit recovery path and records unfinished work as cancelled rather than leaving permanent pending tasks.",
     "Once an Agent Team is established for the current goal, the root lead defaults to coordination only: decompose the user's objective into substantive outcomes, persist and assign durable tasks, coordinate dependencies and handoffs, monitor and reconcile task state, review and accept member deliverables, then perform final integration and user-facing synthesis. The root lead must not personally implement, research, design, test, or otherwise substitute for a core professional deliverable that is assigned or should be assigned to a member role. If substantive coverage is missing, create or restructure the relevant durable task and assign or expand the visible team instead of absorbing that work; the root may make only minimal glue changes required to integrate accepted member outputs.",
+    "Scope discipline: the team objective and latest direct user request bound the work. Status and task creation include an observed scope summary: tasks at first worker publication versus tasks added afterwards. These are internal task counts, not user requirement counts or approval evidence. Before adding work after execution starts, identify its connection to the requested outcome; defer unrelated findings instead of converting every discovery into another task. When the user asks to stop expansion, finish only the authorized necessary repair, validation and delivery. Do not resume cancelled work to simplify cleanup: in a direct-human root turn, paused tasks can be cancelled and the whole team can be closed directly; execution, reassignments and acceptance still remain behind Stop.",
+    "For normal waiting inside the current already-authorized turn, use team_status with wait_for_change:true and the selected team_id instead of polling tools or narrating unchanged progress. This passive, cancellable event subscription holds the current tool call; it does not park/resume a Goal, grant autopilot authority, start workers, or extend any round budget. Check wait.reason: cancelled/stopped means stop, attention means reconcile the actual pending decision or missing producer once, changed means inspect the newly returned state. Do not repeatedly call after an unchanged attention result. No-change waiting needs no assistant report; report real deliveries, scope changes, decisions and blockers only. The separate automatic Goal wake rules below remain unchanged.",
     autopilotPolicy.enabled
       ? `Agent Team waiting is event-driven, and the trusted Host automatic-continuation preference is ON with a fixed budget of at most ${autopilotPolicy.maxAdditionalRounds} extra goal rounds. First inspect team_status: only when every open team reports autopilot.status=active and every unfinished safe internal task is either owned by a live worker or blocked on such work may you end the current turn without polling team_status and without asking the user to send ‘continue’. The Host parks normal waiting; it is not a blocked Goal outcome. Only a new claim-bound durable task submission, a worker transition to failed, or a durable dependency/reference/satisfaction change wakes the exact fixed root through the established work-transition path. A first canonical durable expansion proposal is the sole additional structural-review wake. Worker release, ready/idle transitions, checkpoints, and duplicate projections do not spend a round. Reordered or synonymous duplicate expansion proposals also do not spend a round. If the goal's configured round slice is exhausted, the Host grants exactly one additional round for that durable transition. This grant is not a timer, retry loop, or permission upgrade: missing/revoked grants, paused teams, cross-project scope, unknown capabilities, file conflicts, non-none/outcome_unknown effects, explicit Stop/resume, real safety blockers, permission anomalies, orphan/outcome_unknown recovery, handoff, external confirmation boundaries, or the finite budget remain stopped and require manual recovery.`
       : "The trusted Host automatic-continuation preference is OFF. Do not end a coordinator turn on the assumption that worker progress will wake it, and do not claim that the Host will extend goal rounds. Finish currently actionable coordination in this turn; if a safe team must continue across future rounds, explain that automatic continuation can be explicitly enabled in Agent Teams settings. Never repeatedly ask the user to send ‘continue’ as a substitute for that setting.",
@@ -11408,6 +11516,8 @@ function registerProjectSessionLaunchTool(ctx, projectEntry, runtime, ready = Pr
 }
 
 function registerTools(ctx, store, ready, collaboration, admission, resolveUnknownAuthorization, authorizationProvider) {
+  const changeWaiter = createTeamChangeWaiter(ctx, store);
+  ctx.effect(() => () => changeWaiter.dispose());
   ctx.systemPrompt.section({
     name: "tool:agent-teams",
     order: 116,
@@ -11579,9 +11689,15 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
     presentCall: (args) => present("Reconcile member recovery", args.request_id),
   }));
   ctx.tools.register(defineTool({
-    name: "team_status", description: "Read one authenticated team in detail. If team_id is omitted while several are active, return only safe team summaries so the caller can choose explicitly.",
-    parameters: { team_id: { type: "string" } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => store.read((document) => {
+    name: "team_status", description: "Read one authenticated team in detail. If team_id is omitted while several are active, return only safe team summaries so the caller can choose explicitly. A root may set wait_for_change to hold this cancellable tool call silently while members work, until actionable progress or Stop, instead of polling and reporting unchanged status. Passive waiting never grants authority, changes a Goal, wakes workers, or resumes a team; it does not require an autopilot grant. Check wait.reason on return.",
+    parameters: { team_id: { type: "string" }, wait_for_change: { type: "boolean", description: "Root-only passive event wait in this current turn, not an automatic Goal wake. No polling timer. Stop cancels it." } }, output: TOOL_OUTPUT,
+    execute: run(async (args, execution, signal) => {
+      const projectKey = projectKeyForRoot(execution.agent);
+      const observation = args.wait_for_change === true ? await changeWaiter.wait(execution.agent, args.team_id, signal) : undefined;
+      if (observation?.reason === "scope_changed") reject("team observation scope changed", "AGENT_TEAMS_UNAUTHORIZED");
+      if (observation?.reason === "cancelled") return publicResult({ wait: observation });
+      if (observation !== undefined && (ctx.agents.get(execution.agent.id) !== execution.agent || projectKeyForRoot(execution.agent) !== projectKey)) reject("team observation root changed", "AGENT_TEAMS_UNAUTHORIZED");
+      const result = await store.read((document) => {
       const teamId = optionalString(args.team_id, "team_id", 256);
       if (teamId !== undefined) {
         const team = resolveTeamForCaller(document, teamId, execution.agent.id);
@@ -11593,7 +11709,15 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
       if (candidates.length > 1) return publicResult({ settings: document.settings, team: null, teams: candidates.map(projectTeamSummary), selectionRequired: true });
       const [team] = candidates;
       return publicResult({ settings: document.settings, team: projectTeam(team, document.teams.filter((candidate) => candidate.rootLeadSessionId === team.rootLeadSessionId)), teams: [projectTeamSummary(team)], selectionRequired: false });
-    })), presentCall: () => present("Read team status"),
+      });
+      if (observation !== undefined) {
+        const currentTeam = storeReadView(store).teams.find(team => team.id === observation.teamId);
+        if (signal.aborted) return publicResult({ wait: { ...observation, reason: "cancelled" } });
+        if (!currentTeam || currentTeam.rootLeadSessionId !== execution.agent.id || ctx.agents.get(execution.agent.id) !== execution.agent
+          || !ctx.agents.roots().includes(execution.agent) || projectKeyForRoot(execution.agent) !== projectKey) reject("team observation changed during result read", "AGENT_TEAMS_UNAUTHORIZED");
+      }
+      return observation === undefined ? result : { ...result, wait: observation };
+    }), presentCall: (args) => present(args.wait_for_change ? "Wait for team progress" : "Read team status"),
   }));
   ctx.tools.register(defineTool({
     name: "team_message", description: "Queue an authenticated coordinator relay. Cross-team relay requires target_team_id and is allowed only when the caller is the same fixed root lead of both peer teams. A queued result proves transport acceptance only, not that the recipient model received the body; never report queued as delivered.",
@@ -11671,7 +11795,10 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
   ctx.tools.register(defineTool({
     name: "team_task_update", description: "Atomically claim, release, submit completion for review, independently accept or reject, cancel, reopen, assign, or unassign a team task. An explicit action is always required. Fixed-root destructive commands (release/accept/reject/cancel/reopen/assign/unassign) require request_id, expected_task_revision, and expected_pause_epoch; member release instead requires the current claim_id and lease_epoch. Exact durable replays are idempotent and stale commands fail closed. Only the exact claimant may submit with its claimId/leaseEpoch. Submission remains non-authoritative until the fixed root accepts it; only acceptance marks completed and unlocks dependencies. Lifecycle history is append-only and survives reopen.",
     parameters: { team_id: { type: "string" }, task_id: { type: "string", required: true }, action: { type: "string", required: true, enum: ["claim", "release", "complete", "accept", "reject", "cancel", "reopen", "assign", "unassign"], description: "Explicit requested transition; repeated claim and exact submission replay are safe no-ops" }, state: { type: "string", enum: MUTABLE_TASK_STATES }, assignee_session_id: { type: "string", description: "target member id or unique member name for assign; must be the current assignee to be a no-op, otherwise the task must still be pending" }, claim_id: { type: "string", description: "Required for non-lead release/complete; exact claimId returned by claim." }, lease_epoch: { type: "number", description: "Required for non-lead release/complete; exact leaseEpoch returned by claim." }, request_id: { type: "string", description: "Required stable idempotency key for fixed-root destructive commands." }, expected_task_revision: { type: "number", description: "Required current task revision for fixed-root destructive commands." }, expected_pause_epoch: { type: "number", description: "Required current team pause epoch for fixed-root destructive commands." } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution) => publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch, requestId: args.request_id, expectedTaskRevision: args.expected_task_revision, expectedPauseEpoch: args.expected_pause_epoch, requireFixedRootCommand: true }))),
+    execute: run(async (args, execution) => {
+      const allowPausedCleanup = args.action === "cancel" && authorizePausedTeamCleanup(ctx, execution);
+      return publicResult(await updateTask(store, execution.agent, { teamId: args.team_id, taskId: args.task_id, action: args.action, state: args.state, assigneeSessionId: args.assignee_session_id, claimId: args.claim_id, leaseEpoch: args.lease_epoch, requestId: args.request_id, expectedTaskRevision: args.expected_task_revision, expectedPauseEpoch: args.expected_pause_epoch, requireFixedRootCommand: true, allowPausedCleanup }));
+    }),
     presentCall: (args) => present("Update team task", `${args.action}: ${args.task_id}`),
   }));
   ctx.tools.register(defineTool({
@@ -11785,7 +11912,10 @@ function registerTools(ctx, store, ready, collaboration, admission, resolveUnkno
   ctx.tools.register(defineTool({
     name: "team_shutdown", description: "Gracefully retire one member or close the whole team only after its durable tasks are reconciled. Graceful member retirement rejects unfinished owned tasks and, while automatic continuation is live, refuses to remove the last assignable worker if unfinished unclaimed tasks remain; graceful team shutdown rejects any unfinished task. Force member retirement releases owned tasks with an attention marker, while force team shutdown records unfinished tasks as cancelled before closing.",
     parameters: { team_id: { type: "string", description: "Optional only when the root lead owns exactly one unclosed team." }, member_session_id: { type: "string" }, force: { type: "boolean" } }, output: TOOL_OUTPUT,
-    execute: run(async (args, execution, signal) => publicResult(await shutdownTeam(ctx, store, admission, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force }, signal, authorizationProvider))),
+    execute: run(async (args, execution, signal) => {
+      const allowPausedCleanup = !args.member_session_id && authorizePausedTeamCleanup(ctx, execution);
+      return publicResult(await shutdownTeam(ctx, store, admission, execution.agent, { teamId: args.team_id, memberSessionId: args.member_session_id, force: args.force, allowPausedCleanup }, signal, authorizationProvider));
+    }),
     presentCall: (args) => present("Shut down team", args.team_id),
   }));
 }
@@ -13403,6 +13533,8 @@ export {
   createProjectRootRecoveryScheduler,
   rootProjectTaskWakeEvidence,
   rootCanAutonomouslyWait,
+  createTeamChangeWaiter,
+  projectTeamScope,
   rootHasSafeAutopilotAuthority,
   agentTeamAutopilotWakeRoots,
   reconcileProjectTaskWakeRoot,

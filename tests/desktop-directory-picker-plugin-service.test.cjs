@@ -11,7 +11,7 @@ test('desktop directory picker installs through the supported DSH Web profile pa
   const root = await mkdtemp(path.join(os.tmpdir(), 'desktop-directory-picker-'))
   try {
     const result = await ensureDesktopDirectoryPickerPlugin({ dshHome: root, bundledRoot })
-    assert.equal(result.version, '1.0.59')
+    assert.equal(result.version, '1.0.60')
     assert.equal(result.patchChanged, true)
     const profile = path.join(root, 'profiles', 'web')
     const patch = await readFile(path.join(profile, 'cordis.patch.yml'), 'utf8')

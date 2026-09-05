@@ -7,7 +7,7 @@ const DEFAULT_FETCH_PROVIDER_ID = 'http'
 const DEFAULT_TIMEOUT_MS = 20_000
 const DEFAULT_MAX_RESULTS = 10
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36 HarnessDesktop/1.0.59'
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36 HarnessDesktop/1.0.60'
 
 const name = 'desktop-public-web-search'
 const inject = ['web']

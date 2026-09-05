@@ -451,6 +451,44 @@ test('closing a team cancels every unfinished task without rewriting completed a
   assert.deepEqual(mod.deriveAttention(team).strandedTasks, [])
 })
 
+test('paused cleanup drains workers without followup and preserves failure and newer Stop fences', async () => {
+  for (const mode of ['graceful', 'force', 'failure', 'new-stop']) {
+    const fx = await fixture(), lead = { id: `paused-cleanup-${mode}` }, drained = []
+    let team
+    const ctx = {
+      agents: { get: id => id === lead.id ? lead : undefined, roots: () => [lead] },
+      subagents: {
+        [queueSubagentPrompt]() { throw new Error('paused cleanup must never prompt a worker') },
+        async drainContinuableChildren(_lead, ids) {
+          drained.push([...ids])
+          if (mode === 'failure') throw new Error('fixture drain failure')
+          if (mode === 'new-stop') await fx.store.mutate(document => {
+            const current = document.teams.find(candidate => candidate.id === team.id)
+            current.state = 'paused'; current.pauseEpoch++
+          })
+        }
+      }
+    }
+    try {
+      await fx.store.mutate(document => { document.settings.enabled = true })
+      team = await fx.mod.createTeam(fx.store, lead, { objective: 'Close only the already stopped team' })
+      await fx.store.mutate(document => {
+        const current = document.teams.find(candidate => candidate.id === team.id)
+        current.state = 'paused'; current.pauseEpoch = 1
+        current.members.push(worker('paused-worker', 'Paused'))
+      })
+      const cleanup = fx.mod.shutdownTeam(ctx, fx.store, undefined, lead, { teamId: team.id, force: mode !== 'graceful', allowPausedCleanup: true }, new AbortController().signal)
+      if (mode === 'new-stop') await assert.rejects(cleanup, error => error.code === 'AGENT_TEAMS_PAUSED')
+      else await cleanup
+      const current = fx.store.snapshot().teams.find(candidate => candidate.id === team.id)
+      assert.deepEqual(drained, [['paused-worker']])
+      assert.equal(current.state, ['failure', 'new-stop'].includes(mode) ? 'paused' : 'closed')
+      assert.equal(current.pauseEpoch, mode === 'new-stop' ? 2 : 1)
+      if (mode === 'failure') assert.equal(current.members.find(member => member.sessionId === 'paused-worker').shutdownUnconfirmed, true)
+    } finally { fx.store.close(); await rm(fx.root, { recursive: true, force: true }) }
+  }
+})
+
 test('force shutdown retries a crash-persisted closing team to one normalized closed state', async () => {
   const fx = await fixture()
   const lead = { id: 'closing-retry-lead' }
