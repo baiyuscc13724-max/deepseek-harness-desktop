@@ -2863,8 +2863,8 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }
     currentGoal = undefined
   } finally {
-    for (const cleanup of effectCleanups.reverse()) await cleanup()
     authorityStore?.close()
+    for (const cleanup of effectCleanups.reverse()) await cleanup()
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
     await rm(root, { recursive: true, force: true })
