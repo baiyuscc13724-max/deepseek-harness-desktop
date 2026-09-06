@@ -464,7 +464,10 @@ test('desktop shell owns session-menu persistence independently of the random ru
     readFile(path.join(root, 'electron/guest-preload.cjs'), 'utf8'),
     readFile(path.join(root, 'electron/session-menu-preload.cjs'), 'utf8')
   ])
-  assert.match(main, /'--port',\s*'0'/u)
+  assert.match(main, /require\('\.\/bridge\/runtime-port\.cjs'\)/u)
+  assert.match(main, /const runtimePort = await allocateRuntimePort\(\)/u)
+  assert.match(main, /'--port',\s*String\(runtimePort\)/u)
+  assert.doesNotMatch(main, /'--port',\s*'0'|explicitly-allowed-ports|ignore-certificate-errors/u)
   assert.match(main, /function assertLocalRuntimeSender\(event\)[\s\S]{0,500}senderOrigin === runtimeOrigin/u)
   assert.match(main, /ipcMain\.handle\('sessionMenu:sync'[\s\S]{0,220}assertLocalRuntimeSender\(event\)/u)
   assert.match(main, /ipcMain\.handle\('sessionMenu:setFlag'[\s\S]{0,220}updateSessionMenuFlag/u)
