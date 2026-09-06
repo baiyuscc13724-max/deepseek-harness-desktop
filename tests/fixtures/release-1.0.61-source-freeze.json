@@ -1,9 +1,10 @@
 {
   "README.md": "f41d846e085ec35097c4aea31ddc49c763eb483da1bf398f986d93ac8ee0af9a",
   "CHANGELOG.md": "0109260bb4c5e2ce19ac1f76f6118eb061fe1d707b6354a581753ca11b215ee0",
-  "release-notes.md": "17ebf93243ffab81e37a6a8cda5e6d45432529122764e7aae1a620244631abed",
+  "release-notes.md": "9168405eeeb950b18970eda16f56a55fbb6338f7c55d523a347f292b6c8d9276",
   "tests/session-experience.test.cjs": "cd7c1312ba508c1f80b5d02d1a3810c36f6c533b5822451fd3babb6c9dc1d62e",
-  "docs/SECURITY-REVIEW-v1.0.61.zh-CN.md": "3cda406738fb44deb7f5f64c03fec0bd64747676dddfff5c9ea72aabdb87d22f",
+  "docs/SECURITY-REVIEW-v1.0.61.zh-CN.md": "511a85b182ec4df461d74d4b4d89af3b6f403b13c71d6401d088d1725d2a978f",
+  "tests/project-business-sync-api.test.cjs": "770b333c45cb876adbcbd33c8164486db600bd4f63bc58fb7fca7c4e0480277c",
   "package.json": "b247a60b10811bd4b35d8d25e718002ca2eb21df1dcee68bb6013995d816450c",
   "package-lock.json": "52b072fa33a788f7a7e6446f8cfcbf3fb8d46b9f7c63243cca9104810190ea1d",
   "scripts/verify-static.mjs": "b703f47f5ebb7fa470de81b34463704f2191956cd1f44055e91763e201319670",

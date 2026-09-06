@@ -26,7 +26,7 @@ const REVIEWED_1060 = Object.freeze({
 })
 // A candidate source freeze is not a passing test report, Host approval, or release evidence.
 const FROZEN_1061_PATH = 'tests/fixtures/release-1.0.61-source-freeze.json'
-const FROZEN_1061_SHA256 = '83fb43e904a4101b88ac773d86aff795c1d007d0138c8a276325c0ee1b0ddd34'
+const FROZEN_1061_SHA256 = '5c2fce173b0496007f86670cdb18d34fefff746a5cd62eddd5447ca9ca59f848'
 const FROZEN_1061 = Object.freeze(require('./fixtures/release-1.0.61-source-freeze.json'))
 function reviewedCurrentHash(relative, historical) {
   const version = require('../package.json').version
@@ -45,7 +45,7 @@ test('v1.0.60 historical successor remains bound without replacing historical ac
 test('v1.0.61 candidate binds the exact PR47 and mobile successor sources without implying new validation', () => {
   assert.equal(require('../package.json').version, '1.0.61')
   assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, FROZEN_1061_PATH)), FROZEN_1061_SHA256)
-  assert.equal(Object.keys(FROZEN_1061).length, 38)
+  assert.equal(Object.keys(FROZEN_1061).length, 39)
   const review = fs.readFileSync(path.join(ROOT, 'docs/SOURCE-FREEZE-v1.0.61.zh-CN.md'), 'utf8')
   assert.ok(review.includes(FROZEN_1061_SHA256))
   assert.ok(review.includes('28c35a933aa626d5a4e7ffaf1206ac15b9e1748f'))

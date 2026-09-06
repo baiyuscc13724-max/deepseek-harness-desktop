@@ -62,13 +62,41 @@ async function recoverBoth(authority, collaborator, rounds = 12) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }
-async function waitFor(predicate, message, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs
-  do {
-    const value = await predicate()
-    if (value) return value
-  } while (Date.now() < deadline)
-  assert.fail(message)
+// Receipts and event-page cache convergence are separate durable operations.
+// Allow one 60s refresh plus a 30s retry and 30s of loaded-runner I/O, not a 10s
+// performance assertion. Observe the same refetch signal used by the API SSE.
+function waitFor(runtime, predicate, message, timeoutMs = 120_000) {
+  return new Promise((resolve, reject) => {
+    let active = true, checking = false, dirty = false, timer, unsubscribe = () => {}
+    const finish = (error, value) => {
+      if (!active) return
+      active = false
+      clearTimeout(timer)
+      unsubscribe()
+      if (error) reject(error); else resolve(value)
+    }
+    const check = () => {
+      if (!active) return
+      dirty = true
+      if (checking) return
+      checking = true
+      void (async () => {
+        try {
+          while (active && dirty) {
+            dirty = false
+            const value = await predicate()
+            if (active && value) finish(undefined, value)
+          }
+        } catch (error) { finish(error) }
+        finally { checking = false; if (active && dirty) check() }
+      })()
+    }
+    // Subscribe before the initial read, and coalesce notifications during a
+    // pending read. No lost wakeup, concurrent reads, polling sleep, or replay.
+    unsubscribe = runtime.subscribe(signal => { if (signal.type === 'refetch') check() })
+    timer = setTimeout(() => finish(new Error(`${message} within ${timeoutMs}ms`)), timeoutMs)
+    check()
+  })
 }
 
 async function fixture() {
@@ -164,17 +192,22 @@ test('M4 collaborator API exposes safe cache, exact remote writes, fixed denials
     try { fx.collaboratorEntry.lanClient = { canSend: () => false }; queued = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, claimInput); exactRetry = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, claimInput); drift = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, { ...claimInput, type: 'transition', payload: { to: 'in_progress' } }) }
     finally { fx.collaboratorEntry.lanClient = liveLan }
     assert.equal(queued.res.status, 200); assert.deepEqual(queued.data, { queued: true, commandId: 'remote_api_claim', resource: 'task' }); assert.deepEqual(exactRetry.data, queued.data, 'an offline exact retry reuses the durable command'); assert.equal(drift.res.status, 409); assert.equal(drift.data.error.code, 'PROJECT_BUSINESS_SYNC_REPLAY_CONFLICT')
-    const completed = await waitFor(async () => {
-      await recoverBoth(fx.authorityBusiness, fx.collaboratorBusiness, 2)
+    // Initiate recovery once; surface errors rather than swallowing them in a
+    // repeated allSettled loop which produces more hello/pull I/O while waiting.
+    await Promise.all([fx.authorityBusiness.recover(), fx.collaboratorBusiness.recover()])
+    const completed = await waitFor(fx.collaboratorBusiness, async () => {
       const result = await invoke(fx.routes, taskActionPath, 'POST', taskActionPath, claimInput)
-      return result.res.status === 200 && result.data.queued === false ? result : undefined
+      assert.equal(result.res.status, 200)
+      return result.data.queued === false ? result : undefined
     }, 'remote API claim did not reach its terminal receipt')
     assert.equal(completed.res.status, 200); assert.equal(completed.data.queued, false); assert.equal(completed.data.result.outcome, 'accepted'); assert.equal(completed.data.result.task.taskRef, fx.firstTask.taskRef)
     for (const hidden of ['messageRef', 'requestDigest', 'actorRef', 'deviceRef']) assert.equal(JSON.stringify(completed.data).includes(hidden), false)
-    const claimedState = await waitFor(async () => {
-      await recoverBoth(fx.authorityBusiness, fx.collaboratorBusiness, 2)
+    await Promise.all([fx.authorityBusiness.recover(), fx.collaboratorBusiness.recover()])
+    const claimedState = await waitFor(fx.collaboratorBusiness, async () => {
       const result = await invoke(fx.routes, taskStatePath)
-      return result.data.tasks.find(task => task.taskRef === fx.firstTask.taskRef).hasAssignee ? result : undefined
+      assert.equal(result.res.status, 200)
+      const task = result.data.tasks.find(task => task.taskRef === fx.firstTask.taskRef)
+      return task?.hasAssignee === true && task.revision >= completed.data.result.task.revision ? result : undefined
     }, 'remote claim did not reach the collaborator task cache')
     assert.equal(claimedState.data.tasks.find(task => task.taskRef === fx.firstTask.taskRef).hasAssignee, true)
 

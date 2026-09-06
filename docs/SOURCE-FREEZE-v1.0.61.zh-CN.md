@@ -8,9 +8,9 @@
 
 ## 精确冻结
 
-`tests/fixtures/release-1.0.61-source-freeze.json` 记录 38 项 canonical LF SHA-256，包含 PR 的产品/回归来源、14 个手机修复文件、候选说明、根依赖身份与既有静态门禁，以及发布器报错后必要补正的会话端口持久化契约和本版本安全风险记录。该文件本身的 canonical LF SHA-256 为：
+`tests/fixtures/release-1.0.61-source-freeze.json` 记录 39 项 canonical LF SHA-256，包含 PR 的产品/回归来源、14 个手机修复文件、候选说明、根依赖身份与既有静态门禁，以及发布器报错后必要补正的会话端口持久化契约、本版本安全风险记录和云端协作缓存事件等待契约。该文件本身的 canonical LF SHA-256 为：
 
-`83fb43e904a4101b88ac773d86aff795c1d007d0138c8a276325c0ee1b0ddd34`
+`5c2fce173b0496007f86670cdb18d34fefff746a5cd62eddd5447ca9ca59f848`
 
 历史 1.0.59 ACCEPTED、1.0.60 REVIEWED 映射和安全审查文件保持原样。版本分支只允许此精确 1.0.61 候选的列明差异；未列明的历史来源继续使用旧摘要。冻结用于检测整合后漂移，**不是 Host 批准、测试通过或发布成功证据**，更不是放宽门禁的理由。
 
