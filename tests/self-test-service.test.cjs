@@ -35,7 +35,8 @@ test('runtime probe uses the isolated prepared DSH home', async () => {
       probeUrl: async url => url === 'http://127.0.0.1:43123'
     })
     assert.equal(await resultPromise, true)
-    assert.deepEqual(spawned.args, ['cli.js', 'web', '--port', '0', '--no-open'])
+    assert.deepEqual(spawned.args, ['cli.js', 'web', '--port', spawned.args[3], '--no-open'])
+    assert.ok(Number(spawned.args[3]) >= 49152 && Number(spawned.args[3]) <= 65535)
     assert.equal(spawned.options.env.DSH_HOME, runtimeHome)
     assert.equal(spawned.options.env.ELECTRON_RUN_AS_NODE, '1')
     assert.equal(spawned.options.env.HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER, '1')

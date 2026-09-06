@@ -136,7 +136,7 @@ test('Agent Teams coalesces monotonic snapshots and recovers one SSE subscriptio
   assert.match(source, /snapshotFallbackTimer = setTimeout/u)
   assert.match(source, /typeof current\.addEventListener !== "function" \|\| typeof current\.close !== "function"/u)
   assert.match(source, /if \(current && typeof current\.close === "function"\) current\.close\(\)/u)
-  assert.match(source, /if \(!alive \|\| hidden\(\) \|\| sourceOpen \|\| pollTimer\) return/u)
+  assert.match(source, /if \(!alive \|\| hidden\(\) \|\| sourceOpen \|\| pollTimer \|\| snapshotFallbackTimer !== null\) return/u)
   assert.match(source, /if \(!alive \|\| hidden\(\) \|\| source\) return/u)
   assert.match(source, /if \(loadPromise\) return loadPromise/u)
   assert.match(source, /Math\.min\(60000, 15000 \* Math\.pow\(2, Math\.min\(pollAttempt, 2\)\)\)/u)
