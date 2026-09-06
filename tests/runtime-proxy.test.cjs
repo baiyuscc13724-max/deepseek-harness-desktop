@@ -7,7 +7,7 @@ const { buildRuntimeProxyEnv, hasExplicitProxy, proxyFromElectronRules } = requi
 
 test('desktop runtime never opens a duplicate external Web window', () => {
   const main = readFileSync(path.resolve(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
-  assert.match(main, /\[\.\.\.resolved\.argsPrefix, 'web', '--port', '0', '--no-open'\]/)
+  assert.match(main, /\[\.\.\.resolved\.argsPrefix, 'web', '--port', String\(runtimePort\), '--no-open'\]/)
 })
 
 test('inherits explicit proxy variables and enables native Node proxy support', () => {

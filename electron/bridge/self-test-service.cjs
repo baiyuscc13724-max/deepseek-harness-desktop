@@ -1,5 +1,6 @@
 const { access, mkdir, mkdtemp, rm, unlink, writeFile } = require('node:fs/promises')
 const { spawn } = require('node:child_process')
+const { allocateRuntimePort } = require('./runtime-port.cjs')
 const os = require('node:os')
 const path = require('node:path')
 const { runtimeAuthCookieHeaderFromSetCookie } = require('./runtime-session-auth.cjs')
@@ -132,7 +133,8 @@ async function runtimeWebBootable(dsh, options = {}) {
       const stdoutLog = { pending: '', suppressUntilLineBreak: false }
       const stderrLog = { pending: '', suppressUntilLineBreak: false }
       try {
-        child = spawnImpl(dsh.command, [...dsh.argsPrefix, 'web', '--port', '0', '--no-open'], {
+        const runtimePort = await allocateRuntimePort()
+        child = spawnImpl(dsh.command, [...dsh.argsPrefix, 'web', '--port', String(runtimePort), '--no-open'], {
           env: { ...process.env, ...(dsh.env || {}), DSH_HOME: runtimeHome, HARNESS_DESKTOP_MARKETPLACE_PATCH_OWNER: '1' },
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe']

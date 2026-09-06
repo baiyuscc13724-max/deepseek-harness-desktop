@@ -3472,7 +3472,6 @@ function buildTeamLedgerEntry(team, ordinal, storage, artifact) {
     rootLeadSessionId: team.rootLeadSessionId,
     name: team.name,
     objective: team.objective,
-    scope: projectTeamScope(team),
     revision: team.revision ?? 1,
     state: team.state,
     createdAt: team.createdAt,

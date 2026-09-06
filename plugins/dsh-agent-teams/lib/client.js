@@ -824,9 +824,23 @@ window.__ModuleLoader__.load({
     function taskDetailUrl(sessionId, selectedTeamId, selectedTaskId) { return "/api/agent-teams/task-detail?sessionId=" + encodeURIComponent(sessionId) + "&teamId=" + encodeURIComponent(selectedTeamId) + "&taskId=" + encodeURIComponent(selectedTaskId); }
     function taskDetailEventsUrl(sessionId, selectedTeamId, selectedTaskId) { return "/api/agent-teams/task-detail/events?sessionId=" + encodeURIComponent(sessionId) + "&teamId=" + encodeURIComponent(selectedTeamId) + "&taskId=" + encodeURIComponent(selectedTaskId); }
     function fetchState(sessionId, selectedTeamId) {
-      return fetch(stateUrl(sessionId, selectedTeamId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
-        return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
+      var controller = typeof AbortController === "function" ? new AbortController() : null, timer, cancel;
+      var deadline = new Promise(function (_, reject) {
+        cancel = function () { clearTimeout(timer); reject(new Error("Team state request cancelled")); if (controller) controller.abort(); };
+        timer = setTimeout(function () {
+          var error = new Error("Team state request timed out"); error.code = "AGENT_TEAMS_STATE_TIMEOUT";
+          reject(error); if (controller) controller.abort();
+        }, 10000);
       });
+      var request = Promise.resolve().then(function () {
+        return fetch(stateUrl(sessionId, selectedTeamId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" }, signal: controller ? controller.signal : undefined });
+      }).then(function (response) {
+        return response.json().then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
+      });
+      // Bound both response headers and body parsing, even without AbortController.
+      var result = Promise.race([request, deadline]).finally(function () { clearTimeout(timer); });
+      result.cancel = cancel;
+      return result;
     }
     function fetchTaskDetail(sessionId, selectedTeamId, selectedTaskId) {
       return fetch(taskDetailUrl(sessionId, selectedTeamId, selectedTaskId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
@@ -925,8 +939,9 @@ window.__ModuleLoader__.load({
       var connectionPair = useState("disconnected"), connection = connectionPair[0], setConnection = connectionPair[1];
       var reloadRef = useRef(function () {}), acceptRef = useRef(function (next) { setState(next); }), failureRef = useRef(0), versionRef = useRef(""), clockRef = useRef(null);
       useEffect(function () {
-        if (!sessionId) return;
+        if (!sessionId) { setState(null); setError("AGENT_TEAMS_SESSION_CONTEXT_UNAVAILABLE"); setConnection("stale"); return; }
         var alive = true, source = null, sourceUpdate = null, sourceOpen = false, streamNeedsSnapshot = true, pollTimer = null, pollAttempt = 0, publishFrame = null, pendingSnapshot = null, pendingClock = null, loadPromise = null, snapshotFallbackTimer = null, loadGeneration = 0, streamEpoch = 0;
+        var cancelLoad = null;
         versionRef.current = "";
         clockRef.current = null;
         function hidden() { return typeof document !== "undefined" && document.visibilityState === "hidden"; }
@@ -969,7 +984,9 @@ window.__ModuleLoader__.load({
         function load(silent, expectedStreamEpoch) {
           if (loadPromise) return loadPromise;
           var generation = loadGeneration;
-          var operation = fetchState(sessionId, selectedTeamId).then(function (next) {
+          var request = fetchState(sessionId, selectedTeamId);
+          cancelLoad = request.cancel;
+          var operation = request.then(function (next) {
             if (alive && generation === loadGeneration && (expectedStreamEpoch === undefined || streamEpoch === expectedStreamEpoch)) {
               failureRef.current = 0;
               streamNeedsSnapshot = false;
@@ -980,8 +997,8 @@ window.__ModuleLoader__.load({
           }).catch(function (err) {
             if (alive && generation === loadGeneration) {
               failureRef.current += 1;
-              if (!silent) setError(errorText(err));
-              else if (failureRef.current >= 2) setConnection("stale");
+              if (!silent || !versionRef.current) setError(errorText(err));
+              if (failureRef.current >= 2) setConnection("stale");
             }
             throw err;
           });
@@ -989,7 +1006,7 @@ window.__ModuleLoader__.load({
           return loadPromise;
         }
         function closeSource(invalidateLoads) {
-          if (invalidateLoads) loadGeneration += 1;
+          if (invalidateLoads) { loadGeneration += 1; if (cancelLoad) cancelLoad(); cancelLoad = null; }
           var current = source;
           source = null;
           sourceOpen = false;

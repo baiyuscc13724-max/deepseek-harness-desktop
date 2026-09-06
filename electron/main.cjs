@@ -10,6 +10,7 @@ const AdmZip = require('adm-zip')
 const WebSocket = require('ws')
 
 const { resolveDshBin } = require('./bridge/dsh-resolver.cjs')
+const { allocateRuntimePort } = require('./bridge/runtime-port.cjs')
 const { ensureRuntimeNodeModules } = require('./bridge/runtime-bundle-service.cjs')
 const { ensureModelRouting, getModelRouting, saveModelRouting } = require('./bridge/model-routing-service.cjs')
 const { assertWallpaperLibraryCapacity, cleanupOrphanedWallpaperStorage, createWallpaperMediaResponse, createWallpaperMutationQueue, createWallpaperVideoResponse, installManagedWallpaperCopy, isManagedWallpaperFileName, resolveWallpaperEngineInput, resolveWallpaperEngineProject, revalidateProjectMediaPath, safeManagedWallpaperPath, wallpaperKind, wallpaperLibraryMediaUrl, wallpaperMediaRevision, wallpaperMime, wallpaperStorageUsageBytes } = require('./bridge/wallpaper-service.cjs')
@@ -4147,7 +4148,8 @@ async function startRuntimeAttempt(generatedProfileRecoveryAttempted) {
     const securedRuntimeEnv = secretService ? secretService.runtimeEnvironment(runtimeEnv) : runtimeEnv
     const authorizedRuntimeEnv = authorizationService ? authorizationService.runtimeEnvironment(securedRuntimeEnv) : securedRuntimeEnv
     const sessionLaunchRuntimeEnv = sessionLaunchService ? sessionLaunchService.runtimeEnvironment(authorizedRuntimeEnv) : authorizedRuntimeEnv
-    child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', '0', '--no-open'], {
+    const runtimePort = await allocateRuntimePort()
+    child = spawnCommand(resolved.command, [...resolved.argsPrefix, 'web', '--port', String(runtimePort), '--no-open'], {
       cwd: runtimePaths.workspace,
       windowsHide: true,
       detached: process.platform !== 'win32',
