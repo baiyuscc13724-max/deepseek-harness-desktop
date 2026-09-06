@@ -149,6 +149,114 @@ test('protocol mismatch never dispatches queued actions', () => {
   assert.equal(broker.state([{ id: 'phone-a', name: 'Pixel' }]).devices[0].queued, 1)
 })
 
+test('status and enqueue share the exact freshness boundary and reconnect requires fresh status', () => {
+  const { broker, advance } = readyBroker()
+  const state = () => broker.state([{ id: 'phone-a' }]).devices[0]
+  const enqueue = () => broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+  advance(15_000)
+  assert.equal(state().ready, true)
+  const accepted = enqueue()
+  broker.cancel(accepted.id)
+  advance(1)
+  assert.equal(state().online, false)
+  assert.equal(state().ready, false)
+  assert.throws(enqueue, /状态已过期/)
+  assert.equal(broker.poll('phone-a', 1).command, null)
+  assert.throws(() => broker.enqueue('unknown', { action: 'tap' }), /尚未开启/)
+  broker.reportStatus('phone-a', { protocolVersion: 1, enabled: true, ready: true, capabilities: ['tap'] })
+  assert.equal(state().ready, true)
+  assert.equal(broker.poll('phone-a', 1).command, null)
+  assert.equal(enqueue().action, 'tap')
+})
+
+test('future-dated status fails closed after a clock rollback', () => {
+  const { broker, advance } = readyBroker()
+  advance(-1)
+  assert.equal(broker.state([{ id: 'phone-a' }]).devices[0].online, false)
+  assert.throws(() => broker.enqueue('phone-a', { action: 'tap' }), /状态已过期/)
+})
+
+test('undispatched expiry has a terminal receipt and never dispatches or accepts late success', () => {
+  const { broker, advance } = readyBroker()
+  const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+  advance(119_999)
+  assert.equal(broker.result(command.id), null)
+  advance(1)
+  assert.equal(broker.result(command.id).code, 'EXPIRED_NOT_DISPATCHED')
+  assert.equal(broker.result(command.id).ok, false)
+  assert.equal(broker.poll('phone-a', 1).command, null)
+  assert.throws(() => broker.reportResult('phone-a', { id: command.id, ok: true }), /未知或已失效/)
+  assert.equal(broker.result(command.id).code, 'EXPIRED_NOT_DISPATCHED')
+})
+
+test('delivered expiry is unconfirmed and a device-bound late receipt resolves it without replay', () => {
+  const { broker, advance } = readyBroker()
+  const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+  broker.poll('phone-a', 1)
+  advance(119_999)
+  assert.equal(broker.result(command.id), null)
+  advance(1)
+  const expired = broker.result(command.id)
+  assert.equal(expired.code, 'RESULT_UNCONFIRMED')
+  assert.equal(expired.ok, false)
+  assert.equal(broker.poll('phone-a', 1).command, null)
+  assert.throws(() => broker.reportResult('phone-b', { id: command.id, ok: true }), /未知或已失效/)
+  assert.deepEqual(broker.result(command.id), expired)
+  const receipt = broker.reportResult('phone-a', { id: command.id, ok: true, code: 'OK' })
+  assert.equal(receipt.ok, true)
+  assert.deepEqual(broker.result(command.id), receipt)
+  assert.throws(() => broker.reportResult('phone-a', { id: command.id, ok: false }), /未知或已失效/)
+  assert.equal(broker.poll('phone-a', 1).command, null)
+})
+
+test('late result enforces expiry even when no observer triggered expiry first', () => {
+  for (const delivered of [false, true]) {
+    const { broker, advance } = readyBroker()
+    const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+    if (delivered) broker.poll('phone-a', 1)
+    advance(120_000)
+    const report = () => broker.reportResult('phone-a', { id: command.id, ok: false, code: 'PHONE_FAILED' })
+    if (delivered) assert.equal(report().code, 'PHONE_FAILED')
+    else assert.throws(report, /未知或已失效/)
+  }
+})
+
+test('late phone receipts preserve cancellation and stop history', () => {
+  for (const action of ['cancel', 'stop']) {
+    const { broker, advance } = readyBroker()
+    const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+    broker.poll('phone-a', 1)
+    if (action === 'cancel') broker.cancel(command.id)
+    else broker.stop('phone-a')
+    broker.poll('phone-a', 1) // Consume directive; never replay the action.
+    advance(120_000)
+    assert.equal(broker.result(command.id).code, action === 'cancel' ? 'CANCEL_UNCONFIRMED' : 'STOP_UNCONFIRMED')
+    const result = broker.reportResult('phone-a', { id: command.id, ok: true })
+    assert.equal(result.ok, true)
+    assert.ok(result[action === 'cancel' ? 'cancelRequestedAt' : 'stopRequestedAt'])
+    assert.equal(broker.poll('phone-a', 1).command, null)
+  }
+})
+
+test('expired receipt correlation is bounded with result retention', () => {
+  const { broker, advance } = readyBroker()
+  const commands = []
+  for (let index = 0; index < 129; index += 1) {
+    const command = broker.enqueue('phone-a', { action: 'tap', payload: { x: 1, y: 2 } })
+    commands.push(command)
+    broker.poll('phone-a', 1)
+  }
+  advance(120_000)
+  assert.equal(broker.result(commands[0].id), null)
+  assert.throws(() => broker.reportResult('phone-a', { id: commands[0].id, ok: true }), /未知或已失效/)
+  assert.equal(broker.results.size, 128)
+  assert.equal(broker.expiredDelivered.size, 128)
+  assert.equal(broker.pending.size, 0)
+  assert.equal(broker.reportResult('phone-a', { id: commands[128].id, ok: true }).ok, true)
+  assert.equal(broker.expiredDelivered.size, 127)
+  assert.equal(broker.poll('phone-a', 1).command, null)
+})
+
 test('desktop command endpoints can be restricted to loopback', () => {
   assert.equal(isLoopbackAddress('127.0.0.1'), true)
   assert.equal(isLoopbackAddress('::ffff:127.0.0.1'), true)

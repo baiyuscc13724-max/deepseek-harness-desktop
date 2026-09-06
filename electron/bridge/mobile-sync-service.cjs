@@ -23,7 +23,7 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.60'
+const CURRENT_MOBILE_VERSION = '1.0.61'
 const CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4
   ? `android-v${CURRENT_MOBILE_VERSION}`
   : `v${CURRENT_MOBILE_VERSION}`
@@ -558,7 +558,24 @@ class MobileSyncService extends EventEmitter {
     }
   }
 
-  async #fetchSessionIndex(target, signal) {
+  async #manifestAuthHeaders(target, signal) {
+    signal.throwIfAborted()
+    // The provider may not implement cancellation. Race it locally so a late
+    // credential resolution can never dispatch a request after the refresh ends.
+    const runtimeCookie = await new Promise((resolve, reject) => {
+      const aborted = () => reject(new Error('Runtime manifest authentication cancelled.'))
+      signal.addEventListener('abort', aborted, { once: true })
+      Promise.resolve().then(() => {
+        signal.throwIfAborted()
+        return this.cookieProvider(target, { force: false, signal })
+      }).then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted))
+    })
+    signal.throwIfAborted()
+    const cookie = upstreamRuntimeCookieHeader('', runtimeCookie)
+    return cookie ? { Cookie: cookie } : {}
+  }
+
+  async #fetchSessionIndex(target, signal, authHeaders) {
     const method = 'session/list'
     const rpcId = `mobile-sync-${randomBytes(12).toString('base64url')}`
     const response = await this.fetchImpl(new URL(`/api/${method}`, `${target}/`), {
@@ -566,7 +583,7 @@ class MobileSyncService extends EventEmitter {
       redirect: 'error',
       cache: 'no-store',
       signal,
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      headers: { 'Content-Type': 'application/json; charset=utf-8', ...authHeaders },
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args: { _request: {} } } })
     })
     if (!response.ok) throw new Error('Runtime Session index is unavailable.')
@@ -575,49 +592,96 @@ class MobileSyncService extends EventEmitter {
     return payload.result.value.items
   }
 
-  async #fetchWorkspaceBaseline(target, signal) {
+  async #fetchWorkspaceBaseline(target, signal, authHeaders) {
     const url = new URL('/api/remote.mux', `${target}/`)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const streamId = `workspace-${randomBytes(12).toString('base64url')}`
     return new Promise((resolve, reject) => {
-      const socket = new this.WebSocketImpl(url.toString())
+      signal.throwIfAborted()
+      const socket = new this.WebSocketImpl(url.toString(), { headers: authHeaders, followRedirects: false })
       let settled = false
       const finish = (error, items) => {
         if (settled) return
         settled = true
         signal?.removeEventListener?.('abort', aborted)
-        socket.removeAllListeners?.()
-        socket.close()
+        // ws aborts a CONNECTING handshake asynchronously: both close() and
+        // terminate() can emit error on nextTick. Keep ownership of teardown
+        // errors for this socket's lifetime, including after close; never remove
+        // injected transport listeners or install a process-wide exception sink.
+        socket.on('error', () => {})
+        socket.removeListener('open', opened)
+        socket.removeListener('message', message)
+        socket.removeListener('error', failed)
+        socket.removeListener('close', closed)
+        if (socket.readyState !== WebSocket.CLOSED) {
+          let timer
+          const clearCloseTimer = () => {
+            clearTimeout(timer)
+            socket.removeListener('close', clearCloseTimer)
+          }
+          socket.once('close', clearCloseTimer)
+          // Bound an uncooperative peer's close handshake without retaining a
+          // live timer after normal close. No retry or reconnect is introduced.
+          timer = setTimeout(() => {
+            clearCloseTimer()
+            try { socket.terminate?.() } catch { /* Already settled; socket-local teardown only. */ }
+          }, 1000)
+          timer.unref?.()
+          try {
+            if (socket.readyState === WebSocket.CONNECTING && typeof socket.terminate === 'function') socket.terminate()
+            else socket.close()
+          } catch (closeError) {
+            error ||= closeError
+            try { socket.terminate?.() } catch { /* Preserve the original failure. */ }
+          }
+        }
         if (error) reject(error)
         else resolve(items)
       }
       const aborted = () => finish(signal.reason instanceof Error ? signal.reason : new Error('Runtime Workspace stream aborted.'))
-      signal?.addEventListener?.('abort', aborted, { once: true })
-      socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'workspace/follow', payload: { args: {} } })))
-      socket.on('message', raw => {
+      const opened = () => {
+        if (settled) return
+        try {
+          socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'workspace/follow', payload: { args: {} } }), error => { if (error) finish(error) })
+        } catch (error) { finish(error) }
+      }
+      const message = raw => {
+        if (settled) return
         let frame
         try { frame = JSON.parse(String(raw)) } catch { finish(new Error('Runtime Workspace stream frame is invalid.')); return }
         if (frame?.streamId !== streamId) return
         if (frame.type === 'error' || frame.type === 'end') { finish(new Error('Runtime Workspace stream ended before its baseline.')); return }
         if (frame.type !== 'item' || frame.value?.type !== 'baseline' || !Array.isArray(frame.value?.value?.items)) { finish(new Error('Runtime Workspace baseline is invalid.')); return }
         finish(null, frame.value.value.items)
-      })
-      socket.once('error', error => finish(error))
-      socket.once('close', () => finish(new Error('Runtime Workspace stream closed before its baseline.')))
+      }
+      const failed = error => finish(error)
+      const closed = () => finish(new Error('Runtime Workspace stream closed before its baseline.'))
+      socket.once('open', opened)
+      socket.on('message', message)
+      socket.on('error', failed)
+      socket.once('close', closed)
+      signal?.addEventListener?.('abort', aborted, { once: true })
+      if (signal?.aborted) aborted()
     })
   }
 
-  async refreshWorkspaceManifest({ operationId = null } = {}) {
+  async refreshWorkspaceManifest({ operationId = null, signal = null } = {}) {
     const target = this.runtimeTarget()
     if (!target) return { ...this.store.readSyncChanges(), complete: false, applied: false, protected: true, refreshState: 'unavailable' }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), MOBILE_SYNC_REFRESH_TIMEOUT_MS)
     timer.unref?.()
+    const aborted = () => controller.abort()
+    signal?.addEventListener('abort', aborted, { once: true })
+    if (signal?.aborted) aborted()
     try {
+      const authHeaders = await this.#manifestAuthHeaders(target, controller.signal)
+      controller.signal.throwIfAborted()
       const [workspaces, sessions] = await Promise.all([
-        this.#fetchWorkspaceBaseline(target, controller.signal),
-        this.#fetchSessionIndex(target, controller.signal)
+        this.#fetchWorkspaceBaseline(target, controller.signal, authHeaders),
+        this.#fetchSessionIndex(target, controller.signal, authHeaders)
       ])
+      controller.signal.throwIfAborted()
       const readMessages = this.store.readSyncReadMessages?.() || this.store.readSyncChanges().snapshot?.readMessages || []
       const committed = this.store.commitSyncManifest({
         complete: true,
@@ -632,6 +696,11 @@ class MobileSyncService extends EventEmitter {
       return { ...this.store.readSyncChanges(), complete: false, applied: false, protected: true, refreshState: 'unavailable' }
     } finally {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', aborted)
+      // Promise.all may reject on session/list before the WebSocket settles.
+      // Cancel that sibling too, instead of clearing its only timeout and
+      // leaving a CONNECTING socket/listeners alive indefinitely.
+      controller.abort(new Error('Runtime manifest refresh finished.'))
     }
   }
 

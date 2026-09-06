@@ -438,8 +438,8 @@ for (const file of smokeFiles) {
 const [ordinarySmokePhase, performanceSmokePhase] = smokePlan.phases
 if (ordinarySmokePhase.command !== process.execPath || performanceSmokePhase.command !== process.execPath || ordinarySmokePhase.options.cwd !== root || performanceSmokePhase.options.cwd !== root || ordinarySmokePhase.options.shell !== false || performanceSmokePhase.options.shell !== false || ordinarySmokePhase.options.stdio !== 'inherit' || performanceSmokePhase.options.stdio !== 'inherit') throw new Error('Smoke phases must use fresh Node processes at the exact repository root with inherited stdio and shell disabled.')
 if (JSON.stringify(ordinarySmokePhase.args) !== JSON.stringify(['--test', ...smokePlan.partition.ordinary]) || JSON.stringify(performanceSmokePhase.args) !== JSON.stringify(['--test', '--test-concurrency=1', ...smokePlan.partition.performance])) throw new Error('Smoke phases must run ordinary tests first and timing-sensitive tests serially without name filters.')
-const DESKTOP_RELEASE_CANDIDATE_VERSION = '1.0.60'
-const PREVIOUS_STABLE_DESKTOP_VERSION = '1.0.59'
+const DESKTOP_RELEASE_CANDIDATE_VERSION = '1.0.61'
+const PREVIOUS_STABLE_DESKTOP_VERSION = '1.0.60'
 if (pkg.scripts?.['test:right-workspace-electron'] !== 'node scripts/test-right-workspace-electron.cjs') throw new Error('The real Electron right-workspace geometry gate is missing.')
 if (!/^\d+\.\d+\.\d+$/u.test(pkg.version)) throw new Error(`Expected a stable semantic package version, received ${pkg.version}`)
 if (pkg.version !== DESKTOP_RELEASE_CANDIDATE_VERSION) throw new Error(`Desktop release candidate identity must remain ${DESKTOP_RELEASE_CANDIDATE_VERSION}, received ${pkg.version}`)
@@ -1106,8 +1106,15 @@ for (const officialHarnessContract of ['patchInstalledMarkdownRenderer', 'patchI
 for (const contract of ['patchInstalledSubagent', 'subagentLifecycleCounts', 'filteredEntries.map', '待命（可恢复）', '已结束（仅记录）', 'children: t("count.compact"', 'hd-subagent-drawer-backdrop', 'dialogRef.current?.focus()', 'tabIndex: -1', '!next && restoreFocus', 'harness-desktop:open-subagent-catalog', 'position:fixed!important', '@media(max-width:620px)', '@media(prefers-reduced-motion:reduce)', 'dataPluginCss = "@harness-desktop/subagent-drawer"']) {
   if (!runtimePatch.includes(contract)) throw new Error(`Subagent lifecycle drawer patch is missing: ${contract}`)
 }
-for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "'web', '--port', '0', '--no-open'"]) {
+for (const contract of ["HARNESS_DESKTOP_REUSE_RUNTIME === '1'", "require('./bridge/runtime-port.cjs')", 'const runtimePort = await allocateRuntimePort()', "'web', '--port', String(runtimePort), '--no-open'"]) {
   if (!main.includes(contract)) throw new Error(`Dedicated desktop runtime policy is missing: ${contract}`)
+}
+const runtimePortSource = await readFile(path.join(root, 'electron/bridge/runtime-port.cjs'), 'utf8')
+for (const contract of ['const MIN_RUNTIME_PORT = 49152', 'const MAX_RUNTIME_PORT = 65535', 'randomIntImpl(MIN_RUNTIME_PORT, MAX_RUNTIME_PORT + 1)', 'port < MIN_RUNTIME_PORT || port > MAX_RUNTIME_PORT', 'maxAttempts > 128', "['EADDRINUSE', 'EACCES'].includes(error.code)", "server.listen({ host: '127.0.0.1', port, exclusive: true }", 'server.close(error => error ? reject(error) : resolve(true))', 'if (available) return port', 'No available browser-safe local runtime port']) {
+  if (!runtimePortSource.includes(contract)) throw new Error(`Browser-safe dedicated runtime port policy is missing: ${contract}`)
+}
+if (main.includes("'web', '--port', '0', '--no-open'") || main.includes('explicitly-allowed-ports') || main.includes('ignore-certificate-errors')) {
+  throw new Error('Desktop runtime must select a browser-safe loopback port without weakening Chromium security.')
 }
 const updateDownloadService = await readFile(path.join(root, 'electron/bridge/update-download-service.cjs'), 'utf8')
 for (const contract of ['DEFAULT_IDLE_TIMEOUT_MS', 'DEFAULT_CHECKSUM_TIMEOUT_MS', 'rejectedInstallerType', 'SHA-256 校验失败', 'unlinkImpl(destination)']) {

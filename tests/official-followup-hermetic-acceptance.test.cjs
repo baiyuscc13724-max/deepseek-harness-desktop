@@ -24,17 +24,34 @@ const REVIEWED_1060 = Object.freeze({
   'tests/agent-teams-passive-wait.test.cjs': '66f44e567dd83e32625f270417176ae27451a5afa24c954c7257023fdb62f942',
   'tests/agent-teams-scope-reminder.test.cjs': 'de35cc8f72269eaaac381fa66947d893f91d83679fc936efc0eced82c79f73f0'
 })
+// A candidate source freeze is not a passing test report, Host approval, or release evidence.
+const FROZEN_1061_PATH = 'tests/fixtures/release-1.0.61-source-freeze.json'
+const FROZEN_1061_SHA256 = 'ad7556875586d976c415265344c2090204ce1f59bdcd8712472c24dadb2e5f9c'
+const FROZEN_1061 = Object.freeze(require('./fixtures/release-1.0.61-source-freeze.json'))
 function reviewedCurrentHash(relative, historical) {
   const version = require('../package.json').version
   if (version === '1.0.59') return historical
-  assert.equal(version, '1.0.60', 'a later release needs its own reviewed source freeze')
-  return REVIEWED_1060[relative] ?? historical
+  if (version === '1.0.60') return REVIEWED_1060[relative] ?? historical
+  assert.equal(version, '1.0.61', 'a later release needs its own reviewed source freeze')
+  return FROZEN_1061[relative] ?? REVIEWED_1060[relative] ?? historical
 }
-test('v1.0.60 narrow successor binds its implementation and new proofs without replacing historical acceptance', () => {
+test('v1.0.60 historical successor remains bound without replacing historical acceptance', () => {
   const review = fs.readFileSync(path.join(ROOT, 'docs/SECURITY-REVIEW-v1.0.60.zh-CN.md'), 'utf8')
   for (const [relative, expected] of Object.entries(REVIEWED_1060)) {
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, relative)), reviewedCurrentHash(relative, expected), relative)
+    assert.ok(review.includes(expected), `historical source review missing ${relative}`)
+  }
+})
+test('v1.0.61 candidate binds the exact PR47 and mobile successor sources without implying new validation', () => {
+  assert.equal(require('../package.json').version, '1.0.61')
+  assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, FROZEN_1061_PATH)), FROZEN_1061_SHA256)
+  assert.equal(Object.keys(FROZEN_1061).length, 36)
+  const review = fs.readFileSync(path.join(ROOT, 'docs/SOURCE-FREEZE-v1.0.61.zh-CN.md'), 'utf8')
+  assert.ok(review.includes(FROZEN_1061_SHA256))
+  assert.ok(review.includes('28c35a933aa626d5a4e7ffaf1206ac15b9e1748f'))
+  assert.ok(review.includes('不是 Host 批准、测试通过或发布成功证据'))
+  for (const [relative, expected] of Object.entries(FROZEN_1061)) {
     assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, relative)), expected, relative)
-    assert.ok(review.includes(expected), `current source review missing ${relative}`)
   }
 })
 function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`) }

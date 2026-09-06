@@ -5771,3 +5771,22 @@ html[data-harness-mobile="true"] [data-harness-mobile-image-lightbox="true"] > b
   pointer-events: auto !important;
   touch-action: manipulation !important;
 }
+
+html[data-harness-mobile="true"] [data-harness-mobile-index-retry] {
+  min-height: 48px;
+  min-width: 48px;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 8px 12px;
+  white-space: normal;
+  color: var(--dsw-alias-label-primary, #171719);
+  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-elevated, #fff));
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  font: inherit;
+  touch-action: manipulation;
+}
+html[data-harness-mobile="true"] [data-harness-mobile-index-retry][hidden] { display: none !important; }
+html[data-harness-mobile="true"] [data-harness-mobile-index-retry]:disabled { opacity: .6; }
+html[data-harness-mobile="true"] [data-harness-mobile-index-retry]:active { opacity: .8; }
+html[data-harness-mobile="true"] [data-harness-mobile-index-retry]:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }

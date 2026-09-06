@@ -169,9 +169,28 @@
     const sessionCount = rows.filter(item => item.dataset.harnessMobileSessionRow === 'true').length
     const projectCount = rows.filter(item => item.dataset.harnessMobileProjectRow === 'true').length
     const countNode = document.querySelector?.('[data-harness-mobile-conversation-count]')
-    const recoveryLabel = root.dataset.harnessMobileIndexRecovery ? ' · 正在恢复最新列表' : ''
-    if (countNode) countNode.textContent = `${projectCount} 个项目 · ${sessionCount} 个对话${recoveryLabel}`
+    const failed = root.dataset.harnessMobileIndexRecoveryState === 'failed'
+    const recoveryLabel = failed ? ' · 最新列表恢复失败，当前内容可能来自缓存' : root.dataset.harnessMobileIndexRecovery ? ' · 正在恢复最新列表' : ''
+    if (countNode) {
+      countNode.textContent = `${projectCount} 个项目 · ${sessionCount} 个对话${recoveryLabel}`
+      countNode.setAttribute('role', 'status')
+      let retry = document.querySelector('[data-harness-mobile-index-retry]')
+      if (!retry && failed) {
+        retry = document.createElement('button')
+        retry.type = 'button'
+        retry.setAttribute('data-harness-mobile-index-retry', 'true')
+        retry.addEventListener('click', () => window.__harnessMobileRetryIndexes?.())
+        countNode.parentElement?.appendChild(retry)
+      }
+      if (retry) {
+        const recovering = root.dataset.harnessMobileIndexRecoveryState === 'recovering'
+        retry.hidden = !failed && !recovering
+        retry.disabled = recovering
+        retry.textContent = recovering ? '正在重试…' : '重试最新列表'
+      }
+    }
   }
+  window.addEventListener?.('harness-mobile-index-refresh', () => decorateSessions())
 
   let mobileConversationFilter = ''
   const applyMobileConversationFilter = () => {
@@ -1372,14 +1391,93 @@
     return true
   }
 
+  const mobileDialogVisible = node => {
+    if (!node || !visible(node)) return false
+    if (node.matches?.('dialog') && !node.hasAttribute('open')) return false
+    for (let parent = node; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent)
+      if (parent.hidden || parent.inert || parent.hasAttribute('inert') || parent.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false
+    }
+    return true
+  }
+  const mobileDialogSelector = '[role="dialog"][aria-modal="true"], dialog[open]'
+  const topMobileDialog = (dialogs = [...document.querySelectorAll(mobileDialogSelector)]) => {
+    const stack = node => {
+      const levels = []
+      let topLayer = false
+      for (let parent = node; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent)
+        if (style.zIndex !== 'auto' && Number.isFinite(Number(style.zIndex))) levels.unshift(Number(style.zIndex))
+        else if (['fixed', 'sticky'].includes(style.position) || (style.transform && style.transform !== 'none') || (style.filter && style.filter !== 'none') || (style.opacity && Number(style.opacity) < 1) || style.isolation === 'isolate') levels.unshift(0)
+        try { if (parent.matches(':modal')) topLayer = true } catch {}
+      }
+      // Maintained mobile surfaces use ARIA dialogs, not showModal(). This
+      // native fallback only separates the top layer from CSS content; ordering
+      // multiple native modals by showModal() time is NOT supported or verified.
+      levels.unshift(topLayer ? 1 : 0)
+      return levels
+    }
+    return dialogs.filter(mobileDialogVisible).sort((a, b) => {
+      const left = stack(a), right = stack(b)
+      for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        const delta = (left[i] || 0) - (right[i] || 0)
+        if (delta) return delta
+      }
+      return 0 // Stable sort: later DOM dialogs win equal stacking levels.
+    }).at(-1) || null
+  }
+  const dismissTopMobileDialog = dialog => {
+    if (!dialog || dialog !== topMobileDialog()) return false
+    if (mobileImageLightboxParts(dialog)) return dismissMobileImageLightbox(dialog)
+    if (dialog.dataset.harnessMobileSettingsDialog === 'true') {
+      const selector = root.dataset.harnessMobileSettingsView === 'detail'
+        ? '[data-harness-mobile-settings-back="true"]' : '[data-harness-mobile-settings-close="true"]'
+      dialog.querySelector(selector)?.click?.()
+    } else {
+      const close = [...dialog.querySelectorAll('button')].find(button => mobileDialogVisible(button) && !button.disabled && /^(?:关闭|Close|取消|Cancel|×)$|(?:关闭|Close)/i.test(`${button.getAttribute('aria-label') || ''} ${(button.textContent || '').trim()}`.trim()))
+      close?.click?.()
+    }
+    // A modal without a safe close control still consumes Back; never navigate underneath.
+    return true
+  }
+
   const installMobileBackHandler = () => {
+    if (!window.__harnessMobileDialogKeysInstalled) {
+      window.__harnessMobileDialogKeysInstalled = true
+      if (typeof MutationObserver === 'function') {
+        let queued = false
+        window.__harnessMobileDialogVisibilityObserver = new MutationObserver(() => {
+          if (queued) return
+          queued = true
+          setTimeout(() => {
+            queued = false
+            syncDialogFocus([...document.querySelectorAll(mobileDialogSelector)])
+          }, 0)
+        })
+        window.__harnessMobileDialogVisibilityObserver.observe(root, { subtree: true, attributes: true, attributeFilter: ['hidden', 'inert', 'aria-hidden', 'open', 'style', 'class'] })
+      }
+      document.addEventListener('keydown', event => {
+        const dialog = topMobileDialog()
+        if (event.key === 'Tab' && dialog && !dialog.contains(document.activeElement)) {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          const focusable = dialogFocusable(dialog)
+          const target = (event.shiftKey ? focusable.at(-1) : focusable[0]) || dialog
+          target.focus?.({ preventScroll: true })
+          return
+        }
+        if (event.key !== 'Escape' || !dialog) return
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        dismissTopMobileDialog(dialog)
+      }, true)
+    }
     window.__harnessMobileHandleBack = () => {
       const shell = document.getElementById('harness-mobile-app-shell')
       if (!shell) return false
 
-      const imageLightbox = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
-        .find(dialog => visible(dialog) && mobileImageLightboxParts(dialog))
-      if (imageLightbox) return dismissMobileImageLightbox(imageLightbox)
+      const topDialog = topMobileDialog()
+      if (topDialog) return dismissTopMobileDialog(topDialog)
 
       const projectSheet = document.querySelector('[data-harness-mobile-project-sheet]')
       if (projectSheet) {
@@ -1424,16 +1522,6 @@
       if (root.dataset.harnessMobileAgentDetailOpen === 'true') {
         document.querySelector('[data-harness-mobile-agent-detail-toggle]')?.click?.()
         return true
-      }
-
-      const sheet = [...document.querySelectorAll('[role="dialog"][aria-modal="true"], dialog')]
-        .find(dialog => dialog.dataset.harnessMobileSettingsDialog !== 'true')
-      if (sheet) {
-        const close = [...sheet.querySelectorAll('button')].find(button => /^(?:关闭|Close|取消|Cancel|×)$|(?:关闭|Close)/i.test(`${button.getAttribute('aria-label') || ''} ${(button.textContent || '').trim()}`.trim()))
-        if (close) {
-          close.click()
-          return true
-        }
       }
 
       if (isMobileConversationDetailOpen()) {
@@ -2028,24 +2116,30 @@
   }
 
   let activeMobileDialog = null
-  let activeMobileDialogTrigger = null
+  const mobileDialogTriggers = new Map()
   const dialogFocusable = dialog => [...(dialog?.querySelectorAll?.('button:not([disabled]),a[href],input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])') || [])]
-    .filter(node => !node.hidden && node.getAttribute('aria-hidden') !== 'true' && !node.closest('[inert]'))
+    .filter(node => mobileDialogVisible(node) && !node.disabled && node.getAttribute('tabindex') !== '-1')
   const syncDialogFocus = dialogs => {
-    const current = dialogs.find(dialog => visible(dialog)) || null
-    if (activeMobileDialog && activeMobileDialog !== current) {
-      const trigger = activeMobileDialogTrigger
-      activeMobileDialog = null
-      activeMobileDialogTrigger = null
-      if (trigger?.isConnected) setTimeout(() => trigger.focus?.({ preventScroll: true }), 0)
+    const current = topMobileDialog(dialogs)
+    let restore = null
+    for (const [dialog, trigger] of [...mobileDialogTriggers].reverse()) {
+      if (dialog.isConnected && mobileDialogVisible(dialog)) continue
+      if (trigger?.isConnected && mobileDialogVisible(trigger)) restore = trigger
+      mobileDialogTriggers.delete(dialog)
     }
-    if (!current || activeMobileDialog === current) return
+    if (activeMobileDialog === current) return
     activeMobileDialog = current
-    activeMobileDialogTrigger = current.contains(document.activeElement) ? null : document.activeElement
+    if (!current) {
+      if (restore) setTimeout(() => {
+        if (!topMobileDialog() && restore.isConnected && mobileDialogVisible(restore)) restore.focus?.({ preventScroll: true })
+      }, 0)
+      return
+    }
+    if (!mobileDialogTriggers.has(current)) mobileDialogTriggers.set(current, current.contains(document.activeElement) ? null : (restore || document.activeElement))
     if (current.dataset.harnessMobileFocusTrap !== 'true') {
       current.dataset.harnessMobileFocusTrap = 'true'
       current.addEventListener('keydown', event => {
-        if (event.key !== 'Tab') return
+        if (event.key !== 'Tab' || event.defaultPrevented || current !== topMobileDialog()) return
         const focusable = dialogFocusable(current)
         if (!focusable.length) {
           event.preventDefault()
@@ -2054,18 +2148,20 @@
         }
         const first = focusable[0]
         const last = focusable.at(-1)
-        if (event.shiftKey && (document.activeElement === first || document.activeElement === current)) {
+        if (event.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) {
           event.preventDefault()
           last.focus?.({ preventScroll: true })
-        } else if (!event.shiftKey && document.activeElement === last) {
+        } else if (!event.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement))) {
           event.preventDefault()
           first.focus?.({ preventScroll: true })
         }
       })
     }
     if (!current.hasAttribute('tabindex')) current.tabIndex = -1
-    const target = dialogFocusable(current)[0] || current
-    setTimeout(() => target.focus?.({ preventScroll: true }), 0)
+    const target = restore && current.contains(restore) ? restore : (dialogFocusable(current)[0] || current)
+    setTimeout(() => {
+      if (current === topMobileDialog() && mobileDialogVisible(target)) target.focus?.({ preventScroll: true })
+    }, 0)
   }
 
   const decorateDialogs = () => {
@@ -2509,23 +2605,9 @@
       tab.addEventListener('click', () => openMobileComposerModelPane(tab.dataset.harnessMobileModelTab))
     }
     sheet.addEventListener('keydown', event => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        closeMobileComposerModelSheet()
-        return
-      }
-      if (event.key !== 'Tab') return
-      const focusable = [...sheet.querySelectorAll('button:not([disabled]), [tabindex="0"]')].filter(node => node.offsetParent !== null)
-      if (!focusable.length) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
+      // The shared top-dialog handler owns Escape and Tab. Do not bubble an
+      // already trapped key into a second sheet-level trap.
+      if (event.defaultPrevented) event.stopPropagation()
     })
     document.body.appendChild(sheet)
     mobileComposerModelSheet = sheet
@@ -2541,7 +2623,9 @@
     root.dataset.harnessMobileModelSheetOpen = 'true'
     syncMobileComposerModelControl()
     openMobileComposerModelPane(mobileComposerModelTab)
-    setTimeout(() => sheet.querySelector(`[data-harness-mobile-model-tab="${mobileComposerModelTab}"]`)?.focus?.({ preventScroll: true }), 0)
+    const dialog = sheet.querySelector('[role="dialog"]')
+    mobileDialogTriggers.set(dialog, proxy || document.activeElement)
+    syncDialogFocus([...document.querySelectorAll(mobileDialogSelector)])
   }
 
   const ensureMobileComposerModelControl = composer => {
@@ -3109,10 +3193,29 @@
       const envelope = { ...descriptor.envelope, rpcId }
       return new Request(descriptor.request.clone(), { body: JSON.stringify(envelope) })
     }
+    const indexFailures = new Set()
+    // Native snapshot placeholders have no HTTP template and must not keep a
+    // completed HTTP recovery spinning (or invent a workspace/list request).
+    const hasPendingIndexRequests = () => [...indexPending].some(key => indexTemplates.has(key))
+    const syncIndexRecoveryState = () => {
+      if (indexFailures.size) root.dataset.harnessMobileIndexRecoveryState = 'failed'
+      else if (hasPendingIndexRequests()) root.dataset.harnessMobileIndexRecoveryState = 'recovering'
+      else delete root.dataset.harnessMobileIndexRecoveryState
+    }
+    const announceIndexRecovery = (descriptor, state) => {
+      syncIndexRecoveryState()
+      try {
+        window.dispatchEvent?.(new CustomEvent(INDEX_REFRESH_EVENT, {
+          detail: Object.freeze({ kind: descriptor.kind, state, authoritative: false })
+        }))
+      } catch {}
+    }
     const announceIndexAuthority = (descriptor, entry) => {
       indexAuthoritativeReady.add(descriptor.key)
       indexPending.delete(descriptor.key)
-      if (!indexPending.size) delete root.dataset.harnessMobileIndexRecovery
+      indexFailures.delete(descriptor.key)
+      syncIndexRecoveryState()
+      if (!hasPendingIndexRequests()) delete root.dataset.harnessMobileIndexRecovery
       try {
         window.dispatchEvent?.(new CustomEvent(INDEX_REFRESH_EVENT, {
           detail: Object.freeze({ kind: descriptor.kind, state: 'authoritative', authoritative: true, itemCount: entry.payload.result.value.items.length })
@@ -3123,6 +3226,9 @@
       if (indexRefreshes.has(descriptor.key)) return indexRefreshes.get(descriptor.key)
       indexTemplates.set(descriptor.key, descriptor)
       indexPending.add(descriptor.key)
+      indexFailures.delete(descriptor.key)
+      root.dataset.harnessMobileIndexRecovery = descriptor.kind
+      announceIndexRecovery(descriptor, 'recovering')
       const previous = cachedIndexEntry(descriptor.key)
       const refresh = (async () => {
         let emptyConfirmations = 0
@@ -3152,6 +3258,8 @@
           if (attempt < INDEX_RECOVERY_ATTEMPTS - 1) await new Promise(resolve => setTimeout(resolve, 200 * (attempt + 1)))
         }
         indexPending.add(descriptor.key)
+        indexFailures.add(descriptor.key)
+        announceIndexRecovery(descriptor, 'failed')
         return { response: lastResponse, entry: null }
       })()
       indexRefreshes.set(descriptor.key, refresh)
@@ -3159,12 +3267,17 @@
       return refresh
     }
     const retryPendingIndexes = () => {
-      if (document.visibilityState === 'hidden' || window.navigator?.onLine === false) return
+      if (document.visibilityState === 'hidden' || window.navigator?.onLine === false) return Promise.resolve([])
+      const refreshes = []
       for (const key of [...indexPending]) {
         const descriptor = indexTemplates.get(key)
-        if (descriptor) refreshIndex(descriptor)
+        if (descriptor) refreshes.push(refreshIndex(descriptor))
       }
+      return Promise.all(refreshes)
     }
+    // Retry only the existing pairing-scoped templates, without reloading the
+    // page, touching drafts/routes, or synthesizing official send actions.
+    window.__harnessMobileRetryIndexes = retryPendingIndexes
     readPersistedIndexes()
     window.addEventListener?.('online', retryPendingIndexes)
     document.addEventListener?.('visibilitychange', retryPendingIndexes)

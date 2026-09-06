@@ -25,6 +25,103 @@ const {
 const { DESKTOP_PEER_ID, WssRelayAdapter, safeRelayUrl } = require('../electron/bridge/sync-transports/wss-relay-adapter.cjs')
 const { FRAME_TYPES, RelayTunnelCodec } = require('../electron/bridge/relay-tunnel-codec.cjs')
 
+class LifecycleSocket extends require('node:events').EventEmitter {
+  static OPEN = 1
+  static CLOSING = 2
+  static CLOSED = 3
+  static instances = []
+  constructor() {
+    super()
+    this.readyState = 0
+    this.bufferedAmount = 0
+    this.sent = []
+    LifecycleSocket.instances.push(this)
+  }
+  welcome() { this.readyState = 1; this.emit('open'); this.emit('message', JSON.stringify({ type: 'welcome', role: 'desktop' }), false) }
+  send(value) { this.sent.push(value) }
+  close() { this.readyState = 2 }
+  terminate() { this.readyState = 3; this.emit('close') }
+}
+const lifecycleContext = () => ({ port: 1, mesh: { relayRoomId: 'r'.repeat(43), relayTunnelKey: Buffer.alloc(32, 7).toString('base64url') } })
+const lifecycleTick = () => new Promise(setImmediate)
+
+test('adapter lifecycle fences old events and reclaims sockets across 50 restarts', async () => {
+  LifecycleSocket.instances = []
+  const adapter = new WssRelayAdapter({ relayUrl: 'wss://example.invalid', WebSocketImpl: LifecycleSocket, closeTimeoutMs: 5 })
+  try {
+    for (let i = 0; i < 50; i++) {
+      const starting = adapter.start(lifecycleContext())
+      await lifecycleTick()
+      const current = LifecycleSocket.instances.at(-1)
+      current.welcome()
+      await starting
+      for (const old of LifecycleSocket.instances.slice(0, -1)) {
+        old.emit('open')
+        old.emit('message', JSON.stringify({ type: 'welcome', role: 'desktop' }), false)
+        old.emit('message', Buffer.from([1]), true)
+        old.emit('error', new Error('old synthetic error'))
+        old.terminate() // A real close event has readyState CLOSED.
+      }
+      await lifecycleTick()
+      assert.equal(adapter.status, 'connected')
+      assert.equal(adapter.socket, current)
+      await adapter.stop()
+    }
+  } finally { await adapter.stop() }
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(LifecycleSocket.instances.filter(socket => socket.readyState !== 3).length, 0)
+  assert.equal(adapter.streams.size, 0)
+})
+
+test('adapter lifecycle settles interrupted starts and ignores their late welcome', async () => {
+  LifecycleSocket.instances = []
+  const adapter = new WssRelayAdapter({ relayUrl: 'wss://example.invalid', WebSocketImpl: LifecycleSocket, readyTimeoutMs: 100, closeTimeoutMs: 5 })
+  const first = adapter.start(lifecycleContext()).then(() => 'ready', () => 'cancelled')
+  await lifecycleTick()
+  const old = LifecycleSocket.instances.at(-1)
+  await adapter.stop()
+  const second = adapter.start(lifecycleContext())
+  await lifecycleTick()
+  const current = LifecycleSocket.instances.at(-1)
+  current.welcome()
+  await second
+  old.welcome()
+  assert.equal(await first, 'cancelled')
+  assert.equal(adapter.socket, current)
+  assert.equal(adapter.status, 'connected')
+  await adapter.stop()
+})
+
+test('adapter lifecycle reclaims 50 failed handshakes and established connections', async () => {
+  LifecycleSocket.instances = []
+  const adapter = new WssRelayAdapter({ relayUrl: 'wss://example.invalid', WebSocketImpl: LifecycleSocket, closeTimeoutMs: 5 })
+  for (let i = 0; i < 50; i++) {
+    const starting = adapter.start(lifecycleContext()).then(() => true, () => false)
+    await lifecycleTick()
+    const socket = LifecycleSocket.instances.at(-1)
+    if (i % 2) { socket.welcome(); assert.equal(await starting, true) }
+    socket.emit('error', new Error('synthetic failure'))
+    if (!(i % 2)) assert.equal(await starting, false)
+    assert.equal(adapter.socket, null)
+    await adapter.stop()
+    socket.emit('error', new Error('late teardown failure'))
+  }
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(LifecycleSocket.instances.filter(socket => socket.readyState !== 3).length, 0)
+  assert.equal(adapter.cancelReady, null)
+  assert.equal(adapter.streams.size, 0)
+})
+
+test('adapter lifecycle invalidates start even before its first await resumes', async () => {
+  LifecycleSocket.instances = []
+  const adapter = new WssRelayAdapter({ relayUrl: 'wss://example.invalid', WebSocketImpl: LifecycleSocket })
+  const pending = adapter.start(lifecycleContext())
+  await adapter.stop()
+  await assert.rejects(pending, /cancelled/)
+  assert.equal(LifecycleSocket.instances.length, 0)
+  assert.equal(adapter.status, 'stopped')
+})
+
 function nextMessage(socket) {
   return new Promise((resolve, reject) => {
     const onMessage = (data, binary) => { cleanup(); resolve({ data: Buffer.from(data), binary }) }

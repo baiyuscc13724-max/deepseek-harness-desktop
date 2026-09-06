@@ -129,6 +129,16 @@ class MobileControlBroker {
     this.queues = new Map()
     this.pending = new Map()
     this.results = new Map()
+    this.expiredDelivered = new Map()
+  }
+
+  #isOnline(status) {
+    const age = this.now() - Date.parse(status?.lastSeenAt)
+    return Number.isFinite(age) && age >= 0 && age <= STATUS_TTL_MS
+  }
+
+  #isReady(status) {
+    return this.#isOnline(status) && status.enabled && status.ready && status.protocolVersion === CONTROL_PROTOCOL_VERSION
   }
 
   reportStatus(deviceId, payload = {}) {
@@ -160,7 +170,7 @@ class MobileControlBroker {
       supportedActions: Object.keys(ACTION_CAPABILITY),
       devices: knownDevices.map(device => {
         const status = this.devices.get(device.id)
-        const online = Boolean(status && this.now() - Date.parse(status.lastSeenAt) <= STATUS_TTL_MS)
+        const online = this.#isOnline(status)
         return {
           id: device.id,
           name: device.name,
@@ -169,7 +179,7 @@ class MobileControlBroker {
           appVersion: status?.appVersion || normalizeAppVersion(device.appVersion),
           online,
           enabled: online && status.enabled,
-          ready: online && status.enabled && status.ready && status.protocolVersion === CONTROL_PROTOCOL_VERSION,
+          ready: this.#isReady(status),
           accessibility: online && status.accessibility,
           captureActive: online && status.captureActive,
           capabilities: online ? status.capabilities : [],
@@ -190,7 +200,7 @@ class MobileControlBroker {
     const capability = ACTION_CAPABILITY[action]
     if (!capability) throw new Error('不支持的手机控制动作。')
     const status = this.devices.get(deviceId)
-    if (!status || !status.enabled || !status.ready || status.protocolVersion !== CONTROL_PROTOCOL_VERSION) throw new Error('目标手机尚未开启并准备好手机控制。')
+    if (!this.#isReady(status)) throw new Error('目标手机尚未开启并准备好手机控制，或连接状态已过期。')
     if (!status.capabilities.includes(capability)) throw new Error(`目标手机未上报 ${capability} 能力。`)
     const queue = this.queues.get(deviceId) || []
     if (queue.length >= MAX_QUEUE_PER_DEVICE) throw new Error('目标手机待执行队列已满。')
@@ -236,8 +246,11 @@ class MobileControlBroker {
   }
 
   reportResult(deviceId, payload = {}) {
+    this.#expire()
     const id = safeString(payload.id || payload.commandId, 80)
-    const pending = this.pending.get(id)
+    // A timeout is not proof of failure on the phone. A bounded, device-bound
+    // late receipt may replace an unconfirmed result, without redispatching.
+    const pending = this.pending.get(id) || this.expiredDelivered.get(id)
     if (!pending || pending.deviceId !== deviceId) throw new Error('未知或已失效的手机控制命令。')
     const result = {
       id,
@@ -252,8 +265,8 @@ class MobileControlBroker {
       completedAt: new Date(this.now()).toISOString()
     }
     this.pending.delete(id)
-    this.results.set(id, result)
-    if (this.results.size > 128) this.results.delete(this.results.keys().next().value)
+    this.expiredDelivered.delete(id)
+    this.#retainResult(result)
     return result
   }
 
@@ -322,9 +335,21 @@ class MobileControlBroker {
       completedAt: new Date(this.now()).toISOString()
     }
     this.pending.delete(pending.command.id)
-    this.results.set(pending.command.id, result)
-    if (this.results.size > 128) this.results.delete(this.results.keys().next().value)
+    if (pending.deliveredAt !== null) {
+      // Retain only receipt correlation, not potentially large/sensitive payloads.
+      this.expiredDelivered.set(pending.command.id, { ...pending, command: { id: pending.command.id, action: pending.command.action } })
+    }
+    this.#retainResult(result)
     return result
+  }
+
+  #retainResult(result) {
+    this.results.set(result.id, result)
+    if (this.results.size > 128) {
+      const oldest = this.results.keys().next().value
+      this.results.delete(oldest)
+      this.expiredDelivered.delete(oldest)
+    }
   }
 
   #pushDirective(deviceId, action, payload) {
@@ -345,8 +370,10 @@ class MobileControlBroker {
         this.#finishPending(pending, 'STOP_UNCONFIRMED', '桌面已请求停止，但手机未在命令有效期内确认最终状态。')
       } else if (pending.cancelRequestedAt !== null) {
         this.#finishPending(pending, 'CANCEL_UNCONFIRMED', '桌面已请求取消，但手机未在命令有效期内确认最终状态。')
+      } else if (pending.deliveredAt === null) {
+        this.#finishPending(pending, 'EXPIRED_NOT_DISPATCHED', '手机控制命令已过期，未向手机派发。')
       } else {
-        this.pending.delete(id)
+        this.#finishPending(pending, 'RESULT_UNCONFIRMED', '手机未在命令有效期内返回回执，执行结果未知；请勿自动重试。')
       }
     }
   }
