@@ -950,6 +950,31 @@ test('adapted task-board UI keeps its upstream provenance visible in source', as
   assert.match(source, /adapted|改编|二次开发/iu)
 })
 
+for (const phase of ['connecting', 'opened-without-snapshot']) {
+  test(`team-state bounds a stream stuck in ${phase} and falls back without leaking connections`, async () => {
+    const hook = teamStateLifecycleSource(await clientSource())
+    const harness = createLifecycleHarness(hook)
+    const stream = harness.eventSources[0]
+    try {
+      const initialTimer = [...harness.timeouts.keys()][0]
+      if (phase === 'opened-without-snapshot') { stream.onopen(); stream.onopen() }
+      assert.deepEqual([...harness.timeouts.keys()], [initialTimer], 'repeated opens must not postpone the first snapshot deadline')
+      const watchdog = harness.timeouts.get(initialTimer)
+      assert.equal(watchdog.delay, 3000)
+      harness.timeouts.delete(initialTimer); watchdog.callback()
+      assert.equal(stream.closed, true, 'close SSE before acquiring the fallback HTTP connection')
+      assert.equal(harness.fetchCalls.length, 1)
+      harness.fetchCalls[0].resolve({ enabled: true, team: null, teams: [], revision: 1 })
+      await drainPromises()
+      harness.runFrames()
+      assert.equal(harness.stateSlots[0].value.enabled, true, 'even an empty team workspace exits loading')
+      assert.equal(harness.timeouts.size, 1, 'degraded mode retains only one sparse polling timer')
+      assert.equal(harness.eventSources.length, 1, 'no reconnect storm')
+    } finally { harness.cleanup() }
+    assert.equal(harness.timeouts.size, 0)
+  })
+}
+
 test('team-state lifecycle does not let an older HTTP fallback overwrite a newer SSE snapshot', async () => {
   const source = await clientSource()
   const hook = teamStateLifecycleSource(source)
@@ -960,7 +985,10 @@ test('team-state lifecycle does not let an older HTTP fallback overwrite a newer
   assert.match(hook, /base \* \(0\.8 \+ Math\.random\(\) \* 0\.4\)/u)
   assert.equal(harness.eventSources.length, 1)
   assert.equal(harness.fetchCalls.length, 0, 'SSE is the primary source while it is available')
-  assert.equal(harness.timeouts.size, 0, 'an unopened EventSource must not eagerly start the old 3s HTTP fallback')
+  assert.equal(harness.timeouts.size, 1, 'CONNECTING must have a bounded first-snapshot watchdog')
+  stream.emit('snapshot', { enabled: true, team: { id: 'team-1', revision: 0 }, revision: 0 }, '0')
+  harness.runFrames()
+  assert.equal(harness.timeouts.size, 0, 'a healthy first snapshot clears the watchdog without a GET')
 
   stream.onerror()
   assert.equal(harness.timeouts.size, 1, 'SSE failure schedules one sparse polling safety net')

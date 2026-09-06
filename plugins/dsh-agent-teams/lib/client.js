@@ -1023,7 +1023,7 @@ window.__ModuleLoader__.load({
           clearSnapshotFallback();
         }
         function schedulePolling() {
-          if (!alive || hidden() || sourceOpen || pollTimer) return;
+          if (!alive || hidden() || sourceOpen || pollTimer || snapshotFallbackTimer !== null) return;
           var base = Math.min(60000, 15000 * Math.pow(2, Math.min(pollAttempt, 2)));
           var delay = Math.round(base * (0.8 + Math.random() * 0.4));
           pollTimer = setTimeout(function () {
@@ -1035,6 +1035,19 @@ window.__ModuleLoader__.load({
             load(true, expectedStreamEpoch).catch(function () {}).finally(schedulePolling);
           }, delay);
         }
+        function armSnapshotFallback(current) {
+          if (snapshotFallbackTimer !== null) return;
+          var expectedStreamEpoch = streamEpoch;
+          snapshotFallbackTimer = setTimeout(function () {
+            snapshotFallbackTimer = null;
+            if (!alive || hidden() || source !== current || streamEpoch !== expectedStreamEpoch) return;
+            // Bound CONNECTING as well as open-without-snapshot. Release the SSE
+            // connection before REST so a stalled stream does not occupy its slot.
+            closeSource(false);
+            setConnection("polling");
+            load(false, expectedStreamEpoch).catch(function () {}).finally(schedulePolling);
+          }, 3000);
+        }
         function openSource() {
           if (!alive || hidden() || source) return;
           if (typeof EventSource !== "function") { schedulePolling(); return; }
@@ -1043,19 +1056,14 @@ window.__ModuleLoader__.load({
             current = new EventSource(eventsUrl(sessionId, selectedTeamId));
             if (!current || typeof current.addEventListener !== "function" || typeof current.close !== "function") throw new TypeError("EventSource does not support named events");
             source = current;
+            armSnapshotFallback(current);
             current.onopen = function () {
               if (!alive || source !== current) return;
               sourceOpen = true;
               streamNeedsSnapshot = true;
               pollAttempt = 0;
               clearPolling();
-              clearSnapshotFallback();
-              var expectedStreamEpoch = streamEpoch;
-              snapshotFallbackTimer = setTimeout(function () {
-                snapshotFallbackTimer = null;
-                if (!alive || hidden() || source !== current || streamEpoch !== expectedStreamEpoch) return;
-                load(true, expectedStreamEpoch).catch(function () {});
-              }, 3000);
+              armSnapshotFallback(current);
               setConnection("disconnected");
             };
             var update = function (event) {
@@ -1082,6 +1090,7 @@ window.__ModuleLoader__.load({
           } catch (_) {
             if (current && typeof current.close === "function") current.close();
             if (source === current) source = null;
+            clearSnapshotFallback();
             schedulePolling();
           }
         }
