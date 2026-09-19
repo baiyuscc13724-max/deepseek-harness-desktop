@@ -11,6 +11,7 @@ const mainActivity = readFileSync(path.join(root, 'mobile', 'android', 'app', 's
 const pairingStore = readFileSync(path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'java', 'io', 'harnessdesktop', 'mobile', 'PairingProfileStore.java'), 'utf8')
 const assetCache = readFileSync(path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'java', 'io', 'harnessdesktop', 'mobile', 'MobileAssetCache.java'), 'utf8')
 const mobileRuntime = readFileSync(path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'assets', 'mobile-runtime.js'), 'utf8')
+const manifestDownload = readFileSync(path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'java', 'io', 'harnessdesktop', 'mobile', 'ManifestDownload.java'), 'utf8')
 
 function extractConst(name, nextName) {
   const start = renderer.indexOf(`  const ${name} =`)
@@ -120,7 +121,7 @@ test('Android offline cache is wired to the active pairing and cleared on explic
   assert.doesNotMatch(assetCache, /new File\(offlineRoot,\s*profile\.pairUrl\)/u)
   assert.match(mainActivity, /PairingProfileStore\.cacheIdentity\(/u)
   assert.match(mainActivity, /mobileAssetCache\.loadLatestSnapshot\(/u)
-  assert.match(mainActivity, /mobileAssetCache\.(?:applySyncResponse|storeFullSnapshot|applyIncrement)\(/u)
+  assert.match(assetCache, /(?:applySyncResponse|storeFullSnapshot|applyIncrement)\(/u)
   assert.match(mainActivity, /mobileAssetCache\.clearOfflineSnapshots\(/u)
 })
 
@@ -140,8 +141,8 @@ test('native cache restore precedes cursor refresh without reloading the WebView
   assert.match(mainActivity, /prepareOfflineState\(pairingProfile\)/u)
   assert.match(mainActivity, /publishOfflineState\(view\);[\s\S]*mobileUiAdapter\.inject\(view\);[\s\S]*publishOfflineState\(view\)/u)
   assert.match(mainActivity, /cacheIdentity=.*snapshotEpoch=.*cursor=/su)
-  assert.match(mainActivity, /X-Harness-Mobile-Sync-Complete/u)
-  assert.match(mainActivity, /response\.optBoolean\("protected", false\)/u)
+  assert.match(manifestDownload, /X-Harness-Mobile-Sync-Complete/u)
+  assert.match(assetCache, /optBoolean\("protected", false\)/u)
   assert.match(mainActivity, /requestOfflineSync\(profile\)/u)
   const syncBody = mainActivity.slice(mainActivity.indexOf('private void requestOfflineSync'), mainActivity.indexOf('private void clearRevokedPairing'))
   assert.doesNotMatch(syncBody, /webView\.(?:reload|loadUrl)/u)

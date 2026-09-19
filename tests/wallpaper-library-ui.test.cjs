@@ -23,7 +23,7 @@ test('wallpaper library renders managed image and video previews as direct-use c
   assert.match(app, /disposeWallpaperCardPreviews\(video\)/)
   assert.match(app, /video\.src = source\s+video\.load\(\)/)
   assert.match(app, /function disposeWallpaperCardPreview\(video\)[\s\S]*?video\.pause\(\)[\s\S]*?video\.removeAttribute\('src'\)[\s\S]*?video\.load\(\)/u)
-  assert.match(app, /function closeSkinPicker\(\) \{\s*disposeWallpaperCardPreviews\(\)\s*disposeWallpaperEnginePreviews\(\)\s*skinPickerHost\.close\(\)/u)
+  assert.match(app, /function closeSkinPicker\(\) \{[\s\S]*?disposeWallpaperCardPreviews\(\)\s*disposeWallpaperEnginePreviews\(\)\s*skinPickerHost\.close\(\)/u)
   assert.match(app, /disposeWallpaperCardPreviews\(\)\s*skinWallpaperLibraryItems\.innerHTML = items\.map/u)
   assert.match(app, /current \? '正在使用' : '使用此壁纸'/)
   assert.match(app, /card\.addEventListener\('dblclick'/)
