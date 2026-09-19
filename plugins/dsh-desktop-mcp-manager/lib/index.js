@@ -129,7 +129,7 @@ async function resolveCredentialMap(credentials, refs) {
 export class McpManager {
   constructor({ file, credentials, mount }) {
     this.file = resolve(file); this.credentials = credentials; this.mount = mount
-    this.servers = new Map(); this.runtimes = new Map(); this.queue = Promise.resolve(); this.closed = false
+    this.servers = new Map(); this.runtimes = new Map(); this.starts = new Map(); this.queue = Promise.resolve(); this.closed = false; this.closing = null
   }
   async load() {
     const rows = await readStore(this.file)
@@ -140,7 +140,7 @@ export class McpManager {
   list() { return [...this.servers.values()].map(server => ({ ...publicServer(server), status: this.status(server.id) })) }
   status(id) { return this.runtimes.get(id)?.status ?? { phase: this.servers.get(id)?.enabled ? 'stopped' : 'disabled' } }
   serialize() { return { version: CONFIG_VERSION, servers: [...this.servers.values()].map(row => ({ ...row })) } }
-  transact(task) { const run = this.queue.catch(() => {}).then(task); this.queue = run.catch(() => {}); return run }
+  transact(task) { const run = this.queue.catch(() => {}).then(() => { if (this.closed) throw Object.assign(new Error('MCP manager is closed or stopping'), { code: 'MCP_CLOSED' }); return task() }); this.queue = run.catch(() => {}); return run }
   assertUnique(candidate, except) {
     for (const row of this.servers.values()) if (row.id !== except && row.serverName.toLowerCase() === candidate.serverName.toLowerCase()) throw Object.assign(new Error('serverName already exists'), { code: 'MCP_SERVER_NAME_CONFLICT' })
   }
@@ -150,24 +150,63 @@ export class McpManager {
     if (row.revision !== revision) throw Object.assign(new Error('MCP server revision conflict'), { code: 'MCP_REVISION_CONFLICT' })
     return row
   }
-  async create(input) { return this.transact(async () => { const row = persisted(validateServer(input), 1); if (this.servers.has(row.id)) throw Object.assign(new Error('id already exists'), { code: 'MCP_ID_CONFLICT' }); this.assertUnique(row); this.servers.set(row.id, row); await atomicWrite(this.file, this.serialize()); if (row.enabled) await this.start(row.id); return { ...publicServer(row), status: this.status(row.id) } }) }
-  async update(id, revision, input) { return this.transact(async () => { const prior = this.expect(id, revision); const next = persisted(validateServer({ ...input, id }, prior), prior.revision + 1); this.assertUnique(next, id); await this.stop(id); this.servers.set(id, next); await atomicWrite(this.file, this.serialize()); if (next.enabled) await this.start(id); return { ...publicServer(next), status: this.status(id) } }) }
+  async commit(servers) {
+    // Persistence is the commit boundary: failed writes must not expose phantom
+    // IDs/revisions or stop an instance still owned by the committed settings.
+    await atomicWrite(this.file, { version: CONFIG_VERSION, servers: [...servers.values()] })
+    this.servers = servers
+  }
+  async create(input) { return this.transact(async () => { const row = persisted(validateServer(input), 1); if (this.servers.has(row.id)) throw Object.assign(new Error('id already exists'), { code: 'MCP_ID_CONFLICT' }); if (this.runtimes.has(row.id)) throw Object.assign(new Error('Prior connection cleanup is unconfirmed. Restart the workbench and check before reusing this ID.'), { code: 'MCP_CLEANUP_REQUIRED' }); this.assertUnique(row); const staged = new Map(this.servers); staged.set(row.id, row); await this.commit(staged); if (row.enabled) await this.start(row.id); return { ...publicServer(row), status: this.status(row.id) } }) }
+  async stopAfterCommit(id) {
+    try { await this.stop(id); return null } catch (_) {
+      // The configuration is already durable. Report cleanup uncertainty rather
+      // than pretending the write failed or retrying an unknown disposal.
+      return this.status(id)
+    }
+  }
+  async update(id, revision, input) { return this.transact(async () => { const prior = this.expect(id, revision); const next = persisted(validateServer({ ...input, id }, prior), prior.revision + 1); this.assertUnique(next, id); const staged = new Map(this.servers); staged.set(id, next); await this.commit(staged); const cleanup = await this.stopAfterCommit(id); if (!cleanup && next.enabled) await this.start(id); return { ...publicServer(next), status: this.status(id), ...(cleanup ? { cleanup } : {}) } }) }
   async setEnabled(id, revision, enabled) { const prior = this.expect(id, revision); const { revision: _revision, ...definition } = prior; return this.update(id, revision, { ...definition, enabled: enabled === true }) }
-  async delete(id, revision) { return this.transact(async () => { this.expect(id, revision); await this.stop(id); this.servers.delete(id); await atomicWrite(this.file, this.serialize()); return { id, deleted: true } }) }
-  async reconnect(id, revision) { const row = this.expect(id, revision); if (!row.enabled) throw Object.assign(new Error('MCP server is disabled'), { code: 'MCP_DISABLED' }); await this.stop(id); await this.start(id); return { id, revision: row.revision, status: this.status(id) } }
-  async start(id) {
+  async delete(id, revision) { return this.transact(async () => { this.expect(id, revision); const staged = new Map(this.servers); staged.delete(id); await this.commit(staged); const cleanup = await this.stopAfterCommit(id); return { id, deleted: true, ...(cleanup ? { cleanup } : {}) } }) }
+  async reconnect(id, revision) { return this.transact(async () => { const row = this.expect(id, revision); if (!row.enabled) throw Object.assign(new Error('MCP server is disabled'), { code: 'MCP_DISABLED' }); await this.stop(id); await this.start(id); return { id, revision: row.revision, status: this.status(id) } }) }
+  start(id) {
+    if (this.closed) return Promise.resolve()
+    if (this.starts.has(id)) return this.starts.get(id)
+    const pending = Promise.resolve().then(() => this.startRuntime(id)).finally(() => this.starts.delete(id))
+    this.starts.set(id, pending)
+    return pending
+  }
+  async startRuntime(id) {
     const row = this.servers.get(id); if (!row?.enabled || this.closed) return
     this.runtimes.set(id, { status: { phase: 'connecting' } })
     try {
       const config = row.transport.kind === 'stdio'
         ? { transport: 'stdio', serverName: row.serverName, command: row.transport.command, args: row.transport.args, cwd: row.transport.cwd, env: await resolveCredentialMap(this.credentials, row.transport.envRefs), toolCallTimeoutMs: row.toolCallTimeoutMs, failOnStartupError: true, reconnect: row.reconnect }
         : { transport: 'streamable-http', serverName: row.serverName, url: row.transport.url, headers: await resolveCredentialMap(this.credentials, row.transport.headerRefs), toolCallTimeoutMs: row.toolCallTimeoutMs, failOnStartupError: true, reconnect: row.reconnect }
+      if (this.closed) return
       const handle = await this.mount(config)
       this.runtimes.set(id, { handle, status: { phase: 'ready' } })
     } catch (error) { this.runtimes.set(id, { status: { phase: 'failed', error: safeError(error) } }) }
   }
-  async stop(id) { const runtime = this.runtimes.get(id); this.runtimes.delete(id); if (runtime?.handle?.dispose) await runtime.handle.dispose() }
-  async close() { this.closed = true; await Promise.allSettled([...this.runtimes.keys()].map(id => this.stop(id))) }
+  async stop(id) {
+    const runtime = this.runtimes.get(id)
+    try { if (runtime?.handle?.dispose) await runtime.handle.dispose() } catch (_) {
+      runtime.status = { phase: 'stop-failed', outcome: 'unknown', error: { code: 'MCP_CLEANUP_REQUIRED', message: 'Could not confirm that the previous connection stopped. Restart the workbench and check its connection state.' } }
+      throw Object.assign(new Error(runtime.status.error.message), { code: 'MCP_CLEANUP_REQUIRED' })
+    }
+    this.runtimes.delete(id)
+  }
+  close() {
+    if (this.closing) return this.closing
+    this.closed = true
+    this.closing = (async () => {
+      // Stop only after in-flight credentials/mounts publish their handles;
+      // otherwise a late mount can resurrect a disposed manager and leak it.
+      await this.queue
+      await Promise.allSettled([...this.starts.values()])
+      await Promise.allSettled([...this.runtimes.keys()].map(id => this.stop(id)))
+    })()
+    return this.closing
+  }
 }
 function trusted(req) {
   if (req.headers[CSRF_HEADER] !== '1') return false
@@ -179,7 +218,7 @@ function trusted(req) {
 }
 function json(res, status, body) { res.statusCode = status; res.setHeader('content-type', 'application/json; charset=utf-8'); res.setHeader('cache-control', 'no-store'); res.end(JSON.stringify(body)) }
 async function body(req) { let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 128 * 1024) throw Object.assign(new Error('request too large'), { status: 413 }) } return JSON.parse(raw || '{}') }
-function apiError(error) { return { code: error?.code || 'MCP_REQUEST_FAILED', message: ['MCP_REVISION_CONFLICT', 'MCP_SERVER_NAME_CONFLICT', 'MCP_ID_CONFLICT', 'MCP_NOT_FOUND', 'MCP_DISABLED'].includes(error?.code) ? error.message : 'MCP manager request failed.' } }
+function apiError(error) { return { code: error?.code || 'MCP_REQUEST_FAILED', message: ['MCP_REVISION_CONFLICT', 'MCP_SERVER_NAME_CONFLICT', 'MCP_ID_CONFLICT', 'MCP_NOT_FOUND', 'MCP_DISABLED', 'MCP_CLEANUP_REQUIRED'].includes(error?.code) ? error.message : 'MCP manager request failed.' } }
 export async function apply(ctx, config = {}) {
   const file = config.path ? resolve(config.path) : join(process.env.DSH_HOME || process.cwd(), 'mcp-servers.json')
   const manager = new McpManager({ file, credentials: ctx.credentials, mount: async resolvedConfig => {

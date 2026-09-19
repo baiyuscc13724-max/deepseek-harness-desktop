@@ -1,17 +1,22 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { mkdtempSync, readFileSync } = require('node:fs')
+const { mkdtempSync, readFileSync, rmSync } = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
 const { ensureMobileControlPlugin } = require('../electron/bridge/mobile-control-plugin-service.cjs')
 
-test('bundled mobile control plugin installs into the DSH web profile idempotently', async () => {
+test('bundled mobile control plugin installs into the DSH web profile idempotently', async t => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'harness-mobile-control-plugin-'))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
   const bundledRoot = path.join(__dirname, '..', 'plugins', 'dsh-mobile-control')
   const first = await ensureMobileControlPlugin({ dshHome: home, bundledRoot })
   const second = await ensureMobileControlPlugin({ dshHome: home, bundledRoot })
-  assert.equal(first.version, '1.0.59')
+  const sourceManifest = JSON.parse(readFileSync(path.join(bundledRoot, 'package.json'), 'utf8'))
+  const deployedManifest = JSON.parse(readFileSync(path.join(first.destination, 'package.json'), 'utf8'))
+  assert.equal(first.version, sourceManifest.version)
+  assert.equal(deployedManifest.version, sourceManifest.version)
+  assert.equal(deployedManifest.name, sourceManifest.name)
   assert.equal(first.patchChanged, true)
   assert.equal(second.patchChanged, false)
   assert.match(readFileSync(path.join(first.destination, 'lib', 'index.js'), 'utf8'), /android_control/)

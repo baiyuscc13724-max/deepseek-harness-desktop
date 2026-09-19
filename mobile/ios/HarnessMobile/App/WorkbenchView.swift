@@ -56,12 +56,16 @@ struct WorkbenchView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.keyboardDismissMode = .interactive
+        context.coordinator.requestedURL = url
         webView.load(URLRequest(url: url, cachePolicy: .reloadRevalidatingCacheData, timeoutInterval: 30))
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if webView.url != url {
+        // SPA navigation changes webView.url. SwiftUI status/theme updates
+        // must not reload the initial origin and discard route/draft state.
+        if context.coordinator.requestedURL != url {
+            context.coordinator.requestedURL = url
             webView.load(URLRequest(url: url, cachePolicy: .reloadRevalidatingCacheData, timeoutInterval: 30))
         }
     }
@@ -198,6 +202,7 @@ struct WorkbenchView: UIViewRepresentable {
     """#
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        var requestedURL: URL?
         let onLoadingChange: (Bool) -> Void
         let onFailure: (String) -> Void
 

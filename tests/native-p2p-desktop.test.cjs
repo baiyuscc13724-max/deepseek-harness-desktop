@@ -355,7 +355,7 @@ test('native P2P renderer gates negotiation and bounds every untrusted path', ()
   assert.match(source, /peer\.pendingLocalIce\.splice\(0\)/u)
   assert.match(source, /let messageChain = Promise\.resolve\(\)/u)
   assert.match(source, /messageChain = messageChain\.then\(async \(\) =>/u)
-  assert.match(source, /await handleSignal\(message\.source, await decryptSignal\(message\.payload\)\)/u)
+  // The actual renderer onmessage/decrypt/handle pipeline is executed below, including late close/Stop.
   assert.match(source, /\^\[A-Za-z0-9_-\]\{43\}\$/u)
   assert.match(source, /replayed signal was rejected/u)
   assert.match(source, /\^stun:/u)
@@ -385,4 +385,103 @@ test('Android release shrinker preserves every WebRTC JNI binding symbol', () =>
   assert.match(rules, /-keep class org\.webrtc\.\*\* \{ \*; \}/u)
   assert.match(rules, /-keep class org\.jni_zero\.\*\* \{ \*; \}/u)
   assert.match(rules, /-keepattributes \*Annotation\*/u)
+})
+
+async function rendererSignalFixture() {
+  const vm = require('node:vm'), { webcrypto } = require('node:crypto')
+  const sockets = [], events = [], applied = [], gates = [], barriers = new Map()
+  let decryptCalls = 0, barrierNumber = 0
+  class Socket {
+    static OPEN = 1; static CLOSING = 2
+    constructor() { this.readyState = 1; this.bufferedAmount = 0; sockets.push(this) }
+    send() {}
+    close() { this.readyState = 3 }
+  }
+  const subtle = {
+    importKey: (...args) => webcrypto.subtle.importKey(...args),
+    encrypt: (...args) => webcrypto.subtle.encrypt(...args),
+    digest: (...args) => webcrypto.subtle.digest(...args),
+    async decrypt(...args) {
+      decryptCalls++
+      const gate = gates.shift()
+      if (gate) { gate.started(); await gate.wait }
+      try { return await webcrypto.subtle.decrypt(...args) }
+      finally { gate?.finished() }
+    }
+  }
+  const context = vm.createContext({
+    require(name) {
+      assert.equal(name, 'electron')
+      return { ipcRenderer: { on() {}, send(_channel, event) { events.push(event); barriers.get(event.message)?.() } } }
+    },
+    Buffer, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, WebSocket: Socket,
+    crypto: { subtle, getRandomValues: value => webcrypto.getRandomValues(value) }
+  })
+  vm.runInContext(readFileSync(path.join(__dirname, '../renderer/native-p2p.js'), 'utf8') +
+    ';globalThis.audit={start,stop,encryptSignal,setPeer:(id,peer)=>peers.set(id,peer),nonces:()=>seenSignalNonces.size}', context)
+  const config = { relayUrl: 'wss://fixture.invalid', roomId: ROOM_ID, signalKey: TUNNEL_KEY }
+  const latest = () => sockets.at(-1)
+  const deliver = (socket, value) => socket.onmessage({ data: JSON.stringify(value) })
+  const barrier = () => new Promise(resolve => {
+    const message = 'fixture-barrier-' + (++barrierNumber)
+    barriers.set(message, resolve); deliver(latest(), { type: 'error', message })
+  })
+  const start = async label => {
+    await context.audit.start(config)
+    context.audit.setPeer(PEER_ID, { desktopNonce: DESKTOP_NONCE, mobileNonce: MOBILE_NONCE, iceCandidates: 0,
+      connection: { close() {}, async addIceCandidate(candidate) { applied.push({ label, candidate: candidate?.candidate }) } } })
+    deliver(latest(), { type: 'welcome', role: 'desktop', signalingVersion: 1 }); await barrier()
+  }
+  await start('A')
+  return { context, sockets, events, applied, barrier, start, latest, decryptCalls: () => decryptCalls,
+    async envelope(candidate, overrides = {}) { return context.audit.encryptSignal({ source: PEER_ID, target: 'desktop', desktopNonce: DESKTOP_NONCE, mobileNonce: MOBILE_NONCE, kind: 'ice', candidate: { candidate }, ...overrides }) },
+    deliver(payload, socket = latest()) { deliver(socket, { type: 'signal', version: 1, source: PEER_ID, payload }) },
+    gate() {
+      let started, finished, release
+      const beginning = new Promise(resolve => { started = resolve })
+      const ending = new Promise(resolve => { finished = resolve })
+      const wait = new Promise(resolve => { release = resolve })
+      gates.push({ started, finished, wait }); return { beginning, ending, release }
+    }
+  }
+}
+
+test('actual renderer serializes authenticated signal handling and rejects replay and session mismatch', { timeout: 5000 }, async () => {
+  const f = await rendererSignalFixture()
+  try {
+    const first = await f.envelope('one'), second = await f.envelope('two')
+    const gate = f.gate(); f.deliver(first); f.deliver(second)
+    await gate.beginning
+    assert.equal(f.decryptCalls(), 1, 'second message must not decrypt ahead of the first')
+    assert.equal(f.applied.length, 0)
+    gate.release(); await f.barrier()
+    assert.deepEqual(f.applied, [{ label: 'A', candidate: 'one' }, { label: 'A', candidate: 'two' }])
+    f.deliver(first); await f.barrier()
+    assert.equal(f.applied.length, 2)
+    assert.ok(f.events.some(event => /replayed signal/.test(event.message || '')))
+    f.deliver(await f.envelope('wrong-target', { target: 'other-desktop' })); await f.barrier()
+    assert.equal(f.applied.length, 2)
+    assert.ok(f.events.some(event => /session binding/.test(event.message || '')))
+  } finally { f.context.audit.stop() }
+})
+
+test('actual renderer discards decrypted signals after socket close, Stop or room replacement', { timeout: 5000 }, async () => {
+  for (const action of ['close', 'stop', 'replace']) {
+    const f = await rendererSignalFixture()
+    try {
+      const encrypted = await f.envelope('late-A')
+      const gate = f.gate(); f.deliver(encrypted); await gate.beginning
+      if (action === 'close') f.latest().onclose()
+      if (action === 'stop') f.context.audit.stop()
+      if (action === 'replace') await f.start('B')
+      gate.release(); await gate.ending
+      await new Promise(setImmediate) // Drain the completed decrypt continuation, not a timed delay.
+      assert.equal(f.applied.length, 0, action)
+      if (action !== 'close') assert.equal(f.context.audit.nonces(), 0, 'old generation must not poison replacement replay cache')
+      if (action === 'replace') {
+        f.deliver(await f.envelope('current-B')); await f.barrier()
+        assert.deepEqual(f.applied, [{ label: 'B', candidate: 'current-B' }])
+      }
+    } finally { f.context.audit.stop() }
+  }
 })

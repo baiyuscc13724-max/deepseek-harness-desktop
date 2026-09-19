@@ -1,5 +1,6 @@
 const { access, mkdir, readFile, readdir, rename, rm, writeFile } = require('node:fs/promises')
 const path = require('node:path')
+const { randomUUID } = require('node:crypto')
 
 const SOURCE_FILE_RE = /(?:\.map|\.(?:ts|tsx|cts|mts))$/i
 const runtimeInstalls = new Map()
@@ -52,7 +53,8 @@ async function commitRuntimeCache({ stagingRoot, cacheRoot, destination, markerV
       return
     }
     try {
-      await rm(cacheRoot, { recursive: true, force: true })
+      // Immutable publication: another process may have committed after our
+      // readiness check. Never delete the shared destination to win a race.
       await mkdir(path.dirname(cacheRoot), { recursive: true })
       await rename(stagingRoot, cacheRoot)
       return
@@ -70,21 +72,26 @@ async function commitRuntimeCache({ stagingRoot, cacheRoot, destination, markerV
 async function installRuntimeNodeModules({ source, cacheRoot, destination, markerValue }) {
   if (await runtimeReady(destination, markerValue)) return destination
 
-  const stagingRoot = `${cacheRoot}.staging-${process.pid}`
+  const stagingRoot = `${cacheRoot}.staging-${process.pid}-${randomUUID()}`
   const stagingModules = path.join(stagingRoot, 'node_modules')
-  await rm(stagingRoot, { recursive: true, force: true })
-  const files = []
-  await collectFiles(source, stagingModules, files)
-  await copyFiles(files)
-  await writeFile(path.join(stagingModules, '.harness-desktop-runtime.json'), markerValue, 'utf8')
-  await commitRuntimeCache({ stagingRoot, cacheRoot, destination, markerValue })
-  if (!await runtimeReady(destination, markerValue)) throw new Error('本地 Harness 运行环境展开后校验失败。')
-  return destination
+  try {
+    const files = []
+    await collectFiles(source, stagingModules, files)
+    await copyFiles(files)
+    await writeFile(path.join(stagingModules, '.harness-desktop-runtime.json'), markerValue, 'utf8')
+    if (!await runtimeReady(stagingModules, markerValue)) throw new Error('本地 Harness 运行环境暂存校验失败。')
+    await commitRuntimeCache({ stagingRoot, cacheRoot, destination, markerValue })
+    if (!await runtimeReady(destination, markerValue)) throw new Error('本地 Harness 运行环境展开后校验失败。')
+    return destination
+  } finally {
+    await rm(stagingRoot, { recursive: true, force: true }).catch(() => {})
+  }
 }
 
 async function ensureRuntimeNodeModules({ appRoot, userData, appVersion }) {
   const source = path.join(appRoot, 'node_modules')
   if (!String(appRoot).includes('app.asar')) return source
+  if (typeof appVersion !== 'string' || !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9][A-Za-z0-9.+-]*)?$/.test(appVersion)) throw new Error('本地 Harness runtime 版本无效。')
 
   const markerValue = JSON.stringify({ appVersion, platform: process.platform, arch: process.arch })
   const cacheRoot = path.join(userData, 'runtime', `${appVersion}-${process.platform}-${process.arch}`)

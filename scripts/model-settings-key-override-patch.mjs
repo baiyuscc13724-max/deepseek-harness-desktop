@@ -1,9 +1,59 @@
 const LEGACY_MARKER = '@harness-desktop/model-settings-key-override-v1'
 const DIRECT_MARKER = '@harness-desktop/model-settings-key-override-direct-v2'
-const MARKER = '@harness-desktop/model-settings-key-override-gated-v3'
+const GATED_MARKER = '@harness-desktop/model-settings-key-override-gated-v3'
+const MARKER = '@harness-desktop/model-settings-key-isolation-v4'
+
+/** Encode the exact settings namespace and provider id into a collision-free shell-safe credential reference. */
+export function providerCredentialOverrideRef(namespace, provider) {
+  const identity = `${namespace}\u0000${provider}`
+  const encoded = Array.from(identity, symbol => symbol.codePointAt(0).toString(16).toUpperCase()).join('_')
+  return `HARNESS_DESKTOP_PROVIDER_${encoded}_API_KEY`
+}
 
 /** Pure UI state transition shared by the generated runtime and behavior tests. */
 export function transitionModelCredentialOverride(state, event) {
+  if (event.type === 'describe') {
+    return { ...state, gate: event.writable === true || event.writable === false ? 'ready' : 'unavailable', writable: event.writable }
+  }
+  if (event.type === 'restore') return state.usingOverride ? { ...state, mode: 'restore', draft: '' } : state
+  if (event.type === 'keep') return { ...state, mode: 'configured', draft: '' }
+  if (event.type !== 'input' || state.gate !== 'ready' || state.mode === 'restore') return state
+  const draft = event.value
+  const mode = state.mode === 'configured' && !state.usingOverride && draft.length > 0
+    ? 'override'
+    : state.mode === 'override' && !state.usingOverride && draft.length === 0
+      ? 'configured'
+      : state.mode
+  return { ...state, mode, draft }
+}
+
+/** Plan profile-reference and credential-store writes without mixing secret material into settings. */
+export function planModelCredentialOverride({ mode, keyValue, configuredKeyRef, overrideKeyRef, layout, hasDraftRef, hasFallbackRef }) {
+  if (mode === 'restore') return { profile: { op: 'unset' }, credential: { op: 'unset', ref: overrideKeyRef } }
+  if (keyValue.length > 0) {
+    return {
+      profile: configuredKeyRef === overrideKeyRef && (hasDraftRef || hasFallbackRef) ? { op: 'keep' } : { op: 'set', ref: overrideKeyRef },
+      credential: { op: 'set', ref: overrideKeyRef, value: keyValue }
+    }
+  }
+  if (mode === 'override') return { error: 'override-key-required' }
+  return { profile: { op: 'keep' }, credential: { op: 'keep' } }
+}
+
+/** Identify only the exact namespace/provider-owned override ref; configured or legacy/environment refs are never deleted. */
+export function managedProviderCredentialRef(namespace, provider, apiKeyEnv, credential) {
+  const owned = providerCredentialOverrideRef(namespace, provider)
+  return apiKeyEnv === owned && credential?.configured === true && credential.writable === true ? owned : undefined
+}
+
+const RUNTIME_OVERRIDE_REF_SOURCE = providerCredentialOverrideRef.toString().replace('providerCredentialOverrideRef', 'deriveOverrideKeyRef')
+const RUNTIME_TRANSITION_SOURCE = transitionModelCredentialOverride.toString().replace('transitionModelCredentialOverride', 'modelSettingsCredentialTransition')
+const RUNTIME_PLAN_SOURCE = planModelCredentialOverride.toString().replace('planModelCredentialOverride', 'modelSettingsCredentialPlan')
+const RUNTIME_MANAGED_REF_SOURCE = managedProviderCredentialRef.toString()
+  .replace('managedProviderCredentialRef', 'modelSettingsManagedCredentialRef')
+  .replace('providerCredentialOverrideRef', 'deriveOverrideKeyRef')
+
+function gatedV3Transition(state, event) {
   if (event.type === 'describe') {
     return { ...state, gate: event.writable === true || event.writable === false ? 'ready' : 'unavailable', writable: event.writable }
   }
@@ -19,8 +69,7 @@ export function transitionModelCredentialOverride(state, event) {
   return { ...state, mode, draft }
 }
 
-/** Plan profile-reference and credential-store writes without mixing secret material into settings. */
-export function planModelCredentialOverride({ mode, keyValue, configuredKeyRef, overrideKeyRef, layout, hasDraftRef, hasFallbackRef }) {
+function gatedV3Plan({ mode, keyValue, configuredKeyRef, overrideKeyRef, layout, hasDraftRef, hasFallbackRef }) {
   if (mode === 'override') {
     if (keyValue.length === 0) return { error: 'override-key-required' }
     return { profile: { op: 'set', ref: overrideKeyRef }, credential: { op: 'set', ref: overrideKeyRef, value: keyValue } }
@@ -32,16 +81,15 @@ export function planModelCredentialOverride({ mode, keyValue, configuredKeyRef, 
   return { profile, credential: keyValue.length > 0 ? { op: 'set', ref: configuredKeyRef, value: keyValue } : { op: 'keep' } }
 }
 
-/** Identify only page-managed credential refs; environment refs are never returned for deletion. */
-export function managedProviderCredentialRef(provider, apiKeyEnv, credential) {
+function gatedV3ManagedRef(provider, apiKeyEnv, credential) {
   const stem = provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_')
   const refs = [`${stem}_API_KEY`, `HARNESS_DESKTOP_${stem}_API_KEY`]
   return refs.includes(apiKeyEnv) && credential?.configured === true && credential.writable === true ? apiKeyEnv : undefined
 }
 
-const RUNTIME_TRANSITION_SOURCE = transitionModelCredentialOverride.toString().replace('transitionModelCredentialOverride', 'modelSettingsCredentialTransition')
-const RUNTIME_PLAN_SOURCE = planModelCredentialOverride.toString().replace('planModelCredentialOverride', 'modelSettingsCredentialPlan')
-const RUNTIME_MANAGED_REF_SOURCE = managedProviderCredentialRef.toString().replace('managedProviderCredentialRef', 'modelSettingsManagedCredentialRef')
+const GATED_TRANSITION_SOURCE = gatedV3Transition.toString().replace('gatedV3Transition', 'modelSettingsCredentialTransition')
+const GATED_PLAN_SOURCE = gatedV3Plan.toString().replace('gatedV3Plan', 'modelSettingsCredentialPlan')
+const GATED_MANAGED_REF_SOURCE = gatedV3ManagedRef.toString().replace('gatedV3ManagedRef', 'modelSettingsManagedCredentialRef')
 
 const REPLACEMENTS = [
   {
@@ -53,10 +101,8 @@ const REPLACEMENTS = [
 			return \`${'${provider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY'}\`;
 		}
 		const modelSettingsKeyOverrideMarker = "${MARKER}";
-		/** Use a separate writable reference without exposing or mutating a launch-environment secret. */
-		function deriveOverrideKeyRef(provider) {
-			return \`HARNESS_DESKTOP_${'${deriveKeyRef(provider)}'}\`;
-		}
+		/** Encode the exact settings namespace and provider id into a collision-free, page-owned credential reference. */
+		${RUNTIME_OVERRIDE_REF_SOURCE.split("\n").join("\n\t\t")}
 		${RUNTIME_TRANSITION_SOURCE.split("\n").join("\n\t\t")}
 		${RUNTIME_PLAN_SOURCE.split("\n").join("\n\t\t")}
 		${RUNTIME_MANAGED_REF_SOURCE.split("\n").join("\n\t\t")}`
@@ -77,7 +123,7 @@ const REPLACEMENTS = [
     original: `			const keyRef = refFor(schema, namespace, settingsPath, props.provider);
 			const protocols = (0, react.useMemo)(() => layout === "pi-ai" ? protocolChoices(namespace, schema) : [], [`,
     patched: `			const configuredKeyRef = refFor(schema, namespace, settingsPath, props.provider);
-			const overrideKeyRef = deriveOverrideKeyRef(props.provider);
+			const overrideKeyRef = deriveOverrideKeyRef(namespace.ns, props.provider);
 			const usingOverride = configuredKeyRef === overrideKeyRef;
 			const keyRef = credentialMode === "override" ? overrideKeyRef : configuredKeyRef;
 			const protocols = (0, react.useMemo)(() => layout === "pi-ai" ? protocolChoices(namespace, schema) : [], [`
@@ -306,7 +352,7 @@ const REPLACEMENTS = [
     label: 'provider deletion override cleanup',
     original: `			const managedRef = deriveKeyRef(row.entry.provider);
 			const credentialRef = row.apiKeyEnv === managedRef && row.credential?.configured === true && row.credential.writable ? managedRef : void 0;`,
-    patched: `			const credentialRef = modelSettingsManagedCredentialRef(row.entry.provider, row.apiKeyEnv, row.credential);`
+    patched: `			const credentialRef = modelSettingsManagedCredentialRef(row.entry.settingsNs, row.entry.provider, row.apiKeyEnv, row.credential);`
   },
   {
     label: 'provider delete touch target',
@@ -430,9 +476,7 @@ const V2_MIGRATIONS = [
   [DIRECT_MARKER, MARKER],
   [`		function deriveOverrideKeyRef(provider) {
 			return \`HARNESS_DESKTOP_${'${deriveKeyRef(provider)}'}\`;
-		}`, `		function deriveOverrideKeyRef(provider) {
-			return \`HARNESS_DESKTOP_${'${deriveKeyRef(provider)}'}\`;
-		}
+		}`, `		${RUNTIME_OVERRIDE_REF_SOURCE.split("\n").join("\n\t\t")}
 		${RUNTIME_TRANSITION_SOURCE.split("\n").join("\n\t\t")}
 		${RUNTIME_PLAN_SOURCE.split("\n").join("\n\t\t")}
 		${RUNTIME_MANAGED_REF_SOURCE.split("\n").join("\n\t\t")}`],
@@ -518,6 +562,19 @@ const V2_MIGRATIONS = [
 			keyRestoreCompensationFailed: "本机覆盖删除及自动重新绑定均失败。请保持此编辑器打开并重试“恢复启动环境”。",`]
 ]
 
+const indentRuntime = source => `\t\t${source.split('\n').join('\n\t\t')}`
+const V3_MIGRATIONS = [
+  [GATED_MARKER, MARKER],
+  [`		function deriveOverrideKeyRef(provider) {
+			return \`HARNESS_DESKTOP_${'${deriveKeyRef(provider)}'}\`;
+		}`, indentRuntime(RUNTIME_OVERRIDE_REF_SOURCE)],
+  [indentRuntime(GATED_TRANSITION_SOURCE), indentRuntime(RUNTIME_TRANSITION_SOURCE)],
+  [indentRuntime(GATED_PLAN_SOURCE), indentRuntime(RUNTIME_PLAN_SOURCE)],
+  [indentRuntime(GATED_MANAGED_REF_SOURCE), indentRuntime(RUNTIME_MANAGED_REF_SOURCE)],
+  ['deriveOverrideKeyRef(props.provider)', 'deriveOverrideKeyRef(namespace.ns, props.provider)'],
+  ['modelSettingsManagedCredentialRef(row.entry.provider, row.apiKeyEnv, row.credential)', 'modelSettingsManagedCredentialRef(row.entry.settingsNs, row.entry.provider, row.apiKeyEnv, row.credential)']
+]
+
 /** Exact historical direct-v2 fixture reconstructed from the pinned legacy upstream shape, not the current alpha runtime. */
 export function createModelSettingsKeyOverrideDirectV2Fixture(source = createModelSettingsKeyOverrideUpstreamFixture()) {
   let output = patchModelSettingsKeyOverrideSource(source).source
@@ -530,7 +587,8 @@ export function createModelSettingsKeyOverrideDirectV2Fixture(source = createMod
 
 const FINAL_MARKERS = [
   MARKER,
-  'function deriveOverrideKeyRef(provider)',
+  'HARNESS_DESKTOP_PROVIDER_${encoded}_API_KEY',
+  'function deriveOverrideKeyRef(namespace, provider)',
   'function modelSettingsCredentialTransition(',
   'function modelSettingsCredentialPlan(',
   'function modelSettingsManagedCredentialRef(',
@@ -540,7 +598,7 @@ const FINAL_MARKERS = [
   'expectedRevision: appliedRevision',
   'keyRestoreCompensationFailed',
   'plannedOps.filter((op) => op.path[op.path.length - 1] === "apiKeyEnv")',
-  'modelSettingsManagedCredentialRef(row.entry.provider, row.apiKeyEnv, row.credential)',
+  'modelSettingsManagedCredentialRef(row.entry.settingsNs, row.entry.provider, row.apiKeyEnv, row.credential)',
   'htmlFor: credentialInputId',
   'autoComplete: "new-password"',
   'style: { minHeight: 44, minWidth: 44 }',
@@ -562,9 +620,16 @@ export function patchModelSettingsKeyOverrideSource(source) {
     migrated = true
   }
   if (output.includes(DIRECT_MARKER)) {
-    for (const [direct, gated] of V2_MIGRATIONS) {
+    for (const [direct, isolated] of V2_MIGRATIONS) {
       if (!output.includes(direct)) throw new Error('Pinned DSH model-settings key override v2 patch is incomplete; refusing an unsafe migration.')
-      output = output.replace(direct, gated)
+      output = output.replace(direct, isolated)
+    }
+    migrated = true
+  }
+  if (output.includes(GATED_MARKER)) {
+    for (const [gated, isolated] of V3_MIGRATIONS) {
+      if (!output.includes(gated)) throw new Error('Pinned DSH model-settings key override v3 patch is incomplete; refusing an unsafe migration.')
+      output = output.replace(gated, isolated)
     }
     migrated = true
   }
@@ -578,6 +643,85 @@ export function patchModelSettingsKeyOverrideSource(source) {
       throw new Error(`Pinned DSH ${replacement.label} changed; refusing an unsafe model-settings key override patch.`)
     }
     output = output.replace(replacement.original, replacement.patched)
+  }
+  return { source: output, changed: true }
+}
+
+const ALPHA5_MARKER = '@harness-desktop/model-settings-alpha5-key-isolation-v1'
+
+function replaceAlpha5Exact(source, original, patched, label) {
+  const first = source.indexOf(original)
+  if (first < 0 || source.indexOf(original, first + original.length) >= 0) {
+    throw new Error(`Pinned DSH alpha.5 ${label} changed; refusing an unsafe model-settings credential isolation patch.`)
+  }
+  return source.slice(0, first) + patched + source.slice(first + original.length)
+}
+
+/** Patch the native alpha.5 editor without reusing pre-alpha React/wire anchors. */
+export function patchModelSettingsAlpha5CredentialIsolationSource(source) {
+  if (source.includes(ALPHA5_MARKER)) return { source, changed: false }
+  let output = source
+  const helperAnchor = `\t\tfunction deriveKeyRef(provider) {\n\t\t\treturn \`\${provider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY\`;\n\t\t}`
+  const helperPatch = `${helperAnchor}\n\t\tconst modelSettingsAlpha5CredentialIsolationMarker = "${ALPHA5_MARKER}";\n\t\t${RUNTIME_OVERRIDE_REF_SOURCE.split('\n').join('\n\t\t')}`
+  output = replaceAlpha5Exact(output, helperAnchor, helperPatch, 'owned credential helper')
+  output = replaceAlpha5Exact(output,
+    `\t\tfunction renderProviderEditor({ target, ...props }) {\n\t\t\treturn (0, react_jsx_runtime.jsx)(ProviderEditor, {\n\t\t\t\tprovider: target.provider,\n\t\t\t\tdisplayName: target.displayName,\n\t\t\t\tsettingsPath: target.settingsPath,\n\t\t\t\t...target.declared === true ? { declared: true } : {},\n\t\t\t\t...props\n\t\t\t});\n\t\t}`,
+    `\t\tfunction renderProviderEditor({ target, ...props }) {\n\t\t\treturn (0, react_jsx_runtime.jsx)(ProviderEditor, {\n\t\t\t\tprovider: target.provider,\n\t\t\t\tdisplayName: target.displayName,\n\t\t\t\tsettingsPath: target.settingsPath,\n\t\t\t\t...target.declared === true ? { declared: true } : {},\n\t\t\t\t...props\n\t\t\t}, deriveOverrideKeyRef(target.settingsNs, target.provider));\n\t\t}`,
+    'editor identity key')
+  output = replaceAlpha5Exact(output,
+    `\t\t\tconst [busy, setBusy] = (0, react.useState)(false);\n\t\t\tconst [failure, setFailure] = (0, react.useState)(void 0);\n\t\t\tconst [committedOriginal, setCommittedOriginal] = (0, react.useState)(() => schema.getPath(namespace.user, settingsPath));`,
+    `\t\t\tconst [busy, setBusy] = (0, react.useState)(false);\n\t\t\tconst [failure, setFailure] = (0, react.useState)(void 0);\n\t\t\tconst alive = (0, react.useRef)(true);\n\t\t\t(0, react.useEffect)(() => () => {\n\t\t\t\talive.current = false;\n\t\t\t}, []);\n\t\t\tconst [committedOriginal, setCommittedOriginal] = (0, react.useState)(() => schema.getPath(namespace.user, settingsPath));`,
+    'editor lifetime guard')
+  output = replaceAlpha5Exact(output,
+    `\t\t\tconst keyRef = refFor(schema, namespace, settingsPath, props.provider);`,
+    `\t\t\tconst configuredKeyRef = refFor(schema, namespace, settingsPath, props.provider);\n\t\t\tconst ownedKeyRef = deriveOverrideKeyRef(namespace.ns, props.provider);\n\t\t\tconst keyRef = configuredKeyRef;`,
+    'credential reference selection')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\tconst next = layout === "pi-ai" && stringAt(draft, "apiKeyEnv") === void 0 && stringAt(fallback, "apiKeyEnv") === void 0 && keyValue.length > 0 ? schema.setPath(draft, ["apiKeyEnv"], keyRef) : draft;`,
+    `\t\t\t\tconst next = keyValue.length > 0 ? schema.setPath(draft, ["apiKeyEnv"], ownedKeyRef) : draft;`,
+    'provider-owned profile reference')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\tconst ops = props.credentialOnly === true ? [] : materializesNativeProfile ? [{\n\t\t\t\t\top: "set",\n\t\t\t\t\tpath: [...settingsPath],\n\t\t\t\t\tvalue: {}\n\t\t\t\t}] : pathOps(settingsPath, committedOriginal, next);`,
+    `\t\t\t\tconst plannedOps = materializesNativeProfile ? [{\n\t\t\t\t\top: "set",\n\t\t\t\t\tpath: [...settingsPath],\n\t\t\t\t\tvalue: {}\n\t\t\t\t}] : pathOps(settingsPath, committedOriginal, next);\n\t\t\t\tconst ops = props.credentialOnly === true ? plannedOps.filter((op) => op.path[op.path.length - 1] === "apiKeyEnv") : plannedOps;`,
+    'credential-only profile write')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\tif (keyValue.length > 0) {\n\t\t\t\t\tconst stored = await operations.storeCredential(keyRef, keyValue);`,
+    `\t\t\t\tif (keyValue.length > 0) {\n\t\t\t\t\tconst stored = await operations.storeCredential(ownedKeyRef, keyValue);`,
+    'provider-owned credential write')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\t\tif (failure !== void 0) {\n\t\t\t\t\t\tsetFailure(failure);\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tprops.onClose(true);\n\t\t\t\t} finally {\n\t\t\t\t\tsetBusy(false);\n\t\t\t\t}`,
+    `\t\t\t\t\tif (failure !== void 0) {\n\t\t\t\t\t\tif (alive.current) setFailure(failure);\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tif (alive.current) props.onClose(true);\n\t\t\t\t} finally {\n\t\t\t\t\tif (alive.current) setBusy(false);\n\t\t\t\t}`,
+    'stale editor completion guard')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\t\t\t\tplaceholder: keyPlaceholder,\n\t\t\t\t\t\t\t"aria-label": t("keyInput"),`,
+    `\t\t\t\t\t\t\tplaceholder: keyPlaceholder,\n\t\t\t\t\t\t\t"aria-label": t("keyInput"),\n\t\t\t\t\t\t\t"aria-describedby": keyLocked ? \`credential-environment-\${props.provider}\` : void 0,`,
+    'environment credential accessibility')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\t\t\t\tdisabled: disabled || keyLocked,`,
+    `\t\t\t\t\t\t\tdisabled,`,
+    'isolated override input')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\t\t\tshownKeyFailure === void 0 ? null : (0, react_jsx_runtime.jsx)("p", {`,
+    `\t\t\t\t\t\tkeyLocked ? (0, react_jsx_runtime.jsx)("p", {\n\t\t\t\t\t\t\tid: \`credential-environment-\${props.provider}\`,\n\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["advancedHint"],\n\t\t\t\t\t\t\tchildren: t("keyEnvironmentOverride")\n\t\t\t\t\t\t}) : null,\n\t\t\t\t\t\tshownKeyFailure === void 0 ? null : (0, react_jsx_runtime.jsx)("p", {`,
+    'environment credential hint')
+  output = replaceAlpha5Exact(output,
+    `\t\t\t\t\t\t\t}, addTarget.provider),`,
+    `\t\t\t\t\t\t\t}, deriveOverrideKeyRef(addNamespace.ns, addTarget.provider)),`,
+    'add editor identity key')
+  output = replaceAlpha5Exact(output,
+    `\t\t\tconst managedRef = deriveKeyRef(row.entry.provider);\n\t\t\tconst credentialRef = row.apiKeyEnv === managedRef && row.credential?.configured === true && row.credential.writable ? managedRef : void 0;`,
+    `\t\t\tconst managedRef = deriveOverrideKeyRef(row.entry.settingsNs, row.entry.provider);\n\t\t\tconst credentialRef = row.apiKeyEnv === managedRef && row.credential?.configured === true && row.credential.writable ? managedRef : void 0;`,
+    'owned credential deletion')
+  output = replaceAlpha5Exact(output,
+    `\t\t\tkeyEnvLocked: "Provided by the launch environment (read-only)",`,
+    `\t\t\tkeyEnvLocked: "Provided by the launch environment (read-only)",\n\t\t\tkeyEnvironmentOverride: "The configured environment credential remains read-only. Typing here creates a separate provider-owned local override.",`,
+    'English environment override copy')
+  output = replaceAlpha5Exact(output,
+    `\t\t\tkeyEnvLocked: "由启动环境提供（只读）",`,
+    `\t\t\tkeyEnvLocked: "由启动环境提供（只读）",\n\t\t\tkeyEnvironmentOverride: "已配置的环境凭据保持只读；在此输入会创建独立且仅属于当前服务商的本机覆盖。",`,
+    'Chinese environment override copy')
+  for (const marker of [ALPHA5_MARKER, 'deriveOverrideKeyRef(namespace.ns, props.provider)', 'operations.storeCredential(ownedKeyRef, keyValue)', 'keyEnvironmentOverride']) {
+    if (!output.includes(marker)) throw new Error(`Alpha.5 model-settings credential isolation output is missing ${marker}.`)
   }
   return { source: output, changed: true }
 }

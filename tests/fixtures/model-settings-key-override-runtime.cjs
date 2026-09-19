@@ -8,7 +8,7 @@ function failed(message) {
   return { result: { ok: false, error: { message, code: 'fixture-failure' } } }
 }
 
-function createCredentialHarness({ user = {}, base = {}, failDescribe = false, failUnset = false, failMutateAt = [] } = {}) {
+function createCredentialHarness({ user = {}, base = {}, failDescribe = false, failSetAt = [], failUnset = false, failMutateAt = [] } = {}) {
   const profile = { user: structuredClone(user), base: structuredClone(base) }
   const secrets = new Map()
   const calls = { describe: [], set: [], unset: [], mutate: [] }
@@ -27,6 +27,7 @@ function createCredentialHarness({ user = {}, base = {}, failDescribe = false, f
       async set({ ref, value }) {
         calls.set.push({ ref, value })
         audit.push({ operation: 'credentials.set', ref })
+        if (failSetAt.includes(calls.set.length)) return failed(`credential set ${calls.set.length} failed`)
         secrets.set(ref, value)
         return ok()
       },

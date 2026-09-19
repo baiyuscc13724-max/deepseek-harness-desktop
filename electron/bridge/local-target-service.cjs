@@ -54,7 +54,10 @@ function normalizeLocalTarget(value) {
   let authored = trimAuthoredDecoration(unwrapLocalUrl(value))
   if (/^file:/i.test(authored)) {
     authored = fileURLToPath(new URL(authored))
-  } else {
+  } else if (/^harness-desktop:\/\/open-local(?:[/?#]|$)/i.test(String(value || '').trim()) && !/^(?:[a-z]:[\\/]|[\\/])/i.test(authored)) {
+    // Legacy open-local URLs may contain an additional encoded path layer.
+    // Native picker/code paths are literal: decoding their percent signs can
+    // silently open a different file (report%20draft.md -> report draft.md).
     authored = decodeMarkdownPath(authored)
   }
 

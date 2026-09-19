@@ -31,8 +31,8 @@
       }
       if (text.startsWith('@')) text = text.slice(1)
       if (!text || text.length > 4096 || /[\u0000\r\n]/u.test(text)) return ''
-      // 普通代码文本仍拒绝含空白的路径，避免把聊天文本误判为本地路径；
-      // 原生产品改动允许原生文件按钮的 token 含空格，故仅对按钮场景放宽。
+      // Explicit href/code/file-button tokens may contain filename spaces.
+      // Multiline/control input and non-file prose still fail the path classifier.
       if (!allowWhitespace && /\s/u.test(text)) return ''
       if (/^(?:https?|data|javascript|mailto):/i.test(text)) return ''
       if (/^file:\/\//i.test(text)) return text
@@ -60,7 +60,14 @@
       // makes Windows resolve it as (for example) `D:\\api\\...`.
       // Explicit POSIX files remain available through inline code or file:// URLs.
       if (keepsRuntimeNavigation(anchor) || /^\/\//u.test(href)) return ''
-      return localPath(href)
+      // Href syntax is encoded once; code/file-button text is a literal path.
+      // Decode before transport encoding, never in the workspace API (a literal
+      // filename such as report%20draft.md must keep its percent characters).
+      if (/^file:\/\//iu.test(href)) return localPath(href, { allowWhitespace: true })
+      let target
+      try { target = decodeURIComponent(href.split(/[?#]/u, 1)[0]) } catch { return '' }
+      if (/^(?:[\\/]|[a-z][a-z0-9+.-]*:)/iu.test(target) && !/^[a-z]:[\\/]/iu.test(target)) return ''
+      return localPath(target, { allowWhitespace: true })
     }
 
     const route = (host, params = {}) => {
@@ -68,14 +75,36 @@
       window.location.href = `harness-desktop://${host}?${query}`
     }
 
+    // Only product code holding the session-scoped composer binding registers a
+    // source. DOM data attributes and the currently selected session are not proof
+    // of a message's origin. WeakMaps keep this metadata out of authored markup.
+    const sourceRoots = new WeakMap()
+    const linkSources = new WeakMap()
+    const sourceFor = node => {
+      for (let current = node; current; current = current.parentElement) {
+        const source = sourceRoots.get(current)
+        if (source) return source
+      }
+      return null
+    }
+    const previewLink = local => {
+      const source = linkSources.get(local)
+      const current = sourceFor(local)
+      const sessionId = source && source === current ? source.sessionId : ''
+      route('preview-local', { path: local.dataset.hdLocalTarget, sessionId, sourceKind: 'workspace-link' })
+    }
+
     const mark = (node, target) => {
       node.dataset.hdLocalTarget = target
+      const source = sourceFor(node)
+      if (source) linkSources.set(node, source)
+      else linkSources.delete(node)
       if (!['A', 'BUTTON'].includes(node.tagName)) {
         node.tabIndex = 0
         node.setAttribute('role', 'link')
       }
       node.setAttribute('aria-label', `在右侧工作区安全预览 ${target}`)
-      node.title = `${target}\n单击在右侧安全预览；相对路径只从当前工作区读取，明确绝对路径可只读预览本机文件；工作区 HTML 可隔离试玩，程序和安装包不会执行（源码仅只读预览）；右键可打开所在文件夹或复制路径`
+      node.title = `${target}\n单击在右侧安全预览；仅从此消息来源会话的工作区读取，不会切换工作区或搜索其他项目；工作区 HTML 可隔离试玩，程序和安装包不会执行；右键可打开所在文件夹或复制路径`
     }
 
     const decorate = root => {
@@ -97,16 +126,32 @@
           continue
         }
         if (code.querySelector('a')) continue
-        const target = localPath(code.textContent)
+        const target = localPath(code.textContent, { allowWhitespace: true })
         if (target) mark(code, target)
         else delete code.dataset.hdLocalTarget
       }
     }
 
+    window.HarnessDesktopWorkspaceLinkSources = Object.freeze({
+      bind(root, sessionId) {
+        if (!root || root.nodeType !== Node.ELEMENT_NODE || typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || sessionId.trim() !== sessionId || /[\u0000\r\n]/u.test(sessionId)) return () => {}
+        const source = Object.freeze({ sessionId })
+        sourceRoots.set(root, source)
+        decorate(root)
+        return () => {
+          if (sourceRoots.get(root) === source) sourceRoots.delete(root)
+        }
+      }
+    })
+    window.dispatchEvent(new Event('harness-workspace-link-sources-ready'))
+
     document.addEventListener('contextmenu', event => {
       const local = event.target.closest?.('[data-hd-local-target]')
+      const source = local && linkSources.get(local)
       window.__HARNESS_DESKTOP_CONTEXT_LOCAL_TARGET__ = {
         value: local?.dataset?.hdLocalTarget || '',
+        sessionId: source && source === sourceFor(local) ? source.sessionId : '',
+        sourceKind: 'workspace-link',
         at: Date.now()
       }
     }, true)
@@ -120,7 +165,7 @@
       if (local) {
         event.preventDefault()
         event.stopPropagation()
-        route('preview-local', { path: local.dataset.hdLocalTarget })
+        previewLink(local)
         return
       }
       const anchor = event.target.closest?.('a[href]')
@@ -150,7 +195,7 @@
       const local = event.target.closest?.('[data-hd-local-target]')
       if (!local) return
       event.preventDefault()
-      route('preview-local', { path: local.dataset.hdLocalTarget })
+      previewLink(local)
     }, true)
 
     const decorateNode = node => {

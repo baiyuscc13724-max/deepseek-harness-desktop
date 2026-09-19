@@ -23,12 +23,14 @@ final class MobileSessionViewModel: ObservableObject {
     private var profile: PairingProfile?
     private var proxy: LoopbackProxy?
     private var foregroundRecoveryTask: Task<Void, Never>?
+    private var activationTask: Task<Void, Never>?
+    private var activationGeneration: UInt64 = 0
     private var lastNetworkGeneration: UInt64 = 0
 
     init() {
         if let stored = store.load() {
             profile = stored
-            Task { await activate(stored, pairing: false) }
+            scheduleActivation(stored, pairing: false)
         }
         checkForMobileAppUpdate()
     }
@@ -98,7 +100,7 @@ final class MobileSessionViewModel: ObservableObject {
         }
         profile = next
         scannerPresented = false
-        Task { await activate(next, pairing: true) }
+        scheduleActivation(next, pairing: true)
     }
 
     func handleDeepLink(_ url: URL) { connect(url.absoluteString) }
@@ -108,7 +110,7 @@ final class MobileSessionViewModel: ObservableObject {
     /// 用已保存的配对信息重新连接。
     func retry() {
         guard let profile else { return }
-        Task { await activate(profile, pairing: false) }
+        scheduleActivation(profile, pairing: false)
     }
 
     /// App 回到前台时只恢复原有代理/线路，不重建或 reload 工作台。
@@ -122,10 +124,11 @@ final class MobileSessionViewModel: ObservableObject {
             }
             return
         }
+        let generation = activationGeneration
         foregroundRecoveryTask = Task { [weak self] in
             guard let self else { return }
-            defer { foregroundRecoveryTask = nil }
-            await recoverFromForeground(profile)
+            defer { if activationGeneration == generation { foregroundRecoveryTask = nil } }
+            await recoverFromForeground(profile, generation: generation)
         }
     }
 
@@ -141,12 +144,17 @@ final class MobileSessionViewModel: ObservableObject {
         proxy?.networkChanged()
         state = networkMonitor.available ? .connecting("网络已切换，正在重新连接…") : .connecting("网络已断开，恢复后会自动连接…")
         guard networkMonitor.available else { return }
-        Task { await activate(profile, pairing: false) }
+        scheduleActivation(profile, pairing: false)
     }
 
     // MARK: - 忘记配对
 
     func forgetDesktop() {
+        activationGeneration &+= 1
+        activationTask?.cancel()
+        activationTask = nil
+        foregroundRecoveryTask?.cancel()
+        foregroundRecoveryTask = nil
         store.forget()
         profile = nil
         workbenchURL = nil
@@ -158,8 +166,25 @@ final class MobileSessionViewModel: ObservableObject {
 
     // MARK: - 内部
 
-    private func recoverFromForeground(_ profile: PairingProfile) async {
-        guard self.profile == profile else { return }
+    private func operationCurrent(_ profile: PairingProfile, generation: UInt64) -> Bool {
+        self.profile == profile && activationGeneration == generation && !Task.isCancelled
+    }
+
+    private func scheduleActivation(_ profile: PairingProfile, pairing: Bool) {
+        activationGeneration &+= 1
+        let generation = activationGeneration
+        activationTask?.cancel()
+        foregroundRecoveryTask?.cancel()
+        foregroundRecoveryTask = nil
+        activationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if activationGeneration == generation { activationTask = nil } }
+            await activate(profile, pairing: pairing, generation: generation)
+        }
+    }
+
+    private func recoverFromForeground(_ profile: PairingProfile, generation: UInt64) async {
+        guard operationCurrent(profile, generation: generation) else { return }
         do {
             let activeProxy: LoopbackProxy
             if let proxy {
@@ -171,20 +196,21 @@ final class MobileSessionViewModel: ObservableObject {
                 proxy = activeProxy
             }
             let port = try await activeProxy.start()
-            guard self.profile == profile else { return }
+            guard operationCurrent(profile, generation: generation) else { return }
             if workbenchURL == nil {
                 workbenchURL = profile.stableOrigin(localPort: port)
             }
             state = .connected
         } catch {
-            guard self.profile == profile else { return }
+            guard operationCurrent(profile, generation: generation) else { return }
             state = networkMonitor.available
                 ? .failed(error.localizedDescription)
                 : .connecting("网络已断开，恢复后会自动连接…")
         }
     }
 
-    private func activate(_ profile: PairingProfile, pairing: Bool) async {
+    private func activate(_ profile: PairingProfile, pairing: Bool, generation: UInt64) async {
+        guard operationCurrent(profile, generation: generation) else { return }
         state = .connecting(profile.relay == nil ? "正在连接 Desktop…" : "正在尝试局域网，必要时切换 WSS/443 加密线路…")
         do {
             let activeProxy: LoopbackProxy
@@ -196,9 +222,11 @@ final class MobileSessionViewModel: ObservableObject {
                 proxy = activeProxy
             }
             let port = try await activeProxy.start()
+            guard operationCurrent(profile, generation: generation) else { return }
             workbenchURL = pairing ? profile.stablePairURL(localPort: port) : profile.stableOrigin(localPort: port)
             state = .connected
         } catch {
+            guard operationCurrent(profile, generation: generation) else { return }
             state = .failed(error.localizedDescription)
         }
     }

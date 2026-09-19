@@ -82,38 +82,45 @@ test('chat links never turn non-web schemes into system-browser requests', async
   assert.match(main, /function externalWebUrl[\s\S]{0,220}\['http:', 'https:'\]\.includes\(target\.protocol\)/u)
 })
 
-test('local-path context menu opens only normalized targets and exposes the project action', async () => {
+test('workspace-link menu preserves source session for preview, safe-copy opening, reveal and copy', async () => {
   const main = await source('electron/main.cjs')
-  assert.match(main, /const local = localValue \? resolveGuestLocalTarget\(localValue\) : null/u)
-  assert.match(main, /label: '打开此项目', click: \(\) => openDesktopLocalTarget\(local\.path\)/u)
-  assert.match(main, /label: '在文件夹中显示', click: \(\) => openDesktopLocalTarget\(local\.path, true\)/u)
-  assert.match(main, /label: '复制本机路径', click: \(\) => clipboard\.writeText\(local\.path\)/u)
-  assert.doesNotMatch(main, /openDesktopLocalTarget\(localValue/u)
+  const start = main.indexOf('async function showGuestContextMenu(')
+  const end = main.indexOf('async function chooseWorkspaceDirectory(', start)
+  assert.ok(start >= 0 && end > start)
+  const local = Object.freeze({ target: 'reports/100%25 报告.md', sessionId: 'source-session', sourceKind: 'workspace-link' })
+  let template
+  const calls = []
+  const menu = new Function('deps', `const { contextMenuRequests, guestLocalTargetAtPoint, resolveGuestLocalTarget, externalWebUrl, send, openRightWorkspaceTarget, clipboard, Menu } = deps; ${main.slice(start, end)}; return showGuestContextMenu`)(
+    { contextMenuRequests: new WeakMap(), guestLocalTargetAtPoint: async () => local, resolveGuestLocalTarget: value => value,
+      externalWebUrl: () => '', send: (event, value) => calls.push(['preview', event, value]), openRightWorkspaceTarget: async (value, reveal) => calls.push(['open', value, reveal]),
+      clipboard: { writeText: value => calls.push(['copy', value]) }, Menu: { buildFromTemplate(items) { template = items; return { popup() {} } } } }
+  )
+  await menu({ isDestroyed: () => false }, {}, { ownerWindow: { isDestroyed: () => false } })
+  for (const label of ['在右侧工作区预览', '使用系统应用打开', '在文件夹中显示安全副本', '复制文件引用']) template.find(item => item.label === label).click()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(calls.find(x => x[0] === 'preview'), ['preview', 'rightWorkspace:previewLocal', local])
+  assert.deepEqual(calls.filter(x => x[0] === 'open'), [['open', local, undefined], ['open', local, true]])
+  assert.deepEqual(calls.find(x => x[0] === 'copy'), ['copy', local.target])
+  assert.equal(template.some(x => x.label === '打开此项目'), false, 'guest file links must not become project/workspace switches')
 })
 
-test('relative project targets are workspace-confined while explicit absolute paths keep host validation', async () => {
+test('guest targets require explicit source session and preserve literal paths for runtime containment checks', async () => {
   const main = await source('electron/main.cjs')
-  const body = extractFunction(main, 'resolveGuestLocalTarget', 'browserIntentForLink')
-  const workspace = path.resolve(path.sep, 'managed-workspace')
-  const absolute = path.resolve(path.sep, 'explicit', 'README.md')
-  const normalizeLocalTarget = value => {
-    if (value === absolute) return { path: absolute, line: null, column: null }
-    throw new Error('relative')
+  const body = extractFunction(main, 'rightWorkspaceFileSource', 'browserIntentForLink')
+  const resolve = new Function('path', `${body}; return resolveGuestLocalTarget`)(path)
+  for (const bare of ['docs/README.md:12', path.resolve(path.sep, 'explicit', 'README.md'), '../outside.txt', 'https://example.com/project']) assert.equal(resolve(bare), null, 'bare guest path cannot fall back to the active workspace')
+  assert.equal(resolve({ sourceKind: 'workspace-link', target: 'a.txt' }), null)
+  assert.equal(resolve({ sourceKind: 'local', sessionId: 's', target: 'a.txt' }), null)
+  assert.equal(resolve({ sourceKind: 'workspace-link', sessionId: ' s ', target: 'a.txt' }), null)
+  assert.equal(resolve({ sourceKind: 'workspace-link', sessionId: 's', target: 'bad\npath' }), null)
+  assert.equal(resolve({ sourceKind: 'workspace-link', sessionId: 's', target: 'a', path: 'b' }), null)
+  for (const target of ['docs/100%25 报告.md', 'docs/README.md:12', path.resolve(path.sep, 'explicit', 'README.md')]) {
+    const result = resolve({ sourceKind: 'workspace-link', sessionId: 'source-session', target })
+    assert.equal(result.target, target, 'no URI decoding, path normalization, or active-workspace substitution')
+    assert.equal(result.sessionId, 'source-session')
+    assert.equal(result.sourceKind, 'workspace-link')
+    assert.equal(Object.isFrozen(result), true)
   }
-  const resolveGuestLocalTarget = new Function(
-    'normalizeLocalTarget', 'path', 'desktopRuntimePaths',
-    `${body}; return resolveGuestLocalTarget`
-  )(normalizeLocalTarget, path, () => ({ workspace }))
-
-  assert.deepEqual(resolveGuestLocalTarget(absolute), { path: absolute, line: null, column: null })
-  assert.deepEqual(resolveGuestLocalTarget('docs/README.md:12'), {
-    path: path.join(workspace, 'docs', 'README.md'), line: null, column: null
-  })
-  assert.equal(resolveGuestLocalTarget('../outside.txt'), null)
-  assert.equal(resolveGuestLocalTarget('%2e%2e/outside.txt'), null)
-  assert.equal(resolveGuestLocalTarget('https://example.com/project'), null)
-  assert.equal(resolveGuestLocalTarget('https%3A%2F%2Fexample.com/project'), null)
-  assert.equal(resolveGuestLocalTarget('javascript:alert(1)'), null)
-  assert.equal(resolveGuestLocalTarget('docs/report.txt:stream'), null)
-  assert.equal(resolveGuestLocalTarget('bad\npath'), null)
+  // This source boundary deliberately leaves existence/symlink/containment to the
+  // runtime materializer; it does not claim an arbitrary path is safe to open.
 })

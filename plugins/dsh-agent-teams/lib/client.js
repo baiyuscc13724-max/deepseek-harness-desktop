@@ -748,6 +748,20 @@ window.__ModuleLoader__.load({
       collaborationSeatStateFailed: "Needs attention",
       collaborationSeatStateClosed: "Ended"
     });
+    Object.assign(zh, {
+      leadSummary: "负责人统筹 · 你只需提出目标", leadChat: "回到负责人对话", leadChatUnavailable: "负责人对话暂不可打开，请从会话列表返回原负责人；不会创建替代会话。", leadChatOpening: "正在打开负责人对话…", leadProgress: "当前已加载任务：{running} 项处理中，{submitted} 项待验收，{done} 项已完成", leadNoDecision: "当前未报告需要你决定的事项。", leadDecisions: "需要你决定或核对", leadHandling: "负责人正在协调的问题", leadWorkDetails: "查看工作详情", leadDeliveries: "成果与验收", leadNoDeliveries: "还没有已完成任务；成员提交不等于负责人验收。", leadDeliveryMore: "全部成果与历史 {count}", diagnostics: "诊断与记录", boardNextSubmitted: "下一步：由负责人验收提交；无需重新认领。", boardNextCancelled: "任务已取消，可在详情核对原因。", boardTitle: "负责人摘要", workspaceBoard: "进展与成果", boardProgress: "处理中", boardCancelledHistoryHint: "已完成与取消任务保留在历史，不占当前工作区。"
+    });
+    Object.assign(en, {
+      leadSummary: "Your lead owns the goal and result", leadChat: "Return to lead conversation", leadChatUnavailable: "The lead conversation cannot be opened now. Return to the original lead from the session list; no replacement session will be created.", leadChatOpening: "Opening lead conversation…", leadProgress: "Loaded tasks: {running} in progress, {submitted} awaiting acceptance, {done} completed", leadNoDecision: "No decision requiring you is currently reported.", leadDecisions: "Your decision or review is needed", leadHandling: "Issues for the lead to coordinate", leadWorkDetails: "View work details", leadDeliveries: "Results and acceptance", leadNoDeliveries: "No completed tasks yet. Member submission is not lead acceptance.", leadDeliveryMore: "All results and history {count}", diagnostics: "Diagnostics and records", boardNextSubmitted: "Next: the lead reviews this submission; no new claim is needed.", boardNextCancelled: "Cancelled; review the reason in task details.", boardTitle: "Lead summary", workspaceBoard: "Progress & results", boardProgress: "In progress", boardCancelledHistoryHint: "Completed and cancelled tasks remain in history, outside the current workspace."
+    });
+    Object.assign(zh, { leadAuthorizationIncomplete: "授权或计划信息未完整提供。请查看详情或由负责人核对；这不表示需要你重新授权。", leadAuthorizationAttention: "授权记录显示有待处理的限制，请由负责人核对。", leadPlanDraft: "计划仍需负责人整理或提交，尚不能按已就绪处理。", leadTeamAttention: "团队报告有待负责人处理的事项，请查看详情或返回负责人对话。" });
+    Object.assign(en, { leadAuthorizationIncomplete: "Authorization or plan information is incomplete. Review the details or ask the lead to verify; this does not mean you must authorize again.", leadAuthorizationAttention: "Authorization records report a restriction that needs the lead’s review.", leadPlanDraft: "The lead still needs to prepare or commit the plan; it is not ready yet.", leadTeamAttention: "The team reports items for the lead to handle. Review the details or return to the lead conversation." });
+    Object.assign(zh, {
+      professionalTitle: "当前任务技能", professionalHint: "绑定表示可用，加载表示存在当前任务的加载记录；都不等于专业资格或质量认证。", professionalUnknown: "尚无可核对的技能投影，不从岗位名称推断。", professionalGeneral: "通用执行（未要求专门技能）", professionalSpecialized: "已声明专门技能要求", professionalMissing: "所需技能存在缺失", professionalLegacy: "旧记录，技能证据有限", skillBound: "已绑定 · 未见加载", skillLoaded: "实际加载有记录", skillMissing: "缺失", skillUnknown: "状态待核对", skillEvidenceUnavailable: "未提供可信加载依据", deliveryTitle: "可核对交付", deliveryArtifacts: "文件产物（仅展示）", deliveryCriteria: "提交者提供的验收依据", deliveryLimitations: "已知限制", deliveryReview: "负责人评审记录", deliveryReviewHint: "负责人评审不等于独立质量门禁通过。", deliveryUnverified: "旧交付记录，未绑定产物证据", deliveryTextOnly: "内容仅作为文本展示，不会执行或自动打开。"
+    });
+    Object.assign(en, {
+      professionalTitle: "Skills for this task", professionalHint: "Bound means available; loaded means a loading record exists for this task. Neither proves professional qualification or output quality.", professionalUnknown: "No reviewable skill projection is available. Skills are not inferred from duty names.", professionalGeneral: "General execution (no specialized skills required)", professionalSpecialized: "Specialized skills requested", professionalMissing: "Required skills are missing", professionalLegacy: "Legacy record; limited skill evidence", skillBound: "Bound · loading not observed", skillLoaded: "Loading recorded", skillMissing: "Missing", skillUnknown: "Status needs review", skillEvidenceUnavailable: "Trusted loading evidence unavailable", deliveryTitle: "Reviewable delivery", deliveryArtifacts: "File artifacts (display only)", deliveryCriteria: "Submitter-provided acceptance evidence", deliveryLimitations: "Known limitations", deliveryReview: "Lead review record", deliveryReviewHint: "Lead review is not an independent quality gate pass.", deliveryUnverified: "Legacy delivery without artifact-bound evidence", deliveryTextOnly: "Content is displayed as text only; nothing is executed or opened automatically."
+    });
     var currentLang = ((typeof navigator !== "undefined" && navigator.language) || "en").toLowerCase().indexOf("zh") === 0 ? "zh" : "en";
     function isChinese() { return String(currentLang || "").toLowerCase().indexOf("zh") === 0; }
     var translate = function (key, vars) {
@@ -815,6 +829,8 @@ window.__ModuleLoader__.load({
         "@media(max-width:620px){.dat-workspace-nav{overflow-x:auto;border-radius:10px}.dat-btn{min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}.dat-workspace-nav button{box-sizing:border-box;min-height:44px;max-width:calc(100vw - 28px)}.dat-plan-lifecycle-head{display:block}.dat-plan-lifecycle-head>.dat-row{margin-top:8px}.dat-plan-steps,.dat-preflight-grid{grid-template-columns:1fr}.dat-project-tasks-form{grid-template-columns:1fr}.dat-workspace-view-head{display:block}.dat-workspace-view-actions{justify-content:flex-start;margin-top:9px}.dat-schedule-row,.dat-participant-row{grid-template-columns:minmax(0,1fr)}.dat-participant-state{text-align:left}.dat-team-mode-bar{align-items:flex-start;flex-direction:column}.dat-team-mode-actions{width:100%;justify-content:space-between}.dat-member-recovery-head{display:block}.dat-member-recovery-actions{display:grid;grid-template-columns:1fr}.dat-member-recovery-actions .dat-btn{width:100%}.dat-active-shell .dat-inspector{width:100%;border-radius:0}.dat-task-focus-head{align-items:flex-start}.dat-task-focus-head-copy{align-items:flex-start;flex-direction:column}.dat-task-focus-head>.dat-row{align-self:flex-start}.dat-task-focus-body{padding:12px}.dat-task-focus-hero{display:block}.dat-task-focus-hero>.dat-badge{margin-top:8px}.dat-task-stage-track{grid-template-columns:1fr;gap:6px}.dat-task-stage-arrow{transform:rotate(90deg)}.dat-task-block-row{grid-template-columns:1fr;margin-top:7px}.dat-task-block-branch{grid-column:auto}}",
       ].join("\n");
       style.textContent += "\n.dat-live-status{box-sizing:border-box;display:grid;gap:10px;margin:0 0 14px;padding:13px 14px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#2f7cf6) 35%,var(--dsw-alias-border-l2));border-radius:12px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 92%,var(--dsw-alias-brand-primary,#2f7cf6) 8%)}.dat-live-status[data-status=outcome_unknown],.dat-live-status[data-status=lifecycle_timeout]{border-color:var(--dsw-alias-state-warn-primary)}.dat-live-status[data-status=provider_transient]{border-color:var(--dsw-alias-state-error-secondary)}.dat-live-status-head,.dat-live-status-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.dat-live-status-title{margin:0;font-size:14px}.dat-live-status-copy{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}.dat-live-status-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.dat-live-status .dat-btn{min-width:44px;min-height:44px}.dat-live-status .dat-btn:active{transform:translateY(1px)}.dat-live-status-detail{margin:0;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);font-size:12px;overflow-wrap:anywhere}.dat-live-status-detail strong{color:var(--dsw-alias-label-primary)}@media(max-width:560px){.dat-live-status-head,.dat-live-status-meta{align-items:flex-start;flex-direction:column}.dat-live-status .dat-btn{width:100%}}@media(prefers-reduced-motion:reduce){.dat-live-status,.dat-live-status *{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}}";
+      style.textContent += "\n.dat-lead-summary{display:grid;gap:14px;margin-bottom:16px;padding:20px}.dat-lead-summary h2{margin:0;max-width:48ch;font-size:clamp(20px,2.5vw,26px);line-height:1.4;overflow-wrap:anywhere;text-wrap:balance}.dat-lead-eyebrow{margin:0;color:var(--dsw-alias-label-secondary);font-size:13px}.dat-lead-progress{margin:0;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:1.6}.dat-lead-summary .dat-btn,.dat-lead-deliveries .dat-btn{min-height:44px;max-width:100%;white-space:normal;overflow-wrap:anywhere}.dat-lead-attention{border-left:3px solid var(--dsw-alias-state-warn-primary);padding:8px 12px;background:var(--dsw-alias-bg-layer-2)}.dat-lead-attention h3,.dat-lead-deliveries h3{margin:0 0 8px;font-size:15px}.dat-lead-issue{display:grid;gap:4px;width:100%;min-height:44px;padding:8px 0;border:0;border-top:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;font:inherit;font-size:14px;line-height:1.5;overflow-wrap:anywhere}.dat-lead-issue span{font-size:13px;color:var(--dsw-alias-label-secondary)}.dat-lead-issue:hover{background:var(--dsw-alias-interactive-bg-hover)}.dat-lead-issue:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dat-lead-deliveries{margin:16px 0}.dat-lead-deliveries>.dat-btn{margin-top:10px}.dat-disclosure>summary{min-height:44px;align-content:center;font-size:14px}.dat-work-details>.dat-workspace-view-actions{margin:8px 0 12px}.dat-diagnostics{margin-bottom:14px}.dat-live-diagnostics{margin-bottom:14px}.dat-board-card-title{font-size:15px;line-height:1.45}.dat-board-card-owner,.dat-board-card-next,.dat-board-card-facts{font-size:13px;line-height:1.5}.dat-board-card-flag{white-space:normal;overflow-wrap:anywhere;min-width:0}.dat-board-card-facts{padding:6px 8px}.dat-board-card{box-shadow:none}.dat-board-column{height:auto;max-height:min(70vh,720px);min-height:160px}.dat-participant-copy small,.dat-participant-state small{font-size:13px;line-height:1.5}.dat-workspace-nav button:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}@container dat-board-main (min-width:900px){.dat-task-board{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:620px){.dat-lead-summary{padding:16px}.dat-lead-summary>.dat-row{align-items:stretch;flex-direction:column}.dat-lead-summary>.dat-row>.dat-btn{width:100%}.dat-board-column{max-height:none}.dat-lead-deliveries .dat-board-history-list{grid-template-columns:1fr}}";
+      style.textContent += "\n.dat-professional,.dat-delivery-evidence{margin:14px 0;padding:12px 0;border-top:1px solid var(--dsw-alias-border-l2);font-size:14px;line-height:1.55;overflow-wrap:anywhere}.dat-professional h3,.dat-delivery-evidence h3{margin:0 0 8px;font-size:15px}.dat-professional-skills{padding-left:20px}.dat-professional-skills li{margin-bottom:8px}.dat-professional-skills [data-skill-status=missing],.dat-professional-skills [data-skill-status=unknown]{color:var(--dsw-alias-state-warn-primary)}.dat-delivery-inline{white-space:pre-wrap;overflow-wrap:anywhere}.dat-delivery-criteria{margin:8px 0}.dat-delivery-criteria>div{margin-bottom:12px}.dat-delivery-criteria dt{font-weight:600}.dat-delivery-criteria dd{margin:4px 0 0;white-space:pre-wrap}.dat-participant-skills{grid-column:1/-1;text-align:left}";
       document.head.appendChild(style);
     }
 
@@ -823,8 +839,16 @@ window.__ModuleLoader__.load({
     function eventsUrl(sessionId, selectedTeamId) { return "/api/agent-teams/events?sessionId=" + encodeURIComponent(sessionId) + (selectedTeamId ? "&teamId=" + encodeURIComponent(selectedTeamId) : ""); }
     function taskDetailUrl(sessionId, selectedTeamId, selectedTaskId) { return "/api/agent-teams/task-detail?sessionId=" + encodeURIComponent(sessionId) + "&teamId=" + encodeURIComponent(selectedTeamId) + "&taskId=" + encodeURIComponent(selectedTaskId); }
     function taskDetailEventsUrl(sessionId, selectedTeamId, selectedTaskId) { return "/api/agent-teams/task-detail/events?sessionId=" + encodeURIComponent(sessionId) + "&teamId=" + encodeURIComponent(selectedTeamId) + "&taskId=" + encodeURIComponent(selectedTaskId); }
+    function requestWithTimeout(url, options, timeoutMs) {
+      if (typeof AbortController !== "function") return fetch(url, options);
+      var controller = new AbortController(), timeout = setTimeout(function () { controller.abort(); }, timeoutMs);
+      return fetch(url, Object.assign({}, options, { signal: controller.signal })).catch(function (cause) {
+        if (controller.signal.aborted) { var timeoutError = new Error("Team state request timed out"); timeoutError.code = "AGENT_TEAMS_STATE_TIMEOUT"; throw timeoutError; }
+        throw cause;
+      }).finally(function () { clearTimeout(timeout); });
+    }
     function fetchState(sessionId, selectedTeamId) {
-      return fetch(stateUrl(sessionId, selectedTeamId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } }).then(function (response) {
+      return requestWithTimeout(stateUrl(sessionId, selectedTeamId), { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } }, 10000).then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) { if (!response.ok) { var error = new Error(data.error || ("HTTP " + response.status)); error.code = data.code; error.status = response.status; throw error; } return data; });
       });
     }
@@ -925,8 +949,8 @@ window.__ModuleLoader__.load({
       var connectionPair = useState("disconnected"), connection = connectionPair[0], setConnection = connectionPair[1];
       var reloadRef = useRef(function () {}), acceptRef = useRef(function (next) { setState(next); }), failureRef = useRef(0), versionRef = useRef(""), clockRef = useRef(null);
       useEffect(function () {
-        if (!sessionId) return;
-        var alive = true, source = null, sourceUpdate = null, sourceOpen = false, streamNeedsSnapshot = true, pollTimer = null, pollAttempt = 0, publishFrame = null, pendingSnapshot = null, pendingClock = null, loadPromise = null, snapshotFallbackTimer = null, loadGeneration = 0, streamEpoch = 0;
+        if (!sessionId) { setState(null); setError("AGENT_TEAMS_SESSION_CONTEXT_UNAVAILABLE"); setConnection("stale"); return; }
+        var alive = true, source = null, sourceUpdate = null, sourceOpen = false, streamNeedsSnapshot = true, hasSnapshot = false, pollTimer = null, pollAttempt = 0, publishFrame = null, pendingSnapshot = null, pendingClock = null, loadPromise = null, snapshotFallbackTimer = null, loadGeneration = 0, streamEpoch = 0;
         versionRef.current = "";
         clockRef.current = null;
         function hidden() { return typeof document !== "undefined" && document.visibilityState === "hidden"; }
@@ -938,6 +962,7 @@ window.__ModuleLoader__.load({
           if (version && version === versionRef.current) { clockRef.current = clock; return; }
           versionRef.current = version;
           clockRef.current = clock;
+          hasSnapshot = true;
           publishSafeTeamLiveStatus(next, selectedTeamId);
           startTransition(function () { if (alive) { setState(next); setError(""); } });
         }
@@ -980,8 +1005,8 @@ window.__ModuleLoader__.load({
           }).catch(function (err) {
             if (alive && generation === loadGeneration) {
               failureRef.current += 1;
-              if (!silent) setError(errorText(err));
-              else if (failureRef.current >= 2) setConnection("stale");
+              if (!silent || !hasSnapshot) setError(errorText(err));
+              if (failureRef.current >= 2) setConnection("stale");
             }
             throw err;
           });
@@ -1034,6 +1059,10 @@ window.__ModuleLoader__.load({
               clearPolling();
               clearSnapshotFallback();
               var expectedStreamEpoch = streamEpoch;
+              // Always start a REST snapshot as soon as the stream opens. Some proxies
+              // acknowledge EventSource before forwarding its initial snapshot; waiting for
+              // an event in that state used to leave the workbench on its loading screen.
+              load(false, expectedStreamEpoch).catch(function () {});
               snapshotFallbackTimer = setTimeout(function () {
                 snapshotFallbackTimer = null;
                 if (!alive || hidden() || source !== current || streamEpoch !== expectedStreamEpoch) return;
@@ -1537,6 +1566,41 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function boundedDisplayText(value, limit) { return typeof value === "string" ? value.slice(0, limit || 1000) : ""; }
+    function ProfessionalSkills(props) {
+      var t = props.t, professional = props.task && props.task.professional;
+      var modeKeys = { general: "professionalGeneral", specialized: "professionalSpecialized", missing_skills: "professionalMissing", legacy: "professionalLegacy" };
+      var skills = professional && Array.isArray(professional.skills) ? professional.skills.filter(function (item) { return item && typeof item === "object"; }).slice(0, 8) : [];
+      var limitations = professional && Array.isArray(professional.limitations) ? professional.limitations.slice(0, 12) : [];
+      return h("section", { className: "dat-professional", "aria-label": t("professionalTitle") }, h("h3", null, t("professionalTitle")),
+        h("p", { className: "dat-note" }, professional && modeKeys[professional.mode] ? t(modeKeys[professional.mode]) : t("professionalUnknown")),
+        skills.length ? h("ul", { className: "dat-professional-skills" }, skills.map(function (skill, index) {
+          var evidence = skill.evidence, loaded = skill.status === "loaded" && evidence && evidence.source === "skill_tool" && typeof evidence.contentHash === "string" && !!evidence.contentHash && !!safeTaskTime(evidence.loadedAt);
+          var label = loaded ? "skillLoaded" : skill.status === "bound" ? "skillBound" : skill.status === "missing" ? "skillMissing" : "skillUnknown";
+          return h("li", { key: index, "data-skill-status": loaded ? "loaded" : skill.status === "missing" ? "missing" : skill.status === "bound" ? "bound" : "unknown" }, h("strong", null, boundedDisplayText(skill.name, 160)), " · ", t(label), loaded ? h("time", { dateTime: isoTime(evidence.loadedAt) }, " · " + formatTime(evidence.loadedAt)) : skill.status === "loaded" ? h("span", null, " · " + t("skillEvidenceUnavailable")) : null);
+        })) : null,
+        h("p", { className: "dat-note" }, t("professionalHint")), limitations.length ? h("ul", { className: "dat-note" }, limitations.map(function (item, index) { return h("li", { key: index }, boundedDisplayText(item)); })) : null
+      );
+    }
+    function DeliveryEvidence(props) {
+      var t = props.t, task = props.task || {}, submission = task.submission, delivery = submission && submission.delivery;
+      if (!delivery || typeof delivery !== "object") return null;
+      var artifacts = Array.isArray(delivery.artifacts) ? delivery.artifacts.filter(function (item) { return item && typeof item === "object"; }).slice(0, 16) : [];
+      var criteria = Array.isArray(delivery.criteria) ? delivery.criteria.slice(0, 12) : [];
+      var limitations = Array.isArray(delivery.limitations) ? delivery.limitations.slice(0, 12) : [];
+      var review = task.acceptance && task.acceptance.review;
+      function criteriaList(items) { return h("dl", { className: "dat-delivery-criteria" }, items.filter(function (item) { return item && typeof item === "object"; }).map(function (item, index) { return h("div", { key: index }, h("dt", null, boundedDisplayText(item.criterion)), h("dd", null, boundedDisplayText(item.evidence, 2000))); })); }
+      return h("section", { className: "dat-delivery-evidence dat-task-focus-surface", "aria-label": t("deliveryTitle") }, h("h3", null, t("deliveryTitle")),
+        h("p", null, boundedDisplayText(delivery.summary, 4000)), h("p", { className: "dat-note" }, t("deliveryTextOnly")),
+        typeof delivery.content === "string" && delivery.content.trim() ? h("div", { className: "dat-delivery-inline" }, boundedDisplayText(delivery.content, 16000)) : null,
+        submission.deliveryMode === "legacy_unverified" ? h("p", { className: "dat-warn-text" }, t("deliveryUnverified")) : null,
+        artifacts.length ? h("div", null, h("h4", null, t("deliveryArtifacts")), h("ul", null, artifacts.map(function (artifact, index) { return h("li", { key: index }, h("code", null, boundedDisplayText(artifact.path, 1024)), Number.isSafeInteger(artifact.bytes) ? h("span", { className: "dat-note" }, " · " + artifact.bytes + " B") : null); }))) : null,
+        criteria.length ? h("details", { className: "dat-disclosure" }, h("summary", null, t("deliveryCriteria")), criteriaList(criteria)) : null,
+        limitations.length ? h("div", null, h("h4", null, t("deliveryLimitations")), h("ul", null, limitations.map(function (item, index) { return h("li", { key: index }, boundedDisplayText(item)); }))) : null,
+        review ? h("details", { className: "dat-disclosure" }, h("summary", null, t("deliveryReview")), h("p", null, boundedDisplayText(review.summary, 4000)), h("p", { className: "dat-note" }, t("deliveryReviewHint")), criteriaList(Array.isArray(review.criteria) ? review.criteria.slice(0, 12) : []), Array.isArray(review.limitations) && review.limitations.length ? h("ul", null, review.limitations.slice(0, 12).map(function (item, index) { return h("li", { key: index }, boundedDisplayText(item)); })) : null) : null
+      );
+    }
+
     function visibleTaskResult(task) {
       var result = task && task.result;
       return result && typeof result === "object" && typeof result.text === "string" && result.text.trim() ? result : null;
@@ -1707,14 +1771,14 @@ window.__ModuleLoader__.load({
       if (!detail) return null;
       var rawState = normalizeState(task.status || task.state || "pending");
       var startedAt = safeTaskTime(task.claimedAt || task.startedAt || task.inProgressAt);
-      var lifecycleState = rawState === "completed" ? "completed" : rawState === "in_progress" ? "in_progress" : rawState === "blocked" && startedAt ? "in_progress" : "pending";
+      var lifecycleState = rawState === "completed" ? "completed" : rawState === "in_progress" || rawState === "submitted" ? "in_progress" : rawState === "blocked" && startedAt ? "in_progress" : "pending";
       var blocked = detail.stateKind === "blocked";
       var stages = [
         { id: "pending", state: lifecycleState === "pending" ? "current" : "reached", at: safeTaskTime(task.createdAt) },
         { id: "in_progress", state: lifecycleState === "in_progress" ? "current" : lifecycleState === "completed" ? startedAt ? "reached" : "unknown" : "upcoming", at: startedAt },
         { id: "completed", state: lifecycleState === "completed" ? "current" : "upcoming", at: safeTaskTime(task.completedAt) }
       ];
-      return { lifecycleState: lifecycleState, currentState: blocked ? "blocked" : lifecycleState, stages: stages, blocked: blocked, blockedAt: blocked ? safeTaskTime(task.updatedAt) : "", nextKey: blocked ? "blockedTaskNext" : lifecycleState === "completed" ? "taskNextCompleted" : lifecycleState === "in_progress" ? "taskNextProgress" : "taskNextPending" };
+      return { lifecycleState: lifecycleState, currentState: rawState === "submitted" || rawState === "cancelled" ? rawState : blocked ? "blocked" : lifecycleState, stages: stages, blocked: blocked, blockedAt: blocked ? safeTaskTime(task.updatedAt) : "", nextKey: blocked ? "blockedTaskNext" : rawState === "submitted" ? "boardNextSubmitted" : rawState === "cancelled" ? "boardNextCancelled" : lifecycleState === "completed" ? "taskNextCompleted" : lifecycleState === "in_progress" ? "taskNextProgress" : "taskNextPending" };
     }
     function taskDetailProgressText(t, progress, task) {
       var state = taskStateKind(task), completed = Number(progress && progress.completed), total = Number(progress && progress.total);
@@ -2018,7 +2082,9 @@ window.__ModuleLoader__.load({
               arrayText(task.dependencySources) ? detailFact(t("dependencySources"), dependencySourceText(t, task.dependencySources)) : null
             ),
             h(ResponsibilityPanel, { t: t, task: task, members: props.members, leadSessionId: props.leadSessionId, labelId: "dat-sidebar-responsibility-title" }),
-            h(TaskAssurancePanel, { t: t, task: task }),
+            h(DeliveryEvidence, { t: t, task: task }),
+            h(ProfessionalSkills, { t: t, task: task }),
+            h("details", { className: "dat-disclosure" }, h("summary", null, t("diagnostics")), h(TaskAssurancePanel, { t: t, task: task })),
             stateKind === "blocked" ? h("section", { className: "dat-task-section dat-board-note", role: "status", "aria-label": t("blockedTaskReason") }, h("h3", null, t("blockedTaskReason")), h("div", { className: "dat-meta" }, detail.reason || (detail.blockedBy.length ? t("blockedBy", { value: detail.blockedBy.map(refTitle).join(", ") }) : t("blockedTaskUnknown"))), h("p", { className: "dat-note", style: { marginBottom: 0 } }, t("blockedTaskNext"))) : null,
             detail.dependencies.length ? h("section", { className: "dat-task-section", "aria-label": t("taskDependencies") }, h("h3", null, t("taskDependencies")), h("div", { className: "dat-meta" }, detail.dependencies.map(refTitle).join(", "))) : null,
             h("section", { className: "dat-task-section" }, h("h3", null, t("taskEvents")), events.length ? h("div", { className: "dat-task-events" }, events.slice(0, 6).map(function (event) { return h(EventCard, { key: eventIdentity(event, ""), event: event, t: t, teamsById: props.teamsById || {} }); })) : h("div", { className: "dat-note" }, t("noEvents"))),
@@ -2124,7 +2190,9 @@ window.__ModuleLoader__.load({
                   )
                 ),
                 h(ResponsibilityPanel, { t: t, task: task, members: props.members, leadSessionId: props.leadSessionId, labelId: "dat-task-focus-responsibility-title" }),
-                h(TaskAssurancePanel, { t: t, task: task }),
+                h(DeliveryEvidence, { t: t, task: task }),
+            h(ProfessionalSkills, { t: t, task: task }),
+            h("details", { className: "dat-disclosure" }, h("summary", null, t("diagnostics")), h(TaskAssurancePanel, { t: t, task: task })),
                 taskResult ? h("section", { className: "dat-task-focus-surface dat-task-result", "data-provenance": taskResponsibilityProjection(task).legacy ? "legacy_migration" : "current", "aria-labelledby": "dat-task-focus-result-title" }, h("h3", { id: "dat-task-focus-result-title" }, taskResultLabel(t, task, false)), h("div", { className: "dat-task-result-text" }, taskResult.text), taskResult.truncated ? h("p", { className: "dat-note" }, t("taskResultTruncated")) : null) : null,
                 h("section", { className: "dat-task-focus-surface dat-task-next", "data-state": workflow.currentState, "aria-labelledby": "dat-task-next-title" }, h("h3", { id: "dat-task-next-title" }, t("taskNextStep")), h("p", { className: "dat-meta" }, t(workflow.nextKey))),
                 workflow.blocked ? h("section", { className: "dat-task-focus-surface dat-board-note", role: "status", "aria-label": t("blockedTaskReason") }, h("h3", null, t("blockedTaskReason")), h("div", { className: "dat-meta" }, detail.reason || (detail.blockedBy.length ? t("blockedBy", { value: detail.blockedBy.map(refTitle).join(", ") }) : t("blockedTaskUnknown")))) : null,
@@ -2163,8 +2231,8 @@ window.__ModuleLoader__.load({
       var status = normalizeState(task.status || task.state || "pending");
       if (status === "completed") return "done";
       if (status === "cancelled") return "cancelled";
-      if (status === "blocked" || status === "failed" || relationIds(task.blockedBy).length || relationIds(task.failedBy).length || relationIds(task.conflictsWith).length || task.permissionRequired === true || task.approvalRequired === true || task.confirmationRequired === true || task.requiresConfirmation === true || task.sideEffectApprovalRequired === true || task.stale === true || taskBoardPermissionAttention(task) || taskBoardEffectAttention(task)) return "attention";
-      if (status === "in_progress" || status === "running") return "running";
+      if (status === "blocked" || status === "failed" || relationIds(task.blockedBy).length || relationIds(task.failedBy).length || relationIds(task.conflictsWith).length || task.permissionRequired === true || task.permissionDenied === true || task.approvalRequired === true || task.confirmationRequired === true || task.requiresConfirmation === true || task.sideEffectApprovalRequired === true || task.stale === true || taskBoardPermissionAttention(task) || taskBoardEffectAttention(task)) return "attention";
+      if (status === "in_progress" || status === "running" || status === "submitted") return "running";
       return "ready";
     }
 
@@ -2178,7 +2246,7 @@ window.__ModuleLoader__.load({
     function taskBoardEffectAttention(task) {
       return (Array.isArray(task && task.externalEffects) ? task.externalEffects : []).some(function (effect) {
         var policy = String(effect && effect.policy || "").toLowerCase(), outcome = String(effect && effect.outcome || "").toLowerCase();
-        return policy === "confirm_each" || policy === "confirmation_required" || outcome === "outcome_unknown" || outcome === "unknown";
+        return policy === "confirm_each" || policy === "confirmation_required" || policy === "forbidden" || outcome === "outcome_unknown" || outcome === "unknown";
       });
     }
 
@@ -2383,29 +2451,74 @@ window.__ModuleLoader__.load({
      */
     function BoardTaskCard(props) {
       var task = props.task, t = props.t, id = taskId(task), column = taskBoardColumn(task), truth = taskResponsibilityProjection(task);
+      var submitted = normalizeState(task.status || task.state) === "submitted";
+      var stateLabel = submitted ? t("submitted") : taskBoardColumnLabel(t, column);
       var assigned = truth.assignedId;
       var member = responsibilityMember(props.members, assigned), executor = responsibilityMember(props.members, truth.executorId);
       var owner = member ? simpleMemberName(member, member.isLead || member.kind === "lead" || memberSession(member) === props.leadSessionId, t) : t("unassigned");
       var executorName = executor ? simpleMemberName(executor, executor.isLead || executor.kind === "lead" || memberSession(executor) === props.leadSessionId, t) : truth.executorId ? t("actualExecutorUnknown") : truth.legacy ? t("actualExecutorLegacy") : "";
-      var model = member ? memberModelText(member, t) : "", attempt = taskBoardAttempt(task), leaseEpoch = taskBoardLeaseEpoch(task), capabilitySummary = taskBoardCapabilitySummary(task), milestones = taskBoardMilestones(task), attentionFacts = taskBoardAttentionFacts(t, task);
-      var updatedAt = task.updatedAt || task.lastActivityAt || task.completedAt || task.claimedAt || task.createdAt;
-      return h("button", { type: "button", className: "dat-board-card", "data-state": column, onClick: function (event) { props.onOpen(event, task); }, "aria-label": (task.title || task.name || t("taskFallback", { id: id })) + " · " + taskBoardColumnLabel(t, column) },
-        h("div", { className: "dat-board-card-top" }, h("span", { className: "dat-board-card-id" }, "#" + id), h("span", { className: "dat-board-card-flag" }, taskBoardColumnLabel(t, column))),
+      var attentionFacts = taskBoardAttentionFacts(t, task);
+      return h("button", { type: "button", className: "dat-board-card", "data-state": column, "data-task-status": normalizeState(task.status || task.state), onClick: function (event) { props.onOpen(event, task); }, "aria-label": (task.title || task.name || t("taskFallback", { id: id })) + " · " + stateLabel },
+        h("div", { className: "dat-board-card-top" }, h("span", { className: "dat-board-card-flag" }, stateLabel)),
         h("div", { className: "dat-board-card-title" }, task.title || task.name || t("taskFallback", { id: id })),
-        h("div", { className: "dat-board-card-owner" }, t("assignedMember") + ": " + owner, model ? " · " + model : ""),
+        h("div", { className: "dat-board-card-owner" }, t("assignedMember") + ": " + owner),
         truth.executorId || column === "done" ? h("div", { className: "dat-board-card-owner dat-board-card-executor", "data-status": truth.deliveryKind === "missing_completed" || truth.acceptanceKind === "missing_completed" ? "attention" : truth.acceptanceKind }, t("actualExecutor") + ": " + (executorName || t("actualExecutorUnknown")) + " · " + deliveryLabel(t, truth.deliveryKind) + " · " + acceptanceLabel(t, truth.acceptanceKind)) : null,
         truth.release ? h("div", { className: "dat-board-card-facts", role: "note", "data-kind": "released" }, h("strong", null, t("taskReleased")), h("span", null, t("releaseReasonLabel") + ": " + (truth.release.reason || t("reasonUnavailable"))), truth.release.at ? h("time", { dateTime: String(truth.release.at) }, formatTime(truth.release.at)) : null) : null,
         truth.cancelled ? h("div", { className: "dat-board-card-facts", role: "note", "data-kind": "cancelled" }, h("strong", null, t("taskCancelled")), h("span", null, t("cancellationReasonLabel") + ": " + (truth.cancellation && truth.cancellation.reason || t("reasonUnavailable"))), truth.cancellation && truth.cancellation.at ? h("time", { dateTime: String(truth.cancellation.at) }, formatTime(truth.cancellation.at)) : null) : attentionFacts.length ? h("div", { className: "dat-board-card-facts", role: "note" }, h("strong", null, t("boardHostFacts")), attentionFacts.slice(0, 3).map(function (fact, index) { return h("span", { key: index }, fact); })) : null,
-        milestones || attempt !== null || leaseEpoch !== null || capabilitySummary || updatedAt ? h("div", { className: "dat-board-card-flags" }, milestones ? h("span", { className: "dat-board-card-flag" }, t("boardMilestones", milestones)) : null, attempt !== null ? h("span", { className: "dat-board-card-flag" }, t("boardAttempt", { value: attempt })) : null, leaseEpoch !== null ? h("span", { className: "dat-board-card-flag" }, t("boardLeaseEpoch", { value: leaseEpoch })) : null, capabilitySummary ? h("span", { className: "dat-board-card-flag" }, t("boardCapabilities", capabilitySummary)) : null, updatedAt ? h("time", { className: "dat-board-card-time", dateTime: String(updatedAt) }, t("lastActivity", { value: formatTime(updatedAt) })) : null) : null,
-        task.checkpoint && typeof task.checkpoint.text === "string" && task.checkpoint.text.trim() ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardMemberCheckpoint")), h("span", null, taskResultPreviewText(task.checkpoint, 180))) : null,
-        task.nextStep && typeof task.nextStep.text === "string" && task.nextStep.text.trim() ? h("div", { className: "dat-board-card-result" }, h("strong", null, t("boardMemberNextStep")), h("span", null, taskResultPreviewText(task.nextStep, 180))) : null,
-        visibleTaskResult(task) ? h("div", { className: "dat-board-card-result", "data-provenance": truth.legacy ? "legacy_migration" : "current" }, h("strong", null, truth.legacy ? t("legacyResultPreview") : t("boardCheckpoint")), h("span", null, taskResultPreviewText(visibleTaskResult(task), 180))) : null,
-        h("div", { className: "dat-board-card-next" }, t(taskBoardNextKey(column)))
+        h("div", { className: "dat-board-card-next" }, t(submitted ? "boardNextSubmitted" : column === "cancelled" ? "boardNextCancelled" : taskBoardNextKey(column)))
       );
     }
 
     function cancelledHistoryProjection(t) {
       return { id: "cancelled", label: t("boardCancelled"), limit: 200 };
+    }
+
+    function teamDecisionTasks(tasks) {
+      return tasks.filter(function (task) {
+        var state = normalizeState(task.status || task.state);
+        var unknownOutcome = (Array.isArray(task.externalEffects) ? task.externalEffects : []).some(function (effect) { return effect.outcome === "outcome_unknown" || effect.outcome === "unknown"; });
+        if (state === "completed" || state === "cancelled") return unknownOutcome;
+        return task.approvalRequired === true || task.confirmationRequired === true || task.requiresConfirmation === true || task.sideEffectApprovalRequired === true || task.permissionRequired === true || task.permissionDenied === true || taskBoardPermissionAttention(task) || taskBoardEffectAttention(task);
+      });
+    }
+
+    function leadPlanSummary(team) {
+      var plan = team && team.plan && typeof team.plan === "object" ? team.plan : null;
+      var authorization = plan && plan.authorization && typeof plan.authorization === "object" ? plan.authorization : null;
+      var values = ["permissions", "files", "cost", "externalSideEffects"].map(function (key) { return authorization && typeof authorization[key] === "string" ? authorization[key].toLowerCase() : ""; });
+      var allowed = values.every(function (value) { return value === "host_verified" || value === "human_attested"; });
+      var denied = values.some(function (value) { return ["denied", "unavailable", "rejected", "revoked", "forbidden", "conflict"].indexOf(value) >= 0; });
+      var phase = plan && typeof plan.phase === "string" ? plan.phase.toLowerCase() : "";
+      var attention = team && team.attention && typeof team.attention === "object" ? team.attention : {};
+      var codes = Array.isArray(attention.codes) ? attention.codes : [];
+      var draft = phase === "draft" || codes.indexOf("plan_draft") >= 0;
+      return { authorization: allowed ? "allowed" : denied ? "attention" : "unknown", draft: draft, attention: attention.required === true || codes.length > 0, phaseKnown: ["draft", "committed", "active"].indexOf(phase) >= 0 };
+    }
+
+    function LeadSummary(props) {
+      var t = props.t, team = props.team, tasks = team.tasks || [], decisions = teamDecisionTasks(tasks);
+      var submitted = tasks.filter(function (task) { return normalizeState(task.status || task.state) === "submitted"; }).length;
+      var running = tasks.filter(function (task) { return taskBoardColumn(task) === "running" && normalizeState(task.status || task.state) !== "submitted"; }).length;
+      var done = tasks.filter(function (task) { return taskBoardColumn(task) === "done"; }).length;
+      var issues = tasks.filter(function (task) { return taskBoardColumn(task) === "attention" && decisions.indexOf(task) < 0; });
+      var paused = normalizeState(team.status || team.state) === "paused";
+      var planSummary = leadPlanSummary(team);
+      var planNeedsNotice = planSummary.authorization !== "allowed" || !planSummary.phaseKnown || planSummary.draft || planSummary.attention;
+      return h("section", { className: "dat-lead-summary dat-panel", "aria-labelledby": "dat-lead-summary-title" },
+        h("p", { className: "dat-lead-eyebrow" }, t("leadSummary")),
+        h("h2", { id: "dat-lead-summary-title" }, team.objective || teamName(team, t)),
+        h("p", { className: "dat-lead-progress", role: "status", "aria-live": "polite" }, t("leadProgress", { running: running, submitted: submitted, done: done })),
+        h("div", { className: "dat-row" }, h(Button, { primary: true, disabled: !props.canOpenLead || props.openingLead, onClick: props.onOpenLead }, t(props.openingLead ? "leadChatOpening" : "leadChat")), h(Button, { onClick: props.onWorkDetails }, t("leadWorkDetails"))),
+        !props.canOpenLead ? h("p", { className: "dat-note" }, t("leadChatUnavailable")) : null,
+        paused ? h("div", { className: "dat-error", role: "alert" }, h("strong", null, t("paused")), h("p", null, t("pausedBody"))) : null,
+        planNeedsNotice ? h("div", { className: "dat-board-note dat-plan-summary", "data-authorization-state": planSummary.authorization, role: planSummary.authorization === "attention" ? "alert" : "note" }, h("div", null,
+          planSummary.authorization === "unknown" || !planSummary.phaseKnown ? h("p", { className: "dat-note" }, t("leadAuthorizationIncomplete")) : null,
+          planSummary.authorization === "attention" ? h("p", null, t("leadAuthorizationAttention")) : null,
+          planSummary.draft ? h("p", null, t("leadPlanDraft")) : planSummary.attention ? h("p", null, t("leadTeamAttention")) : null,
+          h(Button, { small: true, onClick: props.onDiagnostics }, t("diagnostics")))) : null,
+        decisions.length ? h("div", { className: "dat-lead-attention", role: "alert" }, h("h3", null, t("leadDecisions")), decisions.map(function (task) { return h("button", { key: taskId(task), type: "button", className: "dat-lead-issue", onClick: function (event) { props.onOpenTask(event, task); } }, h("strong", null, task.title || t("taskFallback", { id: taskId(task) })), h("span", null, taskBoardAttentionFacts(t, task).join(" · "))); })) : !paused && !planNeedsNotice ? h("p", { className: "dat-lead-progress" }, t("leadNoDecision")) : null,
+        issues.length ? h("div", { className: "dat-lead-attention" }, h("h3", null, t("leadHandling")), issues.slice(0, 3).map(function (task) { return h("button", { key: taskId(task), type: "button", className: "dat-lead-issue", onClick: function (event) { props.onOpenTask(event, task); } }, task.title || t("taskFallback", { id: taskId(task) })); })) : null
+      );
     }
 
     function TaskBoardWorkspace(props) {
@@ -2415,6 +2528,8 @@ window.__ModuleLoader__.load({
       var selectedPair = useState(""), selectedTaskId = selectedPair[0], setSelectedTaskId = selectedPair[1];
       var noticePair = useState(""), selectionNotice = noticePair[0], setSelectionNotice = noticePair[1];
       var detailRef = useRef(null), triggerRef = useRef(null), restoreFocusRef = useRef(false);
+      var workRef = useRef(null), historyRef = useRef(null), diagnosticsRef = useRef(null);
+      function openDisclosure(ref) { if (!ref.current) return; ref.current.open = true; var summary = ref.current.querySelector("summary"); if (summary) summary.focus(); }
       var selectedTask = tasks.filter(function (task) { return taskId(task) === selectedTaskId; })[0] || null;
       var taskDetailLive = useTaskDetailState(props.sessionId, team && teamId(team), selectedTaskId, props.snapshotVersion);
       var selectedAssignee = selectedTask ? members.filter(function (member) { var assigned = selectedTask.assigneeSessionId || selectedTask.assigneeId || selectedTask.assignee || selectedTask.memberId || ""; return memberSession(member) === assigned || memberId(member) === assigned; })[0] || null : null;
@@ -2445,22 +2560,26 @@ window.__ModuleLoader__.load({
       var columns = [
         { id: "ready", label: t("boardPending"), limit: 200 },
         { id: "running", label: t("boardProgress"), limit: 200 },
-        { id: "attention", label: t("boardBlocked"), limit: 200 },
-        { id: "done", label: t("boardCompleted"), limit: 200 }
+        { id: "attention", label: t("boardBlocked"), limit: 200 }
       ];
+      var doneTasks = sortBoardColumnTasks(tasks.filter(function (task) { return taskBoardColumn(task) === "done"; }), "done");
       var cancelledHistory = cancelledHistoryProjection(t);
       var cancelledTasks = sortBoardColumnTasks(tasks.filter(function (task) { return taskBoardColumn(task) === cancelledHistory.id; }), cancelledHistory.id);
       return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-task-board-title", "aria-readonly": "true" },
-        h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-task-board-title" }, t("boardTitle")), h("p", null, t("boardIntro"))), h("div", { className: "dat-workspace-view-actions" }, h("span", { className: "dat-badge" }, t("boardReadOnly")), h(Button, { small: true, onClick: function () { props.setWorkspaceView("canvas"); } }, t("boardOpenCanvas")))),
+        h("h2", { id: "dat-task-board-title", className: "dat-sr" }, t("boardTitle")),
         normalizeState(team.status || team.state) === "closed" || team.closure ? h(TeamClosureBanner, { t: t, team: team }) : null,
-        h("div", { className: "dat-board-toolbar" }, h("div", null, h("strong", null, teamName(team, t)), h("div", { className: "dat-note", style: { marginTop: 2 } }, team.objective || t("unknown"))), h("div", { className: "dat-row" }, h("span", { className: "dat-badge" }, t("boardScope")), h("span", { className: "dat-badge" }, t("revision", { value: team.revision || "–" })) )),
-        h(PlanLifecyclePanel, { t: t, team: team }),
-        h("div", { className: "dat-board-note", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("boardReadOnlyHint"), " ", t("boardBlockedDerived"), " ", t("boardFactLegend"))),
-        failedMembers.length && props.canRecover ? h(MemberRecoveryPanel, { t: t, members: failedMembers, onRecover: props.onRecover }) : null,
+        h("div", { hidden: !!selectedTaskId, inert: selectedTaskId ? "" : undefined }, h(LeadSummary, { t: t, team: team, canOpenLead: props.canOpenLead, openingLead: props.openingLead, onOpenLead: props.onOpenLead, onWorkDetails: function () { openDisclosure(workRef); }, onDiagnostics: function () { openDisclosure(diagnosticsRef); }, onOpenTask: openTaskDetail })),
+        team.handoff ? h("div", { className: "dat-board-note", role: "status" }, t("handoffPending")) : null,
+        failedMembers.length && props.canRecover ? h(MemberRecoveryPanel, { t: t, members: failedMembers, onRecover: props.onRecover }) : failedMembers.length ? h("div", { className: "dat-board-note", role: "alert" }, t("failedNext")) : null,
         projectionLimited ? h("div", { className: "dat-board-note dat-board-projection-note", role: "note" }, h("span", { "aria-hidden": "true" }, "⚠"), h("span", null, t("boardProjectionLimited", { shown: tasks.length, total: totalTaskCount }))) : null,
         selectionNotice ? h("div", { className: "dat-board-note", role: "status" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, selectionNotice)) : null,
         h("div", { className: "dat-board-shell" + (selectedTaskId ? " dat-task-focus-open" : "") },
           h("div", { className: "dat-board-main", hidden: !!selectedTaskId, "aria-hidden": selectedTaskId ? true : undefined, inert: selectedTaskId ? "" : undefined },
+            h("section", { className: "dat-lead-deliveries", "aria-labelledby": "dat-lead-deliveries-title" }, h("h3", { id: "dat-lead-deliveries-title" }, t("leadDeliveries")),
+              doneTasks.length ? h("div", { className: "dat-lead-result-list" }, doneTasks.slice(0, 3).map(function (task) { var truth = taskResponsibilityProjection(task); return h("button", { key: taskId(task), type: "button", className: "dat-lead-issue", onClick: function (event) { openTaskDetail(event, task); } }, h("strong", null, task.title || t("taskFallback", { id: taskId(task) })), h("span", null, acceptanceLabel(t, truth.acceptanceKind))); })) : h("p", { className: "dat-note" }, t("leadNoDeliveries")),
+              doneTasks.length + cancelledTasks.length ? h(Button, { onClick: function () { openDisclosure(historyRef); } }, t("leadDeliveryMore", { count: doneTasks.length + cancelledTasks.length })) : null),
+            h("details", { className: "dat-disclosure dat-work-details", ref: workRef }, h("summary", null, t("leadWorkDetails")),
+            h("div", { className: "dat-workspace-view-actions" }, h(Button, { small: true, onClick: function () { props.setWorkspaceView("canvas"); } }, t("boardOpenCanvas"))),
             h("div", { className: "dat-task-board" }, columns.map(function (column) {
               var columnTasks = sortBoardColumnTasks(tasks.filter(function (task) { return taskBoardColumn(task) === column.id; }), column.id);
               var visible = columnTasks.slice(0, column.limit);
@@ -2469,7 +2588,9 @@ window.__ModuleLoader__.load({
                 h("div", { className: "dat-board-column-list" }, visible.length ? visible.map(function (task) { return h(BoardTaskCard, { key: taskId(task), task: task, members: members, leadSessionId: team.leadSessionId, t: t, onOpen: openTaskDetail }); }) : h("div", { className: "dat-board-empty" }, t("boardEmpty")), columnTasks.length > visible.length ? h("div", { className: "dat-board-overflow" }, t("boardMore", { count: columnTasks.length - visible.length })) : null)
               );
             })),
-            cancelledTasks.length ? h("details", { className: "dat-board-history" }, h("summary", null, t("boardOpenCancelled", { count: cancelledTasks.length })), h("p", { className: "dat-note" }, t("boardCancelledHistoryHint")), h("div", { className: "dat-board-history-list" }, cancelledTasks.slice(0, cancelledHistory.limit).map(function (task) { return h(BoardTaskCard, { key: taskId(task), task: task, members: members, leadSessionId: team.leadSessionId, t: t, onOpen: openTaskDetail }); }))) : null
+            ),
+            doneTasks.length + cancelledTasks.length ? h("details", { className: "dat-board-history", ref: historyRef }, h("summary", null, t("leadDeliveryMore", { count: doneTasks.length + cancelledTasks.length })), h("p", { className: "dat-note" }, t("boardCancelledHistoryHint")), h("div", { className: "dat-board-history-list" }, doneTasks.slice(0, 200).concat(cancelledTasks.slice(0, cancelledHistory.limit)).map(function (task) { return h(BoardTaskCard, { key: taskId(task), task: task, members: members, leadSessionId: team.leadSessionId, t: t, onOpen: openTaskDetail }); }))) : null,
+            h("details", { className: "dat-disclosure dat-diagnostics", ref: diagnosticsRef }, h("summary", null, t("diagnostics")), h(PlanLifecyclePanel, { t: t, team: team }), h("p", { className: "dat-note" }, t("revision", { value: team.revision || "–" }), " · ", t("boardReadOnlyHint"), " ", t("boardBlockedDerived"), " ", t("boardFactLegend")))
           ),
           selectedTaskId ? h(TaskDetailFocus, { t: t, task: selectedTask, assignee: selectedAssignee, responsible: responsible, members: members, leadSessionId: team.leadSessionId, runtimeDetail: taskDetailLive.detail, runtimeError: taskDetailLive.error, detailConnection: taskDetailLive.connection, events: selectedTaskEvents, tasks: tasks, teamsById: teamsById, connection: props.connection, detailRef: detailRef, onClose: closeTaskDetail }) : null
         )
@@ -3099,7 +3220,11 @@ window.__ModuleLoader__.load({
 
     function ParticipantsWorkspace(props) {
       var t = props.t, team = props.team, members = team && sortMembersByActivity(team.members || []) || [], tasks = team && team.tasks || [];
-      function assignedTask(member) { var id = memberSession(member); return tasks.filter(function (task) { return (task.assigneeSessionId || task.assigneeId || task.assignee || task.memberId) === id && taskBoardColumn(task) !== "completed"; })[0] || null; }
+      members.sort(function (left, right) { return Number(!!(right.isLead || right.kind === "lead" || team && memberSession(right) === team.leadSessionId)) - Number(!!(left.isLead || left.kind === "lead" || team && memberSession(left) === team.leadSessionId)); });
+      function assignedTask(member) {
+        var ids = [memberSession(member), memberId(member)];
+        return tasks.filter(function (task) { var column = taskBoardColumn(task); return ids.indexOf(task.assigneeSessionId || task.assigneeId || task.assignee || task.memberId) >= 0 && column !== "done" && column !== "cancelled"; }).sort(function (left, right) { var rank = { running: 0, attention: 1, ready: 2 }; return rank[taskBoardColumn(left)] - rank[taskBoardColumn(right)]; })[0] || null;
+      }
       function openAgentCatalog() {
         if (!team || !team.leadSessionId || !props.sessions || typeof props.sessions.setSubagentCatalogOpen !== "function") return;
         props.sessions.setSubagentCatalogOpen(team.leadSessionId, true);
@@ -3107,7 +3232,7 @@ window.__ModuleLoader__.load({
       }
       return h("section", { className: "dat-workspace-view", "aria-labelledby": "dat-participants-title" },
         h("div", { className: "dat-workspace-view-head" }, h("div", null, h("h2", { id: "dat-participants-title" }, t("participantsTitle")), h("p", null, t("participantsIntro"))), team ? h(Button, { small: true, disabled: !team.leadSessionId || !props.sessions || typeof props.sessions.setSubagentCatalogOpen !== "function", onClick: openAgentCatalog }, t("participantsOpenCatalog")) : null),
-        h("section", { className: "dat-panel", "aria-labelledby": "dat-execution-resources" }, h("div", { className: "dat-column-head" }, h("h3", { id: "dat-execution-resources", className: "dat-section-title", style: { margin: 0 } }, t("executionResources")), h("span", { className: "dat-badge" }, members.length)), members.length ? h("div", { className: "dat-participant-grid" }, members.map(function (member) { var task = assignedTask(member), isLead = member.isLead || member.kind === "lead" || team && memberSession(member) === team.leadSessionId; return h("article", { key: memberId(member), className: "dat-participant-row" }, h("div", { className: "dat-participant-copy" }, h("span", { className: "dat-participant-avatar", "aria-hidden": "true" }, Array.from(simpleMemberName(member, isLead, t))[0] || "AI"), h("span", null, h("strong", null, simpleMemberName(member, isLead, t)), h("small", null, memberModelText(member, t) || t("unknown")))), h("div", { className: "dat-participant-state" }, h("span", { className: "dat-badge" }, statusLabel(t, memberStateKind(member))), h("small", null, task ? t("participantCurrentTask", { value: task.title || taskId(task) }) : t("participantNoTask")))); })) : h("div", { className: "dat-board-empty" }, t("participantsEmpty"))),
+        h("section", { className: "dat-panel", "aria-labelledby": "dat-execution-resources" }, h("div", { className: "dat-column-head" }, h("h3", { id: "dat-execution-resources", className: "dat-section-title", style: { margin: 0 } }, t("executionResources")), h("span", { className: "dat-badge" }, members.length)), members.length ? h("div", { className: "dat-participant-grid" }, members.map(function (member) { var task = assignedTask(member), isLead = member.isLead || member.kind === "lead" || team && memberSession(member) === team.leadSessionId; return h("article", { key: memberId(member), className: "dat-participant-row" }, h("div", { className: "dat-participant-copy" }, h("span", { className: "dat-participant-avatar", "aria-hidden": "true" }, Array.from(simpleMemberName(member, isLead, t))[0] || "AI"), h("span", null, h("strong", null, simpleMemberName(member, isLead, t)), h("small", null, memberModelText(member, t) || t("unknown")))), h("div", { className: "dat-participant-state" }, h("span", { className: "dat-badge" }, statusLabel(t, memberStateKind(member))), h("small", null, task ? t("participantCurrentTask", { value: task.title || taskId(task) }) + " · " + statusLabel(t, task.status || task.state) : t("participantNoTask"))), task ? h("details", { className: "dat-disclosure dat-participant-skills" }, h("summary", null, t("professionalTitle")), h(ProfessionalSkills, { t: t, task: task })) : null); })) : h("div", { className: "dat-board-empty" }, t("participantsEmpty"))),
         h("div", { style: { marginTop: 12 } }, h("h3", { className: "dat-section-title" }, t("collaborationAccess")), h("div", { className: "dat-board-note dat-collaboration-boundary", role: "note" }, h("span", { "aria-hidden": "true" }, "ⓘ"), h("span", null, t("collaborationPreview"))), h(ProjectTeamEntry, { t: t }))
       );
     }
@@ -3157,9 +3282,10 @@ window.__ModuleLoader__.load({
 
     function MemberRecoveryReconcilePanel(props) {
       var t = props.t, confirmPair = useState(null), confirmation = confirmPair[0], setConfirmation = confirmPair[1], busyPair = useState(false), busy = busyPair[0], setBusy = busyPair[1], noticePair = useState(""), notice = noticePair[0], setNotice = noticePair[1], errorPair = useState(""), error = errorPair[0], setError = errorPair[1], confirmRef = useRef(null);
+      var requestRef = useRef(false);
       var panelId = "dat-member-reconcile-" + String(props.panelId || "panel").replace(/[^A-Za-z0-9_-]/g, "-");
       useEffect(function () { if (!confirmation) return; confirmRef.current && confirmRef.current.focus && confirmRef.current.focus(); var onKey = function (event) { if (event.key === "Escape" && !busy) { event.preventDefault(); setConfirmation(null); } }; document.addEventListener("keydown", onKey); return function () { document.removeEventListener("keydown", onKey); }; }, [confirmation, busy]);
-      function submit() { if (!confirmation || busy) return; setBusy(true); setError(""); props.onReconcile(confirmation.receipt, confirmation.resolution).then(function () { setNotice(t("recoveryReconcileSuccess")); setConfirmation(null); }).catch(function (cause) { setError(t("recoveryError", { error: errorText(cause) })); }).finally(function () { setBusy(false); }); }
+      function submit() { if (!confirmation || busy || requestRef.current || props.paused && confirmation.resolution === "delivered") return; requestRef.current = true; setBusy(true); setError(""); var operation; try { operation = props.onReconcile(confirmation.receipt, confirmation.resolution); } catch (cause) { operation = Promise.reject(cause); } Promise.resolve(operation).then(function () { setNotice(t("recoveryReconcileSuccess")); setConfirmation(null); }).catch(function (cause) { setError(t("recoveryError", { error: errorText(cause) })); }).finally(function () { requestRef.current = false; setBusy(false); }); }
       return h("section", { className: "dat-member-recovery", "aria-labelledby": panelId + "-title" }, h("h3", { id: panelId + "-title" }, t("recoveryUnknownTitle")), props.receipts.map(function (receipt) { return h("div", { key: receipt.requestId, className: "dat-member-recovery-unknown" }, h("p", null, t("recoveryUnknownBody", { request: receipt.requestId, phase: receipt.phase })), h("div", { className: "dat-member-recovery-actions", role: "group", "aria-label": simpleMemberName(receipt.member, false, t) }, h("span", { className: "dat-badge" }, simpleMemberName(receipt.member, false, t)), props.paused ? null : h(Button, { disabled: busy, onClick: function () { setConfirmation({ receipt: receipt, resolution: "delivered" }); } }, t("recoveryMarkDelivered")), h(Button, { danger: true, disabled: busy, onClick: function () { setConfirmation({ receipt: receipt, resolution: "not_delivered" }); } }, t("recoveryMarkNotDelivered")))); }), confirmation ? h("div", { className: "dat-member-recovery-confirm", role: "alertdialog", "aria-modal": "false", "aria-labelledby": panelId + "-confirm" }, h("p", { id: panelId + "-confirm" }, t(confirmation.resolution === "delivered" ? "recoveryReconcileConfirmDelivered" : "recoveryReconcileConfirmNotDelivered")), h("div", { className: "dat-member-recovery-actions" }, h(Button, { primary: true, buttonRef: confirmRef, disabled: busy, onClick: submit }, busy ? t("recoveryReconcileWorking") : t("recoveryConfirm")), h(Button, { disabled: busy, onClick: function () { setConfirmation(null); } }, t("recoveryCancel")))) : null, notice ? h("p", { role: "status", "aria-live": "polite" }, notice) : null, error ? h("p", { className: "dat-error", role: "alert" }, error) : null);
     }
 
@@ -3167,7 +3293,7 @@ window.__ModuleLoader__.load({
       var t = props.t, team = props.team, members = team.members || [], tasks = team.tasks || [];
       var totalTaskCount = Number.isFinite(team.taskCount) ? team.taskCount : tasks.length;
       var projectionLimited = !!(team.projection && team.projection.tasksTruncated) || totalTaskCount > tasks.length;
-      var historyPair = useState(!!props.closed), historyOpen = historyPair[0], setHistoryOpen = historyPair[1];
+      var historyPair = useState(false), historyOpen = historyPair[0], setHistoryOpen = historyPair[1];
       var modePair = useState("canvas"), workMode = modePair[0], setWorkMode = modePair[1];
       var actionsPair = useState(false), actionsOpen = actionsPair[0], setActionsOpen = actionsPair[1];
       var drawerPair = useState(false), drawerOpen = drawerPair[0], setDrawerOpen = drawerPair[1];
@@ -3215,7 +3341,7 @@ window.__ModuleLoader__.load({
         props.sessions.setSubagentCatalogOpen(team.leadSessionId, true);
         if (typeof window !== "undefined" && typeof window.dispatchEvent === "function" && typeof window.CustomEvent === "function") window.dispatchEvent(new window.CustomEvent(SUBAGENT_CATALOG_EVENT, { detail: { parentSessionId: team.leadSessionId } }));
       }
-      useEffect(function () { setHistoryOpen(!!props.closed); setHistoryLimit(40); setWorkMode("canvas"); setActionsOpen(false); setDrawerOpen(false); setSelectedTaskId(""); setTaskSelectionNotice(""); }, [teamId(team), props.closed]);
+      useEffect(function () { setHistoryOpen(false); setHistoryLimit(40); setWorkMode("canvas"); setActionsOpen(false); setDrawerOpen(false); setSelectedTaskId(""); setTaskSelectionNotice(""); }, [teamId(team), props.closed]);
       useEffect(function () { if (selectedTaskId && !selectedTask) { setSelectedTaskId(""); setTaskSelectionNotice(t("taskSelectionExpired")); } }, [selectedTaskId, selectedTask]);
       useEffect(function () {
         if (!drawerOpen && !selectedTaskId) return;
@@ -3282,6 +3408,7 @@ window.__ModuleLoader__.load({
       var workspacePair = useState("board"), workspaceView = workspacePair[0], setWorkspaceView = workspacePair[1];
       var live = useTeamState(props.sessionId, selectedId);
       var busyPair = useState(false), busy = busyPair[0], setBusy = busyPair[1];
+      var leadOpeningPair = useState(false), openingLead = leadOpeningPair[0], setOpeningLead = leadOpeningPair[1];
       var actionErrorPair = useState(""), actionError = actionErrorPair[0], setActionError = actionErrorPair[1];
       var noticePair = useState(""), notice = noticePair[0], setNotice = noticePair[1];
       var snapshot = live.state, teams = teamsFromSnapshot(snapshot);
@@ -3290,6 +3417,17 @@ window.__ModuleLoader__.load({
       useEffect(function () {
         if (team && teamId(team) !== selectedId) setSelectedId(teamId(team));
       }, [selectedId, preferredId, teams.map(teamId).join("|")]);
+      var canOpenLead = !!(team && team.leadSessionId && typeof props.setView === "function" && (props.sessionId === team.leadSessionId || props.sessions && typeof props.sessions.open === "function"));
+      function openLeadConversation() {
+        if (!canOpenLead || openingLead) return;
+        setOpeningLead(true); setActionError("");
+        // Same navigation contract as dsh-session-experience: sessions.open(id).
+        // Never fork, resume, send a message, or use the member catalog as a substitute.
+        var opened;
+        try { opened = props.sessionId === team.leadSessionId ? undefined : props.sessions.open(team.leadSessionId); }
+        catch (_) { setOpeningLead(false); setActionError(t("leadChatUnavailable")); return; }
+        return Promise.resolve(opened).then(function () { props.setView("chat"); }).catch(function () { setActionError(t("leadChatUnavailable")); }).finally(function () { setOpeningLead(false); });
+      }
       function setDraft(prompt) {
         if (!props.inputActions || typeof props.inputActions.setDraft !== "function") { setActionError("inputActions.setDraft unavailable"); return; }
         props.inputActions.setDraft(prompt);
@@ -3381,18 +3519,18 @@ window.__ModuleLoader__.load({
             ? h(ActiveTeam, { t: t, team: team, teams: teams, closed: closed, paused: paused, setDraft: setDraft, sessions: props.sessions, connection: live.connection, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember })
             : workspaceView === "inbox"
               ? h(CoordinationInboxWorkspace, { t: t, team: team, teams: teams, setWorkspaceView: setWorkspaceView })
-              : h(TaskBoardWorkspace, { t: t, sessionId: props.sessionId, team: team, teams: teams, snapshotVersion: teamSnapshotVersion(snapshot), connection: live.connection, setWorkspaceView: setWorkspaceView, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember }),
+              : h(TaskBoardWorkspace, { t: t, sessionId: props.sessionId, team: team, teams: teams, snapshotVersion: teamSnapshotVersion(snapshot), connection: live.connection, setWorkspaceView: setWorkspaceView, canOpenLead: canOpenLead, openingLead: openingLead, onOpenLead: openLeadConversation, canRecover: !closed && !paused && props.sessionId === team.leadSessionId, onRecover: recoverMember }),
           h("details", { className: "dat-disclosure dat-settings-disclosure" }, h("summary", null, t("workspaceSettings")), h(DisableAutomaticTeams, { t: t, labelId: "dat-disable-teams", disable: disable, busy: busy, hasActive: hasActiveTeams }))
         );
       }
       return h("main", { className: "dat-view", "data-mobile-slot": "agent-teams.workspace", "data-harness-mobile-session-id": String(props.sessionId || ""), "data-harness-mobile-team-id": team ? String(teamId(team)) : undefined, "aria-labelledby": "dat-view-title" }, h("div", { className: "dat-shell" },
         h(WorkspaceNav, { t: t, value: workspaceView, onChange: setWorkspaceView, counts: { tasks: taskCount, projectTeamTasks: projectTeamTaskCount, members: memberCount, events: eventCount } }),
         h("div", { className: "dat-workspace-scroll" },
-          h("div", { className: "dat-head" }, h("div", null, h("h1", { id: "dat-view-title", className: "dat-title" }, t("title")), h("p", { className: "dat-subtitle" }, t("workspaceIntro"))), h("span", { className: "dat-badge", "data-mobile-slot": "agent-teams.context", "data-harness-mobile-session-id": String(props.sessionId || ""), title: t("connection") + " · " + props.sessionId }, h("span", { className: "dat-dot", style: live.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connectionKey) + " · " + String(props.sessionId || "").slice(-8))),
+          h("div", { className: "dat-head" }, h("div", null, h("h1", { id: "dat-view-title", className: "dat-title" }, t("title")), h("p", { className: "dat-subtitle" }, t("workspaceIntro"))), h("span", { className: "dat-badge", "data-mobile-slot": "agent-teams.context", "data-harness-mobile-session-id": String(props.sessionId || ""), title: t("connection") + " · " + props.sessionId }, h("span", { className: "dat-dot", style: live.connection === "live" ? null : { background: "var(--dsw-alias-state-warn-primary)" } }), t(connectionKey))),
           live.error ? h("div", { className: "dat-error", role: "alert" }, t("loadError", { error: live.error }), " ", h(Button, { small: true, onClick: live.reload }, t("retry"))) : null,
           actionError ? h("div", { className: "dat-error", role: "alert" }, t("actionError", { error: actionError })) : null,
           notice ? h("div", { className: "dat-board-note", role: "status", "aria-live": "polite" }, notice) : null,
-          h(LiveTeamStatusCard, { t: t, status: liveStatus, onView: function () { setWorkspaceView("board"); } }),
+          liveStatus && (liveStatus.diagnostic || ["paused", "outcome_unknown", "provider_transient", "lifecycle_timeout"].indexOf(liveStatus.kind) >= 0 || liveStatus.counts.outcomeUnknown > 0) ? h(LiveTeamStatusCard, { t: t, status: liveStatus, onView: function () { setWorkspaceView("board"); } }) : liveStatus ? h("details", { className: "dat-disclosure dat-live-diagnostics" }, h("summary", null, t("liveStatusTitle")), h(LiveTeamStatusCard, { t: t, status: liveStatus, onView: function () { setWorkspaceView("board"); } })) : null,
           h("section", { className: "dat-workspace" }, h("div", { className: "dat-workspace-main" }, workspaceContent))
         )
       ));
@@ -3412,15 +3550,23 @@ window.__ModuleLoader__.load({
       var savingPair = useState(false), saving = savingPair[0], setSaving = savingPair[1];
       var errorPair = useState(""), error = errorPair[0], setError = errorPair[1];
       var savedPair = useState(false), saved = savedPair[0], setSaved = savedPair[1];
+      var reloadPair = useState(0), reloadKey = reloadPair[0], setReloadKey = reloadPair[1];
+      var contextRef = useRef(null), saveRef = useRef(null), loadedRef = useRef(false);
+      if (!contextRef.current || contextRef.current.sessionId !== sessionId) { contextRef.current = { sessionId: sessionId }; loadedRef.current = false; saveRef.current = null; }
+      var context = contextRef.current;
       function applyState(state) { var config = state.config || {}, budget = Number(config.autopilotMaxAdditionalRounds) || 200, autopilotEnabled = !!config.autopilotEnabled; committedAutopilotEnabled.current = autopilotEnabled; committedAutopilotBudget.current = budget; setHostAuthorization(state.autopilotAuthorization || null); setValues({ enabled: !!state.enabled, maxMembers: Number(config.maxMembers) || 4, maxActiveTurns: Number(config.maxActiveTurns) || 4, autopilotEnabled: autopilotEnabled, autopilotMaxAdditionalRounds: budget }); }
       useEffect(function () {
-        var alive = true; trustedAutopilotSaved.current = false; setLoading(true); setError("");
-        fetchState(sessionId).then(function (state) { if (alive) applyState(state); }).catch(function (err) { if (alive) setError(errorText(err)); }).finally(function () { if (alive) setLoading(false); });
-        return function () { alive = false; };
-      }, [sessionId]);
+        var alive = true; context.active = true; loadedRef.current = false; trustedAutopilotSaved.current = false; setLoading(true); setSaving(false); setSaved(false); setError("");
+        function current() { return alive && contextRef.current === context; }
+        fetchState(sessionId).then(function (state) { if (current()) { applyState(state); loadedRef.current = true; } }).catch(function (err) { if (current()) setError(errorText(err)); }).finally(function () { if (current()) setLoading(false); });
+        return function () { alive = false; context.active = false; };
+      }, [sessionId, reloadKey]);
       function valid(value, maximum) { var number = Number(value); return Number.isInteger(number) && number >= 1 && number <= maximum; }
       function submit(event) {
-        event.preventDefault(); if (!valid(values.maxMembers, 8) || !valid(values.maxActiveTurns, 8) || !valid(values.autopilotMaxAdditionalRounds, 200)) { setError(t("settingsRange")); return; }
+        event.preventDefault(); if (saveRef.current || !loadedRef.current || contextRef.current !== context || !context.active) return;
+        if (!valid(values.maxMembers, 8) || !valid(values.maxActiveTurns, 8) || !valid(values.autopilotMaxAdditionalRounds, 200)) { setError(t("settingsRange")); return; }
+        var request = {}; saveRef.current = request;
+        function current() { return contextRef.current === context && context.active && saveRef.current === request; }
         var budget = Number(values.autopilotMaxAdditionalRounds);
         var autopilotChanged = !!values.autopilotEnabled !== committedAutopilotEnabled.current || budget !== committedAutopilotBudget.current;
         var authorizationRequired = autopilotChanged || !!values.autopilotEnabled && !trustedAutopilotSaved.current;
@@ -3432,15 +3578,16 @@ window.__ModuleLoader__.load({
         try {
           settingsPromise = authorizationRequired ? postAuthorizedSettings(sessionId, payload) : postAction(sessionId, "settings", payload);
         } catch (authorizationError) { settingsPromise = Promise.reject(authorizationError); }
-        Promise.resolve(settingsPromise).then(function (result) { if (result && result.state) applyState(result.state); trustedAutopilotSaved.current = !!values.autopilotEnabled; setSaved(true); }).catch(function (err) {
+        Promise.resolve(settingsPromise).then(function (result) { if (!current()) return; if (result && result.state) applyState(result.state); trustedAutopilotSaved.current = !!values.autopilotEnabled; setSaved(true); }).catch(function (err) {
+          if (!current()) return;
           setError(err && err.code === "AGENT_TEAMS_CONFLICT" ? t("settingsCloseTeamsFirst") : errorText(err));
-          return fetchState(sessionId).then(applyState).catch(function () {});
-        }).finally(function () { setSaving(false); });
+          return fetchState(sessionId).then(function (state) { if (current()) applyState(state); }).catch(function () {});
+        }).finally(function () { if (current()) { saveRef.current = null; setSaving(false); } });
       }
       function numberField(id, label, key, maximum) { return h("label", { htmlFor: id }, h("span", { className: "dat-label" }, label), h("input", { id: id, className: "dat-field", type: "number", min: 1, max: maximum, step: 1, value: values[key], disabled: saving, onChange: function (event) { var next = {}; next[key] = event.target.value; setValues(Object.assign({}, values, next)); setSaved(false); } })); }
       return h("section", { style: { maxWidth: 680, color: "var(--dsw-alias-label-primary)" }, "aria-labelledby": "dat-settings-title" },
         h("h2", { id: "dat-settings-title" }, t("settingsTitle")), h("p", { className: "dat-meta" }, t("settingsDescription")),
-        loading ? h("div", { role: "status" }, t("loading")) : h("form", { onSubmit: submit, className: "dat-panel", "data-agent-teams-settings-form": "1" },
+        loading ? h("div", { role: "status" }, t("loading")) : !loadedRef.current ? h("div", { className: "dat-panel" }, h("div", { className: "dat-error", role: "alert" }, error), h(Button, { onClick: function () { setReloadKey(function (value) { return value + 1; }); } }, t("retry"))) : h("form", { onSubmit: submit, className: "dat-panel", "data-agent-teams-settings-form": "1" },
           h("label", { className: "dat-row", style: { justifyContent: "space-between" } }, h("span", null, t("settingsEnabled")), h("input", { type: "checkbox", role: "switch", checked: values.enabled, disabled: saving, onChange: function (event) { setValues(Object.assign({}, values, { enabled: event.target.checked })); setSaved(false); } })),
           numberField("dat-max-members", t("settingsMaxMembers"), "maxMembers", 8), numberField("dat-max-turns", t("settingsMaxActiveTurns"), "maxActiveTurns", 8),
           h("label", { className: "dat-row", style: { justifyContent: "space-between", marginTop: 14 } }, h("span", null, t("settingsAutopilotEnabled")), h("input", { type: "checkbox", role: "switch", checked: values.autopilotEnabled, disabled: saving, onChange: function (event) { setValues(Object.assign({}, values, { autopilotEnabled: event.target.checked })); setSaved(false); } })),

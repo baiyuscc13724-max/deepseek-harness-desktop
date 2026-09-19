@@ -1,12 +1,16 @@
 const dragSessions = new WeakMap()
 
 function normalizedPoint(point = {}) {
-  return { x: Math.round(Number(point.x) || 0), y: Math.round(Number(point.y) || 0) }
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null
+  const x = Math.round(point.x)
+  const y = Math.round(point.y)
+  return Number.isSafeInteger(x) && Number.isSafeInteger(y) ? { x, y } : null
 }
 
 function beginWindowDrag(window, point = {}, platform = process.platform) {
   if (platform === 'linux' || !window || window.isDestroyed()) return false
   const cursor = normalizedPoint(point)
+  if (!cursor) { dragSessions.delete(window); return false }
   const before = window.getBounds()
   if (window.isMaximized?.()) {
     const ratioX = Math.max(0, Math.min(1, (cursor.x - before.x) / Math.max(1, before.width)))
@@ -37,6 +41,7 @@ function moveWindowDrag(window, point = {}) {
   const session = window && dragSessions.get(window)
   if (!session || window.isDestroyed()) return false
   const cursor = normalizedPoint(point)
+  if (!cursor) { dragSessions.delete(window); return false }
   window.setPosition(session.origin.x + cursor.x - session.cursor.x, session.origin.y + cursor.y - session.cursor.y, false)
   return true
 }

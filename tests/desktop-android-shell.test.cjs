@@ -24,7 +24,7 @@ test('Android device view stays inside the native right workspace without a clos
   assert.match(workspace, /switchDevice/u)
   assert.match(workspace, /setAndroidPreview\(switched\.streamUrl, 'stream'\)/u)
   assert.match(workspace, /previewTickDelay\(activeSource, androidLegacyActive\(\)\)/u)
-  assert.match(workspace, /captureAndroid\([\s\S]{0,220}preview: true/u)
+  // Preview payload and stale-response safety are executed against the actual functions below.
   assert.doesNotMatch(workspace, /else if \(androidSerial\) await captureAndroid/u)
   assert.match(workspace, /right-workspace-android-frame/u)
 })
@@ -76,21 +76,91 @@ test('preview safe-GC rollback is one exact default-on flag and never targets ev
   assert.match(main, /HARNESS_DESKTOP_DEVICE_LEGACY_FILE_POLL/u)
 })
 
-test('10 minute Android preview plan keeps one persistent child and zero poll/capture I/O', async t => {
+function productionSection(text, start, end) {
+  const begin = text.indexOf(start)
+  const finish = text.indexOf(end, begin + start.length)
+  assert.ok(begin >= 0 && finish > begin, `missing actual production section ${start}`)
+  return text.slice(begin, finish)
+}
+
+async function androidPreviewFixture() {
+  const vm = require('node:vm')
+  const text = await source('renderer/device-workspace.js')
+  const calls = [], frames = [], timers = []
+  const context = vm.createContext({
+    androidGeneration: 1, androidSerial: 'fixture-A', androidRequestSerial: 0,
+    androidBusy: false, active: true, disposed: false, activeSource: 'android',
+    androidTransport: 'stream', androidStreamUrl: 'fixture-stream', legacy: false, timer: 0,
+    androidAction: async (action, payload) => { calls.push({ action, payload: { ...payload } }); return { data: 'fixture-frame' } },
+    setAndroidPreview: (...args) => frames.push(args), render() {}, showError() {},
+    androidLegacyActive: () => context.legacy, previewTickDelay,
+    refreshAndroid: async options => calls.push({ action: 'refreshAndroid', options: { ...options } }),
+    refreshDesktop: async options => calls.push({ action: 'refreshDesktop', options: { ...options } }),
+    window: { clearTimeout() {}, setTimeout(_fn, delay) { timers.push(delay); return timers.length } }
+  })
+  const current = text.match(/^\s*const currentAndroid =[^\n]+/m)
+  assert.ok(current)
+  vm.runInContext(current[0] + '\n' +
+    productionSection(text, '    async function invokeAndroid(', '    async function refreshDesktop(') +
+    productionSection(text, '    async function captureAndroid(', '    async function connectAndroid(') +
+    productionSection(text, '    function scheduleTick(', '    function scheduleAndroidReconnect(') +
+    productionSection(text, '    async function tick()', '    async function setSource(') +
+    ';globalThis.api={captureAndroid,tick}', context)
+  return { context, calls, frames, timers }
+}
+
+test('actual Android preview capture marks preview purpose and rejects missing, failed and stale replies', async () => {
+  const f = await androidPreviewFixture()
+  assert.equal(await f.context.api.captureAndroid(), true)
+  assert.deepEqual(f.calls, [{ action: 'capture', payload: { device: 'fixture-A', preview: true } }])
+  assert.deepEqual(f.frames, [['fixture-frame', 'legacy']])
+  for (const condition of ['no-device', 'inactive', 'disposed', 'other-source']) {
+    const fresh = await androidPreviewFixture()
+    if (condition === 'no-device') fresh.context.androidSerial = ''
+    if (condition === 'inactive') fresh.context.active = false
+    if (condition === 'disposed') fresh.context.disposed = true
+    if (condition === 'other-source') fresh.context.activeSource = 'computer'
+    assert.equal(await fresh.context.api.captureAndroid(), false)
+    assert.equal(fresh.calls.length, 0)
+  }
+  for (const change of ['generation', 'device', 'stop', 'empty', 'failure']) {
+    const fresh = await androidPreviewFixture()
+    let finish, fail
+    fresh.context.androidAction = () => new Promise((resolve, reject) => { finish = resolve; fail = reject })
+    const pending = fresh.context.api.captureAndroid()
+    if (change === 'generation') fresh.context.androidGeneration++
+    if (change === 'device') fresh.context.androidSerial = 'fixture-B'
+    if (change === 'stop') fresh.context.active = false
+    if (change === 'failure') fail(new Error('synthetic capture failure'))
+    else finish(change === 'empty' ? {} : { data: 'late-A-frame' })
+    assert.equal(await pending, false, change)
+    assert.equal(fresh.frames.length, 0, change)
+  }
+})
+
+test('actual preview tick leaves persistent Android stream unpolled and gates fallback by state', async t => {
   assert.equal(previewTickDelay('computer', false), DESKTOP_POLL_MS)
   assert.equal(previewTickDelay('android', false), null)
   assert.equal(previewTickDelay('android', true), 1_000)
   assert.equal(ANDROID_STREAM_FAILURE_LIMIT, 3)
-
-  const counters = { devices: 1, switches: 1, captures: 0, writes: 0, reads: 0, deletes: 0, children: 1 }
-  let latestFrame = null
-  const samples = []
-  for (let frame = 1; frame <= 1_200; frame += 1) {
-    latestFrame = { frame, width: 1080, height: 2400, bytes: 32 * 1024 }
-    if (frame % 20 === 0) samples.push({ retainedFrames: latestFrame ? 1 : 0, retainedBytes: latestFrame.bytes })
-  }
-  assert.equal(samples.length, 60)
-  assert.ok(samples.every(sample => sample.retainedFrames === 1 && sample.retainedBytes === 32 * 1024))
-  assert.deepEqual(counters, { devices: 1, switches: 1, captures: 0, writes: 0, reads: 0, deletes: 0, children: 1 })
-  t.diagnostic(`virtualDurationMs=600000 frames=1200 samples=${samples.length} devices=1 switchDevice=1 captures=0 childProcesses=1 writes=0 reads=0 deletes=0`)
+  const f = await androidPreviewFixture()
+  for (let tick = 0; tick < 1_200; tick++) await f.context.api.tick()
+  assert.equal(f.calls.length, 0)
+  assert.equal(f.timers.length, 0)
+  f.context.legacy = true
+  await f.context.api.tick()
+  assert.deepEqual(f.calls.pop(), { action: 'refreshAndroid', options: { quiet: true } })
+  assert.equal(f.timers.pop(), 1_000)
+  f.context.legacy = false
+  f.context.androidStreamUrl = ''
+  await f.context.api.tick()
+  assert.deepEqual(f.calls.pop(), { action: 'refreshAndroid', options: { forceStream: true, quiet: true } })
+  f.context.activeSource = 'computer'
+  await f.context.api.tick()
+  assert.deepEqual(f.calls.pop(), { action: 'refreshDesktop', options: { quiet: true } })
+  assert.equal(f.timers.pop(), DESKTOP_POLL_MS)
+  f.context.active = false
+  await f.context.api.tick()
+  assert.equal(f.calls.length, 0)
+  t.diagnostic('1200 direct production tick calls; not elapsed-time, native child-count, frame-retention or memory evidence')
 })

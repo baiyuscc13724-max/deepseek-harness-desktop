@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "kind": "independent-reconnect-incremental-sidecar",
+  "basis": {
+    "master": "docs/deep-audit/coverage-master.json",
+    "masterSha256": "8d5cad11503953cb9044a96902ab92d718cb21ae17107313549c5e45fb527794",
+    "priorSidecar": "docs/deep-audit/coverage-round1.json",
+    "priorSidecarSha256": "c047ba5428ab4ba7c6402f5e747d5b2859bc0241ab332d29a64c5dd73ff78b87",
+    "priorFreeze": ".artifacts/deep-audit-round1-acceptance/final-freeze.json",
+    "priorFreezeSha256": "f4fdd2f59cdefd03ffc9ad6016a7e6d06e2d4143ea8641d1e655e2bd95caa210",
+    "historicalCountsUnchanged": {"domainRows": 598, "userClusters": 115, "limitedAccepted": 104, "tests": 2929, "pass": 2889, "fail": 7, "skip": 33},
+    "noHistoricalEvidenceOverwritten": true
+  },
+  "currentInputs": {
+    "mainActivity": {"path": "mobile/android/app/src/main/java/io/harnessdesktop/mobile/MainActivity.java", "sha256": "a544e739c9b5fdf9d27cf87aafa27f8f0f507fe8b1218f541604a80338fcd05e"},
+    "controller": {"path": "mobile/android/app/src/main/java/io/harnessdesktop/mobile/RemoteReconnectController.java", "sha256": "ed496cf0b5fdb70fd4e82e816ef9b550f561761606507c9a6a61f313b0a6d58b"},
+    "independentTestSha256": "c0238c57048dd34ae437a2ad3402ec80df927b5ea767bcde4473769813207ea7",
+    "sourceBindingType": "frozen working-tree bytes; not a release or immutable commit claim"
+  },
+  "evidence": {
+    "review": ".artifacts/deep-audit-round1-reconnect-acceptance/independent-v1",
+    "controllerChain": ".artifacts/deep-audit-round1-reconnect-acceptance/transport-checks-c49ad7347b605548",
+    "compile": ".artifacts/deep-audit-round1-reconnect-acceptance/compile-independent-v1",
+    "legacyJUnit": ".artifacts/deep-audit-round1-reconnect-acceptance/legacy-1789278533131-9b9858",
+    "legacy61": ".artifacts/deep-audit-round1-reconnect-acceptance/legacy61-independent-v1/run-2026-09-13T05-48-56-361Z-606de8",
+    "independentNodeTests": {"total": 5, "passed": 5, "failed": 0, "skipped": 0},
+    "nestedProducerNodeTests": {"total": 3, "passed": 3, "failed": 0, "skipped": 0},
+    "controllerCheckEntries": {"virtualLogic": 21, "liveAndCleanup": 6, "total": 27},
+    "legacyJUnitTests": 15,
+    "productionJavaSources": 27,
+    "checkedJavaApiReferences": 156,
+    "dex": {"minApi": 26, "bytes": 335236, "sha256": "9e8432e239e567ac6c4426394e61005fb955d5af6c7e8b44b1898996363ce049"},
+    "countsNotSummedAcrossLayers": true,
+    "automaticControllerRecoveryExecuted": true,
+    "actualAndroidHandlerOrActivityExecuted": false,
+    "realDeviceOrWanExecuted": false
+  },
+  "rows": [
+    {
+      "id": "USER-MOBILE-EXTERNAL-RECOVERY",
+      "relatedIds": ["DOMAIN-mobile-ws-android-legacy", "DOMAIN-mobile-network-debounce", "DOMAIN-mobile-wan-end-to-end"],
+      "status": "limited-controller-loopback-recovery-accepted",
+      "masterStatusUnchanged": true,
+      "evidenceLevel": "same production controller bytecode; real JVM timer and local encrypted transport; Activity source plus full offline compile only",
+      "scenarios": {
+        "normal": "有限通过：实际controller仅显式初始化一次；初始hello/ready/ACK成立",
+        "error-recovery": "有限通过：真socket断线→生产3000ms timer→第二hello/ready→新ID ACK；不是Android Handler或WAN恢复验收",
+        "concurrency-switch": "有限通过：两channel虚拟队列、same/different profile、旧UI/ready/failure/脱队timer/Stop；单owner串行契约，不是任意跨线程强制取消",
+        "isolation": "有限通过：7个Activity失效源接线、8通知执行时token与canApplyRemote守卫；真实生命周期未执行",
+        "a11y": "未验：实际Android用户操作/读屏/生命周期界面"
+      },
+      "measurementsMs": {"failureToScheduled": 0.159912109375, "scheduledToTimer": 3000.15185546875, "timerToReady": 4.126220703125, "readyToNewAck": 17.1962890625, "failureToNewAck": 3021.63427734375},
+      "unverified": ["Android Handler/Looper and Activity lifecycle", "Doze/background", "real network callbacks", "WAN/NAT/TLS", "Native P2P/EasyTier runtime", "official composer RPC/LLM"]
+    },
+    {
+      "id": "DOMAIN-mobile-ws-android-legacy",
+      "relatedIds": ["ws-android-legacy"],
+      "status": "limited-current-controller-transport-accepted",
+      "masterStatusUnchanged": true,
+      "evidenceLevel": "real production WssRelayClient/SOCKS/AES-GCM/Node adapter/service plus synthetic Scheduler identity and core ports",
+      "scenarios": {
+        "normal": "有限通过：生产controller class及5个nested class与全Java编译产物逐字节一致",
+        "error-recovery": "有限通过：未缩短的remote线性3000ms首档真实定时器；不是OkHttp自动重试或fixture手工第二start",
+        "concurrency-switch": "有限通过：27条检查；160旧socket callback不污染恢复后通道，Stop后timer/streams清理",
+        "isolation": "有限通过：46direct+92loaded源绑定，原注册loopback守卫未弱化，所有资源清理0",
+        "a11y": "传输层不适用；真实手机Stop按钮未验"
+      },
+      "counts": {"manualInitialStarts": 1, "mobileHellos": 2, "controllerConnects": 2, "scheduledRetries": 1, "commands": 3, "acks": 2, "expectedLoss": 1},
+      "unverified": ["cross-thread interruption of an already admitted action", "Android UI threading behavior", "physical reconnection", "sustained WAN reliability"]
+    },
+    {
+      "id": "DOMAIN-mobile-network-debounce",
+      "relatedIds": ["network-debounce"],
+      "status": "limited-logic-and-source-wiring-accepted",
+      "masterStatusUnchanged": true,
+      "evidenceLevel": "unchanged production policy, selected original JUnit, new production controller virtual scheduler, Activity source and offline compilation",
+      "scenarios": {
+        "normal": "有限通过：旧policy逻辑，remote/native线性delay与cap逐项保持",
+        "error-recovery": "有限通过：ready reset、duplicate failure singleflight、reentrant Stop；native onDirectFailure源接线仍只post降级不retry",
+        "concurrency-switch": "有限通过：同profile新activation、不同profile两channel失效、100合成activation/Stop周期",
+        "isolation": "有限通过：配对赋值前/activateProfile/loss/recovery/stable switch/disconnect/destroy七失效点；五个认证/离线/路由方法原字节一致",
+        "a11y": "纯策略不适用；Android网络状态提示未运行"
+      },
+      "unverified": ["actual ConnectivityManager callbacks", "Android elapsed timer behavior", "OS network binding", "real profile switch UI execution"]
+    },
+    {
+      "id": "DOMAIN-mobile-rpc-duplicate",
+      "relatedIds": ["rpc-duplicate"],
+      "status": "limited-no-replay-evidence-accepted",
+      "masterStatusUnchanged": true,
+      "evidenceLevel": "real transport with three literal synthetic core command IDs",
+      "scenarios": {
+        "normal": "有限通过：normal-0和新recovery-0的ID/body SHA ACK各成立",
+        "error-recovery": "有限通过：late-0核心已执行且有迟到ACK但客户端无完整响应；恢复不重放旧命令",
+        "concurrency-switch": "有限通过：normal-0/late-0/recovery-0各执行1，重复0",
+        "isolation": "有限通过：controller无requestId/业务队列，不承接请求重发职责；新请求在第二ready后提交",
+        "a11y": "纯RPC不适用；真实composer提交界面未验"
+      },
+      "coreExecutions": {"normal-0": 1, "late-0": 1, "recovery-0": 1},
+      "unverified": ["general exactly-once", "real business rollback", "safe retry of a lost-ACK business request", "official RPC/model"]
+    },
+    {
+      "id": "DOMAIN-mobile-cache-index",
+      "relatedIds": ["cache-index"],
+      "status": "limited-current-input-regression-accepted",
+      "masterStatusUnchanged": true,
+      "evidenceLevel": "unchanged selected MobileAssetCache JUnit plus original bounded HOL/paging real chain rerun",
+      "scenarios": {
+        "normal": "有限通过：15个选定旧JUnit总体0fail；旧61命令链60ACK+1预期loss，3个完整快照",
+        "error-recovery": "有限通过：分页快照中断旧cache保留，最后manifestDownloads/Starts为0",
+        "concurrency-switch": "有限通过：1400session/506112B相同hash，upload150/download107 DATA包无丢失/重复/重排；本地bulk/paged ACK对照",
+        "isolation": "有限通过：同27Java full compile源绑定未变HOL/cache依赖，旧报告与cc冻结未改",
+        "a11y": "未验：实际离线WebView/UI体验"
+      },
+      "localRegression": {"commands": 61, "expectedDisconnectLoss": 1, "unplannedDrops": 0, "duplicateCoreExecution": 0, "snapshotBytes": 506112, "cachedSessions": 1400, "bulkAckP95Ms": 7795.957, "pagedAckP95Ms": 337.3, "automaticRecoveryEvidence": false},
+      "unverified": ["legacy61 uses manual reconnection and is not automatic-owner proof", "real storage failure/Android lifecycle", "WAN performance SLA", "entire historical test suite"]
+    },
+    {
+      "id": "USER-MOBILE-REALTIME-LATENCY",
+      "relatedIds": ["DOMAIN-mobile-wan-end-to-end"],
+      "status": "unverified-wide-area-primary-goal",
+      "masterStatusUnchanged": true,
+      "evidenceLevel": "bounded current local loopback timing only",
+      "scenarios": {
+        "normal": "本地链有时序证据，但不构成真实手机→Host→业务UI延迟验收",
+        "error-recovery": "仅一次本地controller自动恢复，failure→newACK3021.634277ms；无P95/P99",
+        "concurrency-switch": "旧61本地FIFO抖动/限速是合成端口，不是4G/5G/外部WiFi或OS网络仿真",
+        "isolation": "本地隔离已验证；真实配对/设备/公网/TLS未执行",
+        "a11y": "未验：手机渲染、输入和读屏"
+      },
+      "unverified": ["WAN/NAT/TLS", "real phone UI and Host session queue", "P95/P99/SLA", "real cellular/network switching"]
+    }
+  ],
+  "newConfirmedProductDefects": [],
+  "historicalBehavior": {"sourceSha256": "c465f787e0c812de1ec379b88d2b0d4c840807cc39980ce3f284204fae667ffb", "callbackSha256": "085dd7ccbe28bae5dee16c165a19e4c393957c7c264f7cc0bcbffc7a91b4b291", "exactExtractedCallbackExecuted": true, "syntheticOuterPorts": true, "actualOldActivityExecuted": false, "notARealDeviceDefectReproduction": true},
+  "limits": ["Partial current-source acceptance only; all original master and prior sidecar statuses unchanged", "Scheduler and lifecycle/UI must serialize on one owner thread; cannot force-stop already admitted actions on arbitrary threads", "27 Java offline compile has R/BuildConfig placeholders; API156 is selected Java constant-pool symbols; D8 is not APK/resources or Android runtime", "No real account/device/clipboard/GUI60131/public network/download/install/release", "Safety is controlled API and registered-port evidence, not whole-OS syscall/packet capture"]
+}

@@ -718,7 +718,7 @@ test('settings restore authoritative state after an active-team disable conflict
   const source = await clientSource()
   assert.match(source, /error\.code = data\.code/u)
   assert.match(source, /err && err\.code === "AGENT_TEAMS_CONFLICT" \? t\("settingsCloseTeamsFirst"\)/u)
-  assert.match(source, /return fetchState\(sessionId\)\.then\(applyState\)/u)
+  assert.match(source, /return fetchState\(sessionId\)\.then\(function \(state\) \{ if \(current\(\)\) applyState\(state\); \}\)/u)
   assert.match(source, /请先在负责人会话中关闭所有活动团队/u)
 })
 
@@ -783,13 +783,15 @@ test('failed-member recovery is automatic when safe, root-only, accessible, resp
   assert.doesNotMatch(source, /memberStateKind\(member\) === "(?:running|idle|ready|retired|completed)"\s*&& props\.canRecover/u)
 })
 
-test('task board keeps cancellation in history and exposes only four truthful active columns', async () => {
+test('task board keeps all terminal work in closed history and three truthful work columns', async () => {
   const source = await clientSource()
+  const board = source.slice(source.indexOf('    function TaskBoardWorkspace('), source.indexOf('    function EmptyTaskBoardWorkspace('))
   assert.match(source, /boardCancelled: "已取消"/u)
   assert.match(source, /if \(status === "cancelled"\) return "cancelled"/u)
-  assert.match(source, /cancelledTasks\.length \? h\("details", \{ className: "dat-board-history" \}/u)
-  assert.match(source, /var columns = \[\s*\{ id: "ready"[\s\S]*?\{ id: "running"[\s\S]*?\{ id: "attention"[\s\S]*?\{ id: "done"[\s\S]*?\];/u)
-  assert.match(source, /repeat\(4,minmax\(0,1fr\)\)/u)
+  assert.match(board, /doneTasks\.length \+ cancelledTasks\.length \? h\("details", \{ className: "dat-board-history", ref: historyRef \}/u)
+  assert.match(board, /var columns = \[\s*\{ id: "ready"[\s\S]*?\{ id: "running"[\s\S]*?\{ id: "attention"[\s\S]*?\];/u)
+  assert.doesNotMatch(board, /\{ id: "done", label:/u)
+  assert.match(board, /doneTasks\.slice\(0, 200\)\.concat\(cancelledTasks\.slice/u)
 })
 
 test('canvas exposes canonical member and task state kinds for complete status presentation', async () => {
@@ -899,7 +901,10 @@ test('completed task cards and detail surfaces show the member result to the use
   }
   assert.match(source, /visibleTaskResult\(runtimeDetail\) \|\| visibleTaskResult\(task\)/u)
   assert.match(source, /taskResult \? h\("section", \{ className: "dat-task-focus-surface dat-task-result"/u)
-  assert.match(source, /visibleTaskResult\(task\) \? h\("div", \{ className: "dat-board-card-result"/u)
+  const boardCard = source.slice(source.indexOf('    function BoardTaskCard('), source.indexOf('    function TaskBoardWorkspace('))
+  assert.doesNotMatch(boardCard, /visibleTaskResult\(task\) \? h\("div", \{ className: "dat-board-card-result"/u, 'full result belongs to task detail, not every summary card')
+  assert.match(source, /function LeadSummary\(props\)/u)
+  assert.match(source, /h\(DeliveryEvidence, \{ t: t, task: task \}\)/u)
   const helperStart = source.indexOf('    function visibleTaskResult(task)')
   const helperEnd = source.indexOf('    function TaskCard(props)', helperStart)
   const helpers = Function(`${source.slice(helperStart, helperEnd)}\nreturn { visibleTaskResult, taskResultPreviewText }`)()
@@ -1342,4 +1347,13 @@ test('fixed inspectors contain keyboard focus while sticky desktop sidebars stay
   trapInspectorTab(desktopTab, element)
   assert.equal(desktopTab.prevented, false)
   assert.equal(active, outside)
+})
+
+test('team workspace exits loading when the session context or initial live snapshot is unavailable', async () => {
+  const source = await clientSource()
+  assert.match(source, /if \(!sessionId\) \{ setState\(null\); setError\("AGENT_TEAMS_SESSION_CONTEXT_UNAVAILABLE"\); setConnection\("stale"\); return; \}/u)
+  assert.match(source, /function requestWithTimeout\(url, options, timeoutMs\)/u)
+  assert.match(source, /requestWithTimeout\(stateUrl\(sessionId, selectedTeamId\),[\s\S]*?10000\)/u)
+  assert.match(source, /if \(!silent \|\| !hasSnapshot\) setError\(errorText\(err\)\)/u)
+  assert.match(source, /load\(false, expectedStreamEpoch\)\.catch\(function \(\) \{\}\);/u)
 })

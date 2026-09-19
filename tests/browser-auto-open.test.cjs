@@ -19,13 +19,15 @@ const {
 async function loadClientPlugin(reactOverrides = {}) {
   const clientSource = await source('plugins/dsh-session-experience/lib/client.js')
   let registration
-  const browser = { __ModuleLoader__: { load(value) { registration = value } } }
+  const events = new EventTarget()
+  const browser = { __ModuleLoader__: { load(value) { registration = value } }, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), dispatchEvent: events.dispatchEvent.bind(events) }
   new Function('window', clientSource)(browser)
   const React = {
     Fragment: Symbol('fragment'),
     createElement(type, props, ...children) { return { type, props: props || {}, children } },
     useState(initial) { return [initial, () => {}] },
     useEffect() {},
+    useLayoutEffect() {},
     useRef(initial) { return { current: initial } },
     ...reactOverrides
   }
@@ -49,7 +51,7 @@ function findNode(node, predicate) {
 
 async function mountIntentBridge({ draft, imageIds = [] }) {
   const effects = []
-  const { browser, plugin } = await loadClientPlugin({ useEffect(effect) { effects.push(effect) } })
+  const { browser, plugin } = await loadClientPlugin({ useEffect(effect) { effects.push(effect) }, useLayoutEffect(effect) { effects.push(effect) } })
   const published = []
   const draftWrites = []
   const listeners = {}

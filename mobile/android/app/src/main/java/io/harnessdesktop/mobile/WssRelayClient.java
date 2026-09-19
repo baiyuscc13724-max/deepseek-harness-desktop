@@ -39,7 +39,9 @@ final class WssRelayClient {
     private static final long MAX_WEBSOCKET_QUEUE = 4L * 1024 * 1024;
     private static final int MAX_SOCKS_WORKERS = 8;
     private static final int MAX_PENDING_SOCKS = 16;
-    private final OkHttpClient httpClient;
+    interface SocksServerFactory { ServerSocket open() throws IOException; }
+    private final WebSocket.Factory socketFactory;
+    private final SocksServerFactory socksServerFactory;
     private final ExecutorService acceptor;
     private final ExecutorService workers;
     private final Map<Long, Socket> streams = new ConcurrentHashMap<>();
@@ -49,17 +51,29 @@ final class WssRelayClient {
     private volatile RelayTunnelCodec codec;
     private volatile Listener listener;
     private volatile boolean stopping;
+    private volatile long generation;
+    private final java.util.Set<Socket> openingSockets = ConcurrentHashMap.newKeySet();
+
+    private boolean isCurrent(long activeGeneration) {
+        return !stopping && generation == activeGeneration;
+    }
 
     WssRelayClient() {
-        acceptor = Executors.newSingleThreadExecutor(daemonThreadFactory("harness-wss-relay-accept"));
-        workers = newSocksWorkerPool();
-        httpClient = new OkHttpClient.Builder()
+        this(new OkHttpClient.Builder()
             .retryOnConnectionFailure(true)
             .connectTimeout(15, TimeUnit.SECONDS)
             // OkHttp closes the socket when a pong is not received in the next
             // interval, turning silent half-open mobile links into a retry.
             .pingInterval(20, TimeUnit.SECONDS)
-            .build();
+            .build(), () -> new ServerSocket(0, 16, InetAddress.getByName("127.0.0.1")));
+    }
+
+    // Package-local seams run production callbacks against unconnected test sockets.
+    WssRelayClient(WebSocket.Factory socketFactory, SocksServerFactory socksServerFactory) {
+        this.socketFactory = socketFactory;
+        this.socksServerFactory = socksServerFactory;
+        acceptor = Executors.newSingleThreadExecutor(daemonThreadFactory("harness-wss-relay-accept"));
+        workers = newSocksWorkerPool();
     }
 
     static ThreadPoolExecutor newSocksWorkerPool() {
@@ -85,38 +99,46 @@ final class WssRelayClient {
     synchronized void start(PairingProfile.RelayConfig config, Listener listener) {
         stop();
         stopping = false;
+        final long activeGeneration = generation;
         this.listener = listener;
         try { codec = new RelayTunnelCodec(config.tunnelKey); }
         catch (RuntimeException error) { listener.onFailure(error.getMessage()); return; }
         Request request = new Request.Builder().url(config.relayUrl).build();
-        webSocket = httpClient.newWebSocket(request, new WebSocketListener() {
+        webSocket = socketFactory.newWebSocket(request, new WebSocketListener() {
             @Override public void onOpen(WebSocket socket, Response response) {
-                JSONObject hello = new JSONObject();
-                try {
-                    hello.put("type", "hello"); hello.put("version", 1); hello.put("role", "mobile"); hello.put("roomId", config.roomId);
-                    socket.send(hello.toString());
-                } catch (Exception error) { fail(error); }
+                synchronized (WssRelayClient.this) {
+                    if (!isCurrent(activeGeneration)) return;
+                    JSONObject hello = new JSONObject();
+                    try {
+                        hello.put("type", "hello"); hello.put("version", 1); hello.put("role", "mobile"); hello.put("roomId", config.roomId);
+                        if (!socket.send(hello.toString())) throw new IOException("WSS relay rejected hello");
+                    } catch (Exception error) { fail(activeGeneration, error); }
+                }
             }
             @Override public void onMessage(WebSocket socket, String text) {
-                try {
-                    JSONObject message = new JSONObject(text);
-                    if ("welcome".equals(message.optString("type")) && "mobile".equals(message.optString("role"))) {
-                        if (!message.optBoolean("desktopOnline", false)) fail(new IOException("Desktop WSS relay is offline"));
-                        else openSocksServer();
-                    } else if ("desktop-offline".equals(message.optString("type"))) fail(new IOException("Desktop WSS relay is offline"));
-                } catch (Exception error) { fail(error); }
+                synchronized (WssRelayClient.this) {
+                    if (!isCurrent(activeGeneration)) return;
+                    try {
+                        JSONObject message = new JSONObject(text);
+                        if ("welcome".equals(message.optString("type")) && "mobile".equals(message.optString("role"))) {
+                            if (!message.optBoolean("desktopOnline", false)) fail(activeGeneration, new IOException("Desktop WSS relay is offline"));
+                            else openSocksServer(activeGeneration);
+                        } else if ("desktop-offline".equals(message.optString("type"))) fail(activeGeneration, new IOException("Desktop WSS relay is offline"));
+                    } catch (Exception error) { fail(activeGeneration, error); }
+                }
             }
-            @Override public void onMessage(WebSocket socket, ByteString bytes) { handleEnvelope(bytes.toByteArray()); }
-            @Override public void onFailure(WebSocket socket, Throwable error, Response response) { fail(error); }
-            @Override public void onClosed(WebSocket socket, int code, String reason) { if (!stopping) fail(new IOException("WSS relay closed: " + reason)); }
+            @Override public void onMessage(WebSocket socket, ByteString bytes) { handleEnvelope(activeGeneration, bytes.toByteArray()); }
+            @Override public void onFailure(WebSocket socket, Throwable error, Response response) { fail(activeGeneration, error); }
+            @Override public void onClosed(WebSocket socket, int code, String reason) { fail(activeGeneration, new IOException("WSS relay closed: " + reason)); }
         });
     }
 
-    private synchronized void openSocksServer() throws IOException {
-        if (socksServer != null) return;
-        ServerSocket server = new ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"));
+    private synchronized void openSocksServer(long activeGeneration) throws IOException {
+        if (!isCurrent(activeGeneration) || socksServer != null) return;
+        ServerSocket server = socksServerFactory.open();
         socksServer = server;
-        acceptor.execute(() -> acceptLoop(server, workers, this::handleSocks, this::fail));
+        acceptor.execute(() -> acceptLoop(server, workers,
+            socket -> handleSocks(activeGeneration, socket), error -> fail(activeGeneration, error)));
         Listener active = listener;
         if (active != null) active.onReady(server.getLocalPort());
     }
@@ -151,8 +173,12 @@ final class WssRelayClient {
         if (socket != null) try { socket.close(); } catch (IOException ignored) {}
     }
 
-    private void handleSocks(Socket socket) {
+    private void handleSocks(long activeGeneration, Socket socket) {
         long streamId = -1;
+        synchronized (this) {
+            if (!isCurrent(activeGeneration)) { closeQuietly(socket); return; }
+            openingSockets.add(socket);
+        }
         try {
             socket.setSoTimeout(10_000);
             InputStream input = socket.getInputStream();
@@ -166,22 +192,27 @@ final class WssRelayClient {
             int addressLength = request[3] == 1 ? 4 : request[3] == 4 ? 16 : request[3] == 3 ? readExactly(input, 1)[0] & 0xff : -1;
             if (addressLength < 0) throw new IOException("Invalid SOCKS address");
             readExactly(input, addressLength + 2);
-            streamId = nextStreamId();
-            streams.put(streamId, socket);
-            send(RelayTunnelCodec.OPEN, streamId, new byte[0]);
+            synchronized (this) {
+                if (!isCurrent(activeGeneration)) throw new IOException("Stale WSS SOCKS generation");
+                streamId = nextStreamId();
+                streams.put(streamId, socket);
+                openingSockets.remove(socket);
+            }
+            send(activeGeneration, RelayTunnelCodec.OPEN, streamId, new byte[0]);
             output.write(new byte[]{5, 0, 0, 1, 127, 0, 0, 1, 0, 0}); output.flush();
             socket.setSoTimeout(0);
             byte[] buffer = new byte[RelayTunnelCodec.MAX_PAYLOAD];
             int count;
             while ((count = input.read(buffer)) >= 0) {
-                if (count > 0) send(RelayTunnelCodec.DATA, streamId, Arrays.copyOf(buffer, count));
+                if (count > 0) send(activeGeneration, RelayTunnelCodec.DATA, streamId, Arrays.copyOf(buffer, count));
             }
-            send(RelayTunnelCodec.FIN, streamId, new byte[0]);
+            send(activeGeneration, RelayTunnelCodec.FIN, streamId, new byte[0]);
         } catch (Exception error) {
-            if (streamId >= 0) try { send(RelayTunnelCodec.RESET, streamId, new byte[0]); } catch (Exception ignored) {}
+            if (streamId >= 0) try { send(activeGeneration, RelayTunnelCodec.RESET, streamId, new byte[0]); } catch (Exception ignored) {}
         } finally {
-            if (streamId >= 0) streams.remove(streamId);
-            try { socket.close(); } catch (IOException ignored) {}
+            if (streamId >= 0) streams.remove(streamId, socket);
+            openingSockets.remove(socket);
+            closeQuietly(socket);
         }
     }
 
@@ -192,37 +223,57 @@ final class WssRelayClient {
         }
     }
 
-    private void handleEnvelope(byte[] envelope) {
-        if (envelope.length <= 8) { fail(new IOException("Truncated WSS relay envelope")); return; }
-        for (int index = 0; index < 8; index++) if (envelope[index] != 0) { fail(new IOException("Invalid WSS relay sender")); return; }
+    private void handleEnvelope(long activeGeneration, byte[] envelope) {
+        final RelayTunnelCodec activeCodec;
+        synchronized (this) {
+            if (!isCurrent(activeGeneration)) return;
+            activeCodec = codec;
+        }
+        if (envelope.length <= 8) { fail(activeGeneration, new IOException("Truncated WSS relay envelope")); return; }
+        for (int index = 0; index < 8; index++) if (envelope[index] != 0) { fail(activeGeneration, new IOException("Invalid WSS relay sender")); return; }
         try {
-            RelayTunnelCodec.Frame frame = codec.decode(Arrays.copyOfRange(envelope, 8, envelope.length));
-            Socket socket = streams.get(frame.streamId);
-            if (socket == null) { if (frame.type != RelayTunnelCodec.RESET) send(RelayTunnelCodec.RESET, frame.streamId, new byte[0]); return; }
+            RelayTunnelCodec.Frame frame = activeCodec.decode(Arrays.copyOfRange(envelope, 8, envelope.length));
+            final Socket socket;
+            synchronized (this) {
+                if (!isCurrent(activeGeneration)) return;
+                socket = streams.get(frame.streamId);
+            }
+            if (socket == null) { if (frame.type != RelayTunnelCodec.RESET) send(activeGeneration, RelayTunnelCodec.RESET, frame.streamId, new byte[0]); return; }
             if (frame.type == RelayTunnelCodec.DATA) {
                 synchronized (socket) { socket.getOutputStream().write(frame.payload); socket.getOutputStream().flush(); }
             } else if (frame.type == RelayTunnelCodec.FIN || frame.type == RelayTunnelCodec.RESET) {
-                streams.remove(frame.streamId); socket.close();
-            } else if (frame.type == RelayTunnelCodec.PING) send(RelayTunnelCodec.PONG, frame.streamId, new byte[0]);
-        } catch (Exception error) { fail(error); }
+                streams.remove(frame.streamId, socket); socket.close();
+            } else if (frame.type == RelayTunnelCodec.PING) send(activeGeneration, RelayTunnelCodec.PONG, frame.streamId, new byte[0]);
+        } catch (Exception error) { fail(activeGeneration, error); }
     }
 
-    private void send(int type, long streamId, byte[] payload) throws GeneralSecurityException, IOException {
-        WebSocket socket = webSocket;
+    private void send(long activeGeneration, int type, long streamId, byte[] payload) throws GeneralSecurityException, IOException {
+        final WebSocket socket;
+        final RelayTunnelCodec activeCodec;
+        synchronized (this) {
+            if (!isCurrent(activeGeneration)) throw new IOException("Stale WSS send generation");
+            socket = webSocket;
+            activeCodec = codec;
+        }
         if (socket == null || socket.queueSize() > MAX_WEBSOCKET_QUEUE) throw new IOException("WSS relay backpressure limit exceeded");
-        byte[] packet = codec.encode(type, streamId, payload);
+        byte[] packet = activeCodec.encode(type, streamId, payload);
         byte[] envelope = ByteBuffer.allocate(8 + packet.length).putLong(0).put(packet).array();
-        if (!socket.send(ByteString.of(envelope))) throw new IOException("WSS relay is disconnected");
+        synchronized (this) {
+            if (!isCurrent(activeGeneration) || socket != webSocket) throw new IOException("Stale WSS send generation");
+            // OkHttp send only enqueues: no socket I/O wait is held under this lock.
+            if (!socket.send(ByteString.of(envelope))) throw new IOException("WSS relay is disconnected");
+        }
     }
 
-    private synchronized void fail(Throwable error) {
-        if (stopping) return;
+    private synchronized void fail(long activeGeneration, Throwable error) {
+        if (!isCurrent(activeGeneration)) return;
         Listener active = listener;
         stop();
         if (active != null) active.onFailure(error.getMessage() == null ? "WSS relay failed" : error.getMessage());
     }
 
     synchronized void stop() {
+        generation++;
         stopping = true;
         listener = null;
         if (webSocket != null) webSocket.close(1000, "mobile stopping");
@@ -231,6 +282,8 @@ final class WssRelayClient {
         socksServer = null;
         for (Socket socket : streams.values()) try { socket.close(); } catch (IOException ignored) {}
         streams.clear();
+        for (Socket socket : openingSockets) closeQuietly(socket);
+        openingSockets.clear();
         codec = null;
     }
 

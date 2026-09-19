@@ -603,7 +603,8 @@ test('task columns queue without stretching the page before entering task focus'
   assert.match(sort, /pendingQueue \? leftTime - rightTime : rightTime - leftTime/u)
   assert.match(sort, /localeCompare\(String\(taskId\(right\)\)\)/u)
   assert.ok(board.indexOf('sortBoardColumnTasks(') < board.indexOf('.slice(0, column.limit)'), 'stable queue order must be applied before any projection cap')
-  assert.equal((board.match(/limit: 200/gu) || []).length, 4)
+  assert.equal((board.match(/limit: 200/gu) || []).length, 3)
+  assert.match(board, /doneTasks\.slice\(0, 200\)/u, 'terminal history retains its separate bounded projection')
 
   const helperStart = source.indexOf('function taskBoardTime(task, fields)')
   const helperEnd = source.indexOf('function eventRelatesToTask(event, task)', helperStart)
@@ -615,19 +616,18 @@ test('task columns queue without stretching the page before entering task focus'
   ], 'done').map((task) => task.id), ['newer', 'older'])
 })
 
-test('runtime task board exposes four truthful columns and keeps cancellation in history without model percentages', async () => {
+test('runtime task board exposes three work columns and terminal history without model percentages', async () => {
   const source = await clientSource()
   const card = componentSource(source, ['BoardTaskCard'])
   const board = componentSource(source, ['TaskBoardWorkspace'])
+  const assurance = componentSource(source, ['TaskAssurancePanel'])
   assert.match(board, /\{ id: "ready", label: t\("boardPending"\)/u)
   assert.match(board, /\{ id: "running", label: t\("boardProgress"\)/u)
   assert.match(board, /\{ id: "attention", label: t\("boardBlocked"\)/u)
-  assert.match(board, /\{ id: "done", label: t\("boardCompleted"\)/u)
-  assert.match(board, /cancelledTasks[\s\S]*?h\("details", \{ className: "dat-board-history" \}/u)
-  assert.match(card, /boardAttempt/u)
-  assert.match(card, /boardMilestones/u)
-  assert.match(card, /boardCheckpoint/u)
-  assert.match(card, /lastActivity/u)
+  assert.doesNotMatch(board, /\{ id: "done", label: t\("boardCompleted"\)/u)
+  assert.match(board, /doneTasks\.length \+ cancelledTasks\.length \? h\("details", \{ className: "dat-board-history", ref: historyRef \}/u)
+  assert.doesNotMatch(card, /boardAttempt|boardMilestones|boardCheckpoint|lastActivity/u)
+  assert.match(assurance, /task\.attemptHistory[\s\S]*task\.checkpoint/u, 'diagnostic evidence is moved, not deleted')
   assert.doesNotMatch(`${card}\n${board}`, /progressPercent|\.percent\b|aria-valuenow|role: "progressbar"|\+ "%"/u)
 })
 
@@ -730,8 +730,9 @@ test('task details expose lease attempts, bounded interruption history, capabili
   const focus = componentSource(source, ['TaskDetailFocus'])
   const sidebar = componentSource(source, ['TaskDetailSidebar'])
 
-  assert.match(card, /taskBoardLeaseEpoch[\s\S]*?boardLeaseEpoch/u)
-  assert.match(card, /taskBoardCapabilitySummary[\s\S]*?boardCapabilities/u)
+  assert.doesNotMatch(card, /taskBoardLeaseEpoch|taskBoardCapabilitySummary/u, 'summary cards keep protocol metadata in dedicated details')
+  assert.match(assurance, /taskBoardLeaseEpoch/u)
+  assert.match(assurance, /task\.capabilities/u)
   assert.match(focus, /h\(TaskAssurancePanel, \{ t: t, task: task \}\)/u)
   assert.match(sidebar, /h\(TaskAssurancePanel, \{ t: t, task: task \}\)/u)
   assert.match(assurance, /task\.attemptHistory[\s\S]*?task\.interruptionHistory/u)

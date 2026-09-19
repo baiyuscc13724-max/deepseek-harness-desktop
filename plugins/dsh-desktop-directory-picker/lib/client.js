@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
             }, 180000)
             pending.set(id, { resolve, reject, timer })
           })
-          choose().then(
+          Promise.resolve().then(choose).then(
             value => bridge.settle(id, value, ''),
             error => bridge.settle(id, null, error?.message || String(error))
           )
@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
 
     function DesktopDirectoryFlow(props) {
       const armed = React.useRef(false)
+      const requestRevision = React.useRef(0)
       const outcome = React.useRef(props)
       outcome.current = props
       const alive = React.useRef(true)
@@ -76,16 +77,19 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!props.open) {
           armed.current = false
+          requestRevision.current += 1
           return
         }
         if (armed.current) return
         armed.current = true
+        const revision = ++requestRevision.current
+        const current = () => alive.current && outcome.current.open && revision === requestRevision.current
         pickerBridge().request().then(selectedPath => {
-          if (!alive.current) return
+          if (!current()) return
           if (selectedPath === null) outcome.current.onCancel()
           else outcome.current.onPicked(selectedPath)
         }, error => {
-          if (alive.current) outcome.current.onError(error instanceof Error ? error.message : String(error))
+          if (current()) outcome.current.onError(error instanceof Error ? error.message : String(error))
         })
       }, [props.open])
       return null

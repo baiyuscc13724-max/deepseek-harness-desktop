@@ -1,6 +1,6 @@
-const { createHash } = require('node:crypto')
+const { createHash, randomUUID } = require('node:crypto')
 const path = require('node:path')
-const { chmod, mkdir, readFile, rename, rm, writeFile } = require('node:fs/promises')
+const { chmod, mkdir, open, readFile, rename, rm, writeFile } = require('node:fs/promises')
 const { existsSync } = require('node:fs')
 const AdmZip = require('adm-zip')
 
@@ -110,20 +110,28 @@ function createEasyTierComponentInstaller({
     if (requiredFiles.every(fileName => existsSync(path.join(destinationDir, fileName))) && existsSync(versionFile)) {
       try {
         const metadata = JSON.parse(await readFile(versionFile, 'utf8'))
-        if (metadata.version === release.version && metadata.archiveSha256 === release.sha256) return destination
+        if (metadata.version === release.version && metadata.archiveSha256 === release.sha256) {
+          const matches = await Promise.all(requiredFiles.map(async fileName => {
+            const expected = metadata.fileHashes?.[fileName]
+            return typeof expected === 'string' && /^[a-f0-9]{64}$/.test(expected) && hashBuffer(await readFile(path.join(destinationDir, fileName))) === expected
+          }))
+          if (matches.every(Boolean)) return destination
+        }
       } catch {}
     }
     if (installing) return installing
 
     installing = (async () => {
       await mkdir(destinationDir, { recursive: true })
-      const archive = await fetchComponent(release.url, fetchImpl, onProgress)
-      const archiveSha256 = hashBuffer(archive)
-      if (archiveSha256 !== release.sha256) throw new Error('网络组件 SHA-256 校验失败，已拒绝安装。')
-      const files = extractComponentFiles(archive, requiredFiles)
-      const stagingSuffix = `.staging-${process.pid}-${Date.now()}`
+      const lockFile = path.join(destinationDir, '.install.lock')
+      const lock = await open(lockFile, 'wx', 0o600)
+      const stagingSuffix = `.staging-${process.pid}-${randomUUID()}`
       const stagedFiles = []
       try {
+        const archive = await fetchComponent(release.url, fetchImpl, onProgress)
+        const archiveSha256 = hashBuffer(archive)
+        if (archiveSha256 !== release.sha256) throw new Error('网络组件 SHA-256 校验失败，已拒绝安装。')
+        const files = extractComponentFiles(archive, requiredFiles)
         for (const [fileName, data] of files) {
           const staging = path.join(destinationDir, `${fileName}${stagingSuffix}`)
           stagedFiles.push(staging)
@@ -133,18 +141,23 @@ function createEasyTierComponentInstaller({
         for (const [fileName] of files) {
           const target = path.join(destinationDir, fileName)
           const staging = path.join(destinationDir, `${fileName}${stagingSuffix}`)
-          await rm(target, { force: true })
           await rename(staging, target)
         }
-        await writeFile(versionFile, `${JSON.stringify({
+        const stagedVersion = `${versionFile}${stagingSuffix}`
+        stagedFiles.push(stagedVersion)
+        await writeFile(stagedVersion, `${JSON.stringify({
           component: 'EasyTier',
           version: release.version,
           source: release.url,
           archiveSha256,
+          fileHashes: Object.fromEntries([...files].map(([name, bytes]) => [name, hashBuffer(bytes)])),
           license: 'LGPL-3.0'
-        }, null, 2)}\n`, { mode: 0o600 })
+        }, null, 2)}\n`, { mode: 0o600, flag: 'wx' })
+        await rename(stagedVersion, versionFile)
       } finally {
         await Promise.all(stagedFiles.map(file => rm(file, { force: true }).catch(() => {})))
+        await lock.close()
+        await rm(lockFile, { force: true })
       }
       return destination
     })().finally(() => { installing = null })

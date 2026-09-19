@@ -1,6 +1,7 @@
 'use strict'
 
 const { randomUUID } = require('node:crypto')
+const { safeUrl } = require('./browser-diagnostics.cjs')
 
 // Fixed, Playwright-style locator operations for the built-in browser. Callers
 // provide data only: no evaluate/script/function payload is accepted or run.
@@ -25,7 +26,8 @@ const SAFE_ROLES = new Set([
 // Attribute selectors and arbitrary data-* reads are intentionally absent.
 // Together with the safe CSS grammar below, this removes the count/getAttribute
 // oracle that could otherwise probe hidden credentials one character at a time.
-const SAFE_ATTRIBUTE = /^(?:id|class|title|alt|name|type|role|target|rel|placeholder|tabindex|disabled|readonly|required|multiple|selected|checked|aria-(?:atomic|busy|checked|current|disabled|expanded|haspopup|hidden|invalid|live|modal|multiline|multiselectable|orientation|pressed|readonly|required|selected|sort))$/i
+const SAFE_ATTRIBUTE = /^(?:id|class|title|alt|name|type|role|target|rel|placeholder|tabindex|disabled|readonly|required|multiple|selected|checked|href|src|poster|srclang|kind|label|lang|dir|controls|autoplay|loop|muted|playsinline|preload|crossorigin|width|height|loading|decoding|aria-(?:label|description|describedby|labelledby|valuenow|valuemin|valuemax|valuetext|atomic|busy|checked|current|disabled|expanded|haspopup|hidden|invalid|live|modal|multiline|multiselectable|orientation|pressed|readonly|required|selected|sort))$/i
+const URL_ATTRIBUTES = new Set(['href', 'src', 'poster'])
 const SENSITIVE_LOCATOR = /(?:pass(?:word|wd)?|pwd|secret|token|csrf|xsrf|session(?:id)?|cookie|authorization|bearer|credential|otp|captcha|verification|验证码|api[_-]?key|银行卡|card.?number|cvv|cvc|账号|帐号|账户|用户名|邮箱|bank|payment|payee|支付|付款|login|e-?mail|user(?:name|[_-]?id))/i
 const MAX_SELECTOR_LENGTH = 2000
 const MAX_NAME_LENGTH = 500
@@ -41,7 +43,8 @@ const PAGE_ERROR_CODES = new Set([
   'browser-playwright-frame-transformed', 'browser-playwright-option-not-found',
   'browser-playwright-option-out-of-range', 'browser-playwright-selector-invalid',
   'browser-playwright-strict-mode', 'browser-playwright-target-invalid',
-  'browser-playwright-upload-required', 'browser-playwright-element-readonly'
+  'browser-playwright-upload-required', 'browser-playwright-element-readonly',
+  'browser-playwright-content-forbidden'
 ])
 
 function apiError(code, message) {
@@ -111,9 +114,13 @@ function normalizePlaywrightParameters(parameters = {}) {
   const selector = boundedString(parameters.selector, 'selector', MAX_SELECTOR_LENGTH, { required: operation !== 'domSnapshot' })
   const name = boundedString(parameters.name, 'name', MAX_NAME_LENGTH)
   const frameSelector = boundedString(parameters.frame_selector, 'frame_selector', MAX_SELECTOR_LENGTH)
-  const attribute = boundedString(parameters.attribute, 'attribute', 160, { required: operation === 'getAttribute' })
-  const text = boundedString(parameters.text, 'text', operation === 'pressSequentially' ? 500 : MAX_TEXT_LENGTH, { required: operation === 'fill' || operation === 'pressSequentially' })
-  const value = boundedString(parameters.value, 'value', MAX_TEXT_LENGTH, { required: operation === 'selectOption' })
+  const attribute = boundedString(parameters.attribute, 'attribute', 160, { required: operation === 'getAttribute' }).toLowerCase()
+  // Explicit empty strings clear fields or select placeholder options. Missing
+  // values remain invalid; never turn an omitted argument into a clearing action.
+  if (operation === 'fill' && typeof parameters.text !== 'string') throw apiError('browser-playwright-parameter-required', 'fill 必须提供 text（允许空字符串清空）。')
+  if (operation === 'selectOption' && typeof parameters.value !== 'string') throw apiError('browser-playwright-parameter-required', 'selectOption 必须提供 value（允许空字符串选项）。')
+  const text = boundedString(parameters.text, 'text', operation === 'pressSequentially' ? 500 : MAX_TEXT_LENGTH, { required: operation === 'pressSequentially' })
+  const value = boundedString(parameters.value, 'value', MAX_TEXT_LENGTH)
   const key = boundedString(parameters.key, 'key', 80, { required: operation === 'press' })
   const confirmationId = boundedString(parameters.confirmation_id, 'confirmation_id', 200)
   if (selector) {
@@ -132,7 +139,7 @@ function normalizePlaywrightParameters(parameters = {}) {
   assertSafeLocatorValue(name, 'name')
   if (operation === 'press' && !SAFE_KEYS.has(key)) throw apiError('browser-playwright-key-unsupported', 'press 仅支持固定的安全按键，不支持快捷键或任意文本。')
   if (operation === 'getAttribute' && (!SAFE_ATTRIBUTE.test(attribute) || SENSITIVE_LOCATOR.test(attribute))) {
-    throw apiError('browser-playwright-attribute-forbidden', '该属性可能暴露表单值、脚本、URL 凭据或敏感页面状态，禁止读取。')
+    throw apiError('browser-playwright-attribute-forbidden', '该属性不属于只读白名单。普通媒体请用 mediaInfo，或读取 src/poster/srclang/kind/label/lang 等标准属性；表单 value、脚本、HTML、事件和任意 data-* 仍禁止读取。无需重复申请授权。')
   }
   if (operation === 'setChecked' && typeof parameters.checked !== 'boolean') {
     throw apiError('browser-playwright-parameter-required', 'setChecked 必须提供布尔 checked。')
@@ -149,13 +156,13 @@ function normalizePlaywrightParameters(parameters = {}) {
 async function fixedLocatorPageFunction(input) {
   const BINDINGS_KEY = '__HARNESS_FIXED_PLAYWRIGHT_BINDINGS_V1__'
   const normalize = value => String(value == null ? '' : value).replace(/\s+/g, ' ').trim()
-  const rendered = element => {
+  const rendered = (element, interactive = true) => {
     if (element?.nodeType !== 1 || !element.isConnected) return false
     const view = element.ownerDocument?.defaultView
     if (!view) return false
     const rect = element.getBoundingClientRect()
     const style = view.getComputedStyle(element)
-    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none' && Number(style.opacity || 1) > 0
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && (!interactive || style.pointerEvents !== 'none') && Number(style.opacity || 1) > 0
   }
   const implicitRole = element => {
     const explicit = normalize(element.getAttribute('role')).toLowerCase()
@@ -166,7 +173,8 @@ async function fixedLocatorPageFunction(input) {
     if (tag === 'button' || (tag === 'input' && ['button', 'submit', 'reset', 'image'].includes(type))) return 'button'
     if (tag === 'select') return element.multiple ? 'listbox' : 'combobox'
     if (tag === 'textarea' || (tag === 'input' && !['checkbox', 'radio', 'range', 'file', 'hidden'].includes(type))) return 'textbox'
-    if (tag === 'input' && ['checkbox', 'radio', 'range'].includes(type)) return type
+    if (tag === 'input' && type === 'range') return 'slider'
+    if (tag === 'input' && ['checkbox', 'radio'].includes(type)) return type
     if (/^h[1-6]$/.test(tag)) return 'heading'
     if (tag === 'img') return 'img'
     if (tag === 'li') return 'listitem'
@@ -176,7 +184,8 @@ async function fixedLocatorPageFunction(input) {
   const accessibleName = element => {
     const labelledBy = normalize(element.getAttribute('aria-labelledby')).split(/\s+/).filter(Boolean).map(id => element.ownerDocument.getElementById(id)?.innerText || '').join(' ')
     const labels = element.labels ? [...element.labels].map(label => label.innerText || '').join(' ') : ''
-    return normalize(element.getAttribute('aria-label') || labelledBy || labels || element.getAttribute('alt') || element.getAttribute('title') || element.placeholder || element.innerText || element.textContent || '').slice(0, 500)
+    const contentName = element.isContentEditable ? '' : element.innerText || element.textContent || ''
+    return normalize(element.getAttribute('aria-label') || labelledBy || labels || element.getAttribute('alt') || element.getAttribute('title') || element.placeholder || contentName).slice(0, 500)
   }
   const fieldMetadata = element => {
     const form = element.form || element.closest?.('form') || null
@@ -190,10 +199,10 @@ async function fixedLocatorPageFunction(input) {
       disabled: Boolean(element.matches?.(':disabled') || element.disabled || element.getAttribute('aria-disabled') === 'true'), readOnly: Boolean(element.readOnly || element.getAttribute('aria-readonly') === 'true')
     }
   }
-  const fingerprint = field => JSON.stringify({
+  const fingerprint = (field, mutableText = false) => JSON.stringify({
     tag: field.tag, type: field.type, name: field.name, id: field.id, role: field.role,
     autocomplete: field.autocomplete, ariaLabel: field.ariaLabel, label: field.label,
-    text: field.text, href: field.href, formAction: field.formAction, download: field.download,
+    text: mutableText ? '' : field.text, href: field.href, formAction: field.formAction, download: field.download,
     submit: field.submit, disabled: field.disabled, readOnly: field.readOnly
   })
   const bindingStore = () => {
@@ -219,11 +228,22 @@ async function fixedLocatorPageFunction(input) {
     try {
       if (input.selectorKind === 'css') candidates = [...root.querySelectorAll(input.selector)]
       else candidates = [...root.querySelectorAll('*')].filter(element => {
-        if (!rendered(element)) return false
+        const readOnly = ['domSnapshot', 'count', 'isVisible', 'isEnabled', 'innerText', 'textContent', 'getAttribute'].includes(input.operation)
+        if (!rendered(element, !readOnly)) return false
         if (input.selectorKind === 'role') return implicitRole(element) === input.selector.toLowerCase() && (!input.name || accessibleName(element) === input.name)
         return normalize(element.innerText || element.textContent || '') === normalize(input.selector) && (!input.name || accessibleName(element) === input.name)
       })
     } catch { throw Object.assign(new Error('selector 不是有效的定位器。'), { code: 'browser-playwright-selector-invalid' }) }
+    if (input.selectorKind === 'text') {
+      // Collapse only a nested copy of the same text, never distinct controls.
+      // Keep the semantic action owner (e.g. submit button around a span), so
+      // policy still sees submit/download metadata rather than an innocent span.
+      const leaves = candidates.filter(element => !candidates.some(child => child !== element && element.contains(child)))
+      candidates = [...new Set(leaves.map(element => {
+        const owner = element.closest('button,a,input,textarea,select,[role="button"],[role="link"]')
+        return owner && candidates.includes(owner) ? owner : element
+      }))]
+    }
     return candidates
   }
   const trustedPointForElement = element => {
@@ -285,7 +305,10 @@ async function fixedLocatorPageFunction(input) {
     const binding = store.get(input.bindingId)
     if (!binding?.element?.isConnected) throw Object.assign(new Error('预检绑定的元素已失效。'), { code: 'browser-playwright-binding-stale' })
     const field = fieldMetadata(binding.element)
-    if (fingerprint(field) !== binding.fingerprint) throw Object.assign(new Error('预检后目标元素发生变化，已阻止操作。'), { code: 'browser-playwright-binding-changed' })
+    // Only the post-input receipt may ignore contenteditable's value text.
+    // Preflight/prepare/focus verification still compare the complete snapshot.
+    const mutableText = input.phase === 'verify' && input.editableMutation === true && binding.element.isContentEditable && ['fill', 'pressSequentially'].includes(input.operation)
+    if (fingerprint(field, mutableText) !== (mutableText ? binding.editableFingerprint : binding.fingerprint)) throw Object.assign(new Error('预检后目标元素发生变化，已阻止操作。'), { code: 'browser-playwright-binding-changed' })
     const actionPoint = validateActionTarget(binding.element, field, { hitTest: input.phase === 'verify' })
     if (input.phase === 'bind' || input.phase === 'prepare') binding.element.setAttribute(input.bindingAttribute, input.bindingId)
     if (binding.element.getAttribute(input.bindingAttribute) !== input.bindingId) throw Object.assign(new Error('精确节点绑定标记已变化。'), { code: 'browser-playwright-binding-changed' })
@@ -299,15 +322,33 @@ async function fixedLocatorPageFunction(input) {
       targetIndex = options.findIndex(item => item.value === input.value || normalize(item.text) === normalize(input.value))
       if (targetIndex < 0) throw Object.assign(new Error('指定的下拉选项不存在。'), { code: 'browser-playwright-option-not-found' })
       if (targetIndex > 500) throw Object.assign(new Error('下拉选项目标超出安全操作范围。'), { code: 'browser-playwright-option-out-of-range' })
+      if (options[targetIndex].disabled || options[targetIndex].closest('optgroup')?.disabled) throw Object.assign(new Error('指定的下拉选项已禁用。'), { code: 'browser-playwright-element-disabled' })
       selectedValue = options[targetIndex].value
       currentSelectedValue = binding.element.value
     }
     const editableValue = binding.element.isContentEditable ? String(binding.element.textContent || '') : String(binding.element.value || '')
+    if (input.planInsertion === true && input.operation === 'pressSequentially') {
+      const fail = (code, message) => { throw Object.assign(new Error(message), { code }) }
+      const element = binding.element
+      if (element.isContentEditable) {
+        const selection = element.ownerDocument.getSelection()
+        if (!selection?.rangeCount) fail('browser-playwright-element-not-actionable', '目标控件没有可验证的文本选区。')
+        const range = selection.getRangeAt(0)
+        if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) fail('browser-playwright-binding-changed', '文本选区已离开目标控件。')
+        const before = range.cloneRange(); before.selectNodeContents(element); before.setEnd(range.startContainer, range.startOffset)
+        const after = range.cloneRange(); after.selectNodeContents(element); after.setStart(range.endContainer, range.endOffset)
+        binding.insertionExpectedValue = before.cloneContents().textContent + input.text + after.cloneContents().textContent
+      } else {
+        if (!Number.isInteger(element.selectionStart) || !Number.isInteger(element.selectionEnd)) fail('browser-playwright-element-not-actionable', '该输入类型不支持可验证的文本选区。')
+        binding.insertionExpectedValue = editableValue.slice(0, element.selectionStart) + input.text + editableValue.slice(element.selectionEnd)
+      }
+    }
     return {
       field, targetIndex, selectedValue, currentSelectedValue,
       checked: Boolean(binding.element.checked),
+      focused: binding.element.ownerDocument.activeElement === binding.element,
       editableMatches: editableValue === input.text,
-      editableEndsWith: editableValue.endsWith(input.text),
+      editableInsertedMatches: typeof binding.insertionExpectedValue === 'string' && editableValue === binding.insertionExpectedValue,
       actionPoint,
       bindingVerified: true
     }
@@ -349,14 +390,31 @@ async function fixedLocatorPageFunction(input) {
   if (matches.length !== 1) throw Object.assign(new Error(`定位器匹配到 ${matches.length} 个元素；该操作要求唯一目标。`), { code: 'browser-playwright-strict-mode' })
   const element = matches[0]
   const field = fieldMetadata(element)
-  if (input.operation === 'isVisible') return { visible: rendered(element), text: '', field }
+  if (input.operation === 'isVisible') return { visible: rendered(element, false), text: '', field }
   if (input.operation === 'isEnabled') return { enabled: !field.disabled, text: '', field }
-  if (['innerText', 'textContent', 'getAttribute'].includes(input.operation) && !rendered(element)) throw Object.assign(new Error('隐藏元素的内容或属性禁止读取。'), { code: 'browser-playwright-element-not-actionable' })
+  // track/source have no rendered box by design. Only their standard metadata
+  // under a rendered media parent may bypass that one check, never text/HTML or
+  // arbitrary hidden nodes. Field and shared read authorization still run below.
+  const mediaMetadata = input.operation === 'getAttribute'
+    && ((field.tag === 'track' && ['src', 'srclang', 'kind', 'label', 'lang'].includes(input.attribute))
+      || (field.tag === 'source' && ['src', 'type'].includes(input.attribute)))
+    && ['video', 'audio'].includes(element.parentElement?.tagName?.toLowerCase())
+    && rendered(element.parentElement, false)
+  if (['innerText', 'textContent', 'getAttribute'].includes(input.operation)) {
+    if (['script', 'style', 'template', 'noscript', 'meta', 'link'].includes(field.tag)) throw Object.assign(new Error('脚本、样式和模板内容不属于可读页面元数据。'), { code: 'browser-playwright-content-forbidden' })
+    if (!rendered(element, false) && !mediaMetadata) throw Object.assign(new Error('隐藏元素的内容或属性禁止读取；字幕轨道仅允许可见媒体下的标准元数据。'), { code: 'browser-playwright-element-not-actionable' })
+  }
   if (input.operation === 'innerText') { const text = String(element.innerText || ''); return { value: text, text, field } }
   if (input.operation === 'textContent') { const text = String(element.textContent || ''); return { value: text, text, field } }
-  if (input.operation === 'getAttribute') { const value = element.getAttribute(input.attribute); return { value, text: value == null ? '' : String(value), field } }
+  if (input.operation === 'getAttribute') {
+    let value = element.getAttribute(input.attribute)
+    if (value && ['href', 'src', 'poster'].includes(input.attribute)) {
+      try { value = new URL(value, element.ownerDocument.baseURI).href } catch { value = '' }
+    }
+    return { value, text: value == null ? '' : String(value), field }
+  }
   validateActionTarget(element, field)
-  store.set(input.bindingId, { element, fingerprint: fingerprint(field) })
+  store.set(input.bindingId, { element, fingerprint: fingerprint(field), editableFingerprint: fingerprint(field, true) })
   return { field, text: '' }
 }
 
@@ -496,20 +554,29 @@ async function runTrustedCdpAction({ webContents, normalized, bindingId, backend
       await verifyBinding()
       await send('DOM.focus', { backendNodeId }, { startsInput: true })
       let verified = await verifyBinding()
+      const assertFocused = result => {
+        if (result.focused !== true) throw apiError('browser-playwright-binding-changed', '目标控件未保持焦点，禁止向其他控件输入。')
+      }
+      assertFocused(verified)
       if (normalized.operation === 'fill') {
-        const selectAllModifier = process.platform === 'darwin' ? 4 : 2
-        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: selectAllModifier })
-        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: selectAllModifier })
-        await key('Backspace')
+        // Use the exact WebContents editing command: background renderers may
+        // not apply platform Ctrl+A accelerators. No OS clipboard or active
+        // BrowserWindow menu target is involved. insertText replaces selection.
+        if (typeof webContents.selectAll !== 'function') throw apiError('browser-input-unavailable', '受信任文本选择通道不可用。')
+        assertCurrent()
+        webContents.selectAll()
+        assertFocused(await verifyBinding())
         await send('Input.insertText', { text: normalized.text })
-        verified = await verifyBinding()
+        verified = await verifyBinding({ editableMutation: true })
         if (!verified.editableMatches) throw apiError('browser-playwright-result-mismatch', '编辑控件未达到请求的文本状态。')
       } else if (normalized.operation === 'pressSequentially') {
+        assertFocused(await verifyBinding({ planInsertion: true }))
         for (const character of normalized.text) {
+          assertFocused(await verifyBinding({ editableMutation: true }))
           await send('Input.insertText', { text: character })
         }
-        verified = await verifyBinding()
-        if (!verified.editableEndsWith) throw apiError('browser-playwright-result-mismatch', '逐字输入未达到请求的文本状态。')
+        verified = await verifyBinding({ editableMutation: true })
+        if (!verified.editableInsertedMatches) throw apiError('browser-playwright-result-mismatch', '逐字输入未达到请求的文本状态。')
       } else if (normalized.operation === 'press') await key(normalized.key)
       else if (normalized.operation === 'selectOption') {
         await key('Home')
@@ -544,14 +611,14 @@ async function runBrowserPlaywrightOperation({ webContents, parameters = {}, ori
   const { confirmationId: _confirmationId, ...pageParameters } = normalized
   const readOnly = READ_OPERATIONS.has(normalized.operation)
   const bindingId = readOnly ? '' : randomUUID()
-  const executeFixed = async phase => {
+  const executeFixed = async (phase, { editableMutation = false, planInsertion = false } = {}) => {
     // Text/value/key/checked are withheld from the untrusted renderer until the
     // host ActionGate has allowed the action. Preflight and backend-node binding
     // need only the normalized locator and operation shape.
     const gatedActionData = phase === 'prepare' || phase === 'verify'
       ? pageParameters
       : { ...pageParameters, text: '', value: '', key: '', checked: false }
-    const input = { ...gatedActionData, phase, bindingId, bindingAttribute: PLAYWRIGHT_BINDING_ATTRIBUTE }
+    const input = { ...gatedActionData, phase, bindingId, bindingAttribute: PLAYWRIGHT_BINDING_ATTRIBUTE, editableMutation: phase === 'verify' && editableMutation === true, planInsertion: phase === 'verify' && planInsertion === true }
     const code = `(async()=>{try{return {protocol:'harness-fixed-playwright-v1',ok:true,value:await (${fixedLocatorPageFunction.toString()})(${JSON.stringify(input)})}}catch(error){return {protocol:'harness-fixed-playwright-v1',ok:false,error:{code:String(error?.code||''),message:String(error?.message||'')}}}})()`
     const envelope = await webContents.executeJavaScriptInIsolatedWorld(PLAYWRIGHT_WORLD_ID, [{ code }], false)
     if (!envelope || envelope.protocol !== 'harness-fixed-playwright-v1' || typeof envelope.ok !== 'boolean') {
@@ -580,6 +647,12 @@ async function runBrowserPlaywrightOperation({ webContents, parameters = {}, ori
     if (!readOnly && /(?:purchase|pay|buy|checkout|bank|card|付款|支付|购买|结账|银行|银行卡)/i.test(description)) {
       throw apiError('financial-action-blocked', '模型永久禁止执行支付、购买或银行相关操作，请由用户亲自操作。')
     }
+    if (normalized.operation === 'getAttribute' && URL_ATTRIBUTES.has(normalized.attribute) && raw.value != null) {
+      // Read-only URL output is not a navigation grant. Strip userinfo, query and
+      // fragment before both read-policy inspection and model-visible output.
+      raw.value = safeUrl(raw.value)
+      raw.text = raw.value
+    }
     const action = effectiveModelAction(normalized.operation, field, normalized)
     const payload = modelPayload(normalized.operation, normalized, field, raw || {})
     let backendNodeId = null
@@ -596,7 +669,7 @@ async function runBrowserPlaywrightOperation({ webContents, parameters = {}, ori
     if (!readOnly) {
       markAction(`playwright:${normalized.operation}`)
       await executeFixed('prepare')
-      const verifyBinding = () => executeFixed('verify')
+      const verifyBinding = options => executeFixed('verify', options)
       const finishInput = beginInput(`playwright:${normalized.operation}`)
       let actionError = null
       try {

@@ -360,8 +360,9 @@
     let titleOverride = null
     function renderTitle() {
       if (!title) return
-      title.textContent = titleOverride ?? paneTitle(core.get(core.activeId))
-      title.setAttribute('aria-live', 'polite')
+      const nextTitle = titleOverride ?? paneTitle(core.get(core.activeId))
+      if (title.textContent !== nextTitle) title.textContent = nextTitle
+      if (title.getAttribute('aria-live') !== 'polite') title.setAttribute('aria-live', 'polite')
     }
     function renderPane() {
       const pane = core.get(core.activeId)
@@ -372,11 +373,34 @@
         if (pane.view.parentElement !== slot) slot.append(pane.view) // 移动而非复制
       }
     }
+    let renderedOpen = null
+    let returnFocus = null
+    let focusRevision = 0
     function renderChrome() {
       const isOpen = core.isOpen()
       const canBack = core.canGoBack()
-      host.classList.toggle('is-open', isOpen)
-      host.setAttribute('aria-hidden', String(!isOpen))
+      const activeElement = document.activeElement
+      const focusWasInside = Boolean(activeElement && host.contains(activeElement))
+      if (isOpen && renderedOpen !== true && !focusWasInside) returnFocus = activeElement
+      if (renderedOpen !== isOpen) {
+        const revision = ++focusRevision
+        host.classList.toggle('is-open', isOpen)
+        host.setAttribute('aria-hidden', String(!isOpen))
+        host.inert = !isOpen
+        document.body.classList.toggle('dsh-right-workspace-open', isOpen)
+        renderedOpen = isOpen
+        if (!isOpen && focusWasInside) {
+          const fallback = resolveRef(options.focusReturnEl) || toggleBtn
+          const target = returnFocus?.isConnected && returnFocus !== document.body ? returnFocus : fallback
+          // Let integration finish its dock/visibility writes before focus
+          // forces style/layout. A rapid reopen invalidates this restoration.
+          queueMicrotask(() => {
+            if (revision !== focusRevision || core.isOpen()) return
+            if (document.activeElement !== activeElement && document.activeElement !== document.body) return
+            if (target?.isConnected) target.focus?.({ preventScroll: true })
+          })
+        }
+      }
       back?.classList.toggle('is-visible', canBack)
       if (back) {
         back.disabled = !canBack
@@ -386,14 +410,16 @@
         toggleBtn.setAttribute('aria-expanded', String(isOpen))
         if (!toggleBtn.getAttribute('aria-controls')) toggleBtn.setAttribute('aria-controls', host.id || '')
       }
-      document.body.classList.toggle('dsh-right-workspace-open', isOpen)
       applyWidth()
       renderTitle()
       renderPane()
     }
 
+    let appliedWidth = null
     function applyWidth() {
       const px = `${core.width()}px`
+      if (appliedWidth === px) return
+      appliedWidth = px
       document.documentElement.style.setProperty(WIDTH_VAR, px)
       if (handle) {
         handle.setAttribute('aria-valuenow', String(core.width()))

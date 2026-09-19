@@ -1,0 +1,15 @@
+{
+  "renderer/index.html": "1a338ec3017db59fe7f8ae6dc468cc87f77592bb1d61d390309dacad161fafe9",
+  "renderer/styles.css": "091929333dedea6eb0892cc32d24be327b476b1738e40490cfe778dda2fe64c8",
+  "renderer/right-workspace.css": "ca9cf7220f161672dd894a1bbd46eedf588ae499f9b8cb615948195720a1d60b",
+  "renderer/right-workspace.js": "0ad6dac836c1bb169c4a778246c3d748894a50fae46320518ec77f8eb9796a40",
+  "renderer/right-workspace-integration.js": "e0f8c6cf400335cf29a0a99e8172a0abf9a05e566afa1435c18d1195cc7c6919",
+  "electron/main.cjs": "4e547cd4fa5a0cff7b58c84b9d3747129eec574ce09014c48ca6e0a2bf8b42fc",
+  "electron/guest-preload.cjs": "4a08690d4a33c2352acd7a853d24a6d2b3c5f9d75b92ea50f72556371bdf5475",
+  "renderer/app.js": "3086aae0818e127ee12ac4db989ab9ed0760c68efbcb67eb3943de069e2064fa",
+  "renderer/theme-integration.js": "002e541379cb6d4d0d2eec5cbde03123e860f832c5222aff5e85b830a3cad340",
+  "node_modules/@deepseek-ai/dsh-client-ui-layout/lib/client.js": "3a0243033f1a2c074b20fc7574cea3a338cd49dd0e88c084fc7f889d967ce33e",
+  "node_modules/electron/dist/electron.exe": "8593db40c0c6e5e3c4b6b0a225b1dc9a549ecdf10f6cf2010cf5b6ce869ce07f",
+  "renderer/assets/deepseek-icon.svg": "8489214b4e427b511073ebfbd0b68276b3f56ee9325abc8a5c18215344506f5c",
+  "node_modules/@xterm/xterm/css/xterm.css": "854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6"
+}

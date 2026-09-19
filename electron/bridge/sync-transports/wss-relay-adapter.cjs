@@ -22,13 +22,17 @@ function streamKey(peer, streamId) {
 }
 
 class WssRelayAdapter extends EventEmitter {
-  constructor({ relayUrl, WebSocketImpl, connectImpl = net.connect, readyTimeoutMs = 15_000 }) {
+  constructor({ relayUrl, WebSocketImpl, connectImpl = net.connect, readyTimeoutMs = 15_000, closeTimeoutMs = 1_000 }) {
     super()
     this.id = 'wss-relay'
     this.relayUrl = relayUrl ? safeRelayUrl(relayUrl) : ''
     this.WebSocketImpl = WebSocketImpl
     this.connectImpl = connectImpl
     this.readyTimeoutMs = readyTimeoutMs
+    this.closeTimeoutMs = closeTimeoutMs
+    this.generation = 0
+    this.cancelReady = null
+    this.retiringSockets = new WeakSet()
     this.socket = null
     this.context = null
     this.codec = null
@@ -67,7 +71,10 @@ class WssRelayAdapter extends EventEmitter {
     if (this.socket && this.status === 'connected') return this.state()
     if (!this.available()) throw new Error('WSS/443 中继尚未配置。')
     if (!context?.mesh?.relayRoomId || !context?.mesh?.relayTunnelKey || !context?.port) throw new Error('WSS relay mesh identity is incomplete.')
-    await this.stop()
+    const stopping = this.stop()
+    const generation = this.generation
+    await stopping
+    if (generation !== this.generation) throw new Error('WSS relay start was cancelled.')
     this.context = context
     this.codec = new RelayTunnelCodec(context.mesh.relayTunnelKey)
     this.status = 'connecting'
@@ -75,46 +82,60 @@ class WssRelayAdapter extends EventEmitter {
     this.lastError = null
     this.emit('state', this.state())
 
-    const socket = new this.WebSocketImpl(this.relayUrl, { perMessageDeflate: false, handshakeTimeout: this.readyTimeoutMs })
-    this.socket = socket
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('WSS/443 中继连接超时。')), this.readyTimeoutMs)
-      const cleanup = () => clearTimeout(timer)
-      socket.once('open', () => {
-        socket.send(JSON.stringify({ type: 'hello', version: 1, role: 'desktop', roomId: context.mesh.relayRoomId }))
-      })
-      socket.on('message', (data, binary) => {
-        if (binary) {
-          this.#handlePacket(Buffer.from(data)).catch(error => this.#disconnect(error))
-          return
+    let socket
+    const current = () => generation === this.generation && this.socket === socket
+    try {
+      socket = new this.WebSocketImpl(this.relayUrl, { perMessageDeflate: false, handshakeTimeout: this.readyTimeoutMs })
+      this.socket = socket
+      await new Promise((resolve, reject) => {
+        let settled = false
+        const finish = error => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          if (this.cancelReady === cancel) this.cancelReady = null
+          if (error) reject(error)
+          else resolve()
         }
-        let message
-        try { message = JSON.parse(String(data)) } catch { return }
-        if (message.type === 'welcome' && message.role === 'desktop') {
-          cleanup()
-          resolve()
-        } else if (message.type === 'error') {
-          cleanup()
-          reject(new Error(String(message.message || 'WSS relay rejected connection.')))
+        const cancel = () => finish(new Error('WSS relay start was cancelled.'))
+        const timer = setTimeout(() => finish(new Error('WSS/443 中继连接超时。')), this.readyTimeoutMs)
+        this.cancelReady = cancel
+        const fail = error => {
+          if (!current()) return
+          finish(error)
+          this.#disconnect(error, socket, generation)
         }
+        socket.once('open', () => {
+          if (!current()) return
+          try { socket.send(JSON.stringify({ type: 'hello', version: 1, role: 'desktop', roomId: context.mesh.relayRoomId })) }
+          catch (error) { fail(error) }
+        })
+        socket.on('message', (data, binary) => {
+          if (!current()) return
+          if (binary) {
+            this.#handlePacket(Buffer.from(data)).catch(fail)
+            return
+          }
+          let message
+          try { message = JSON.parse(String(data)) } catch { return }
+          if (message.type === 'welcome' && message.role === 'desktop') finish()
+          else if (message.type === 'error') fail(new Error('WSS relay rejected connection.'))
+        })
+        // Keep a socket-local listener after settlement; teardown errors must
+        // never escape as unhandled EventEmitter errors or affect a new socket.
+        socket.on('error', fail)
+        socket.once('close', () => fail(new Error('WSS/443 中继连接已断开。')))
       })
-      socket.once('error', error => { cleanup(); reject(error) })
-      socket.once('close', () => {
-        if (this.socket === socket && this.status === 'connecting') {
-          cleanup()
-          reject(new Error('WSS relay closed before it became ready.'))
-        }
-      })
-    }).catch(async error => {
-      await this.stop()
+      if (!current()) throw new Error('WSS relay start was cancelled.')
+      this.status = 'connected'
+      this.detail = 'WSS/443 加密中继已连接'
+      this.emit('state', this.state())
+      return this.state()
+    } catch (error) {
+      if (generation === this.generation) await this.stop()
+      else this.#retireSocket(socket)
       throw error
-    })
-    this.status = 'connected'
-    this.detail = 'WSS/443 加密中继已连接'
-    socket.once('close', () => this.#disconnect(new Error('WSS/443 中继连接已断开。')))
-    socket.once('error', error => this.#disconnect(error))
-    this.emit('state', this.state())
-    return this.state()
+    }
   }
 
   pairingConfig() {
@@ -148,7 +169,10 @@ class WssRelayAdapter extends EventEmitter {
       if (this.streams.has(key)) throw new Error('WSS relay stream id was reused.')
       const upstream = this.connectImpl({ host: '127.0.0.1', port: this.context.port })
       this.streams.set(key, upstream)
+      const generation = this.generation
+      const current = () => generation === this.generation && this.streams.get(key) === upstream
       upstream.on('data', chunk => {
+        if (!current()) return
         for (let offset = 0; offset < chunk.length; offset += RELAY_MAX_PAYLOAD_BYTES) {
           if (!this.#send(peer, FRAME_TYPES.DATA, frame.streamId, chunk.subarray(offset, offset + RELAY_MAX_PAYLOAD_BYTES))) {
             upstream.destroy(new Error('WSS relay backpressure limit exceeded.'))
@@ -156,9 +180,9 @@ class WssRelayAdapter extends EventEmitter {
           }
         }
       })
-      upstream.once('end', () => this.#send(peer, FRAME_TYPES.FIN, frame.streamId))
-      upstream.once('error', () => this.#send(peer, FRAME_TYPES.RESET, frame.streamId))
-      upstream.once('close', () => this.streams.delete(key))
+      upstream.once('end', () => { if (current()) this.#send(peer, FRAME_TYPES.FIN, frame.streamId) })
+      upstream.on('error', () => { if (current()) this.#send(peer, FRAME_TYPES.RESET, frame.streamId) })
+      upstream.once('close', () => { if (current()) this.streams.delete(key) })
       return
     }
     const upstream = this.streams.get(key)
@@ -176,27 +200,57 @@ class WssRelayAdapter extends EventEmitter {
     else if (frame.type === FRAME_TYPES.PING) this.#send(peer, FRAME_TYPES.PONG, frame.streamId)
   }
 
-  #disconnect(error) {
-    if (this.status === 'stopped') return
+  #retireSocket(socket) {
+    if (!socket || this.retiringSockets.has(socket)) return
+    this.retiringSockets.add(socket)
+    socket.on('error', () => {})
+    if (socket.readyState === 3) return
+    let timer
+    const closed = () => { clearTimeout(timer); socket.removeListener('close', closed) }
+    socket.once('close', closed)
+    timer = setTimeout(() => {
+      closed()
+      try { socket.terminate?.() } catch { /* Socket-local cleanup only. */ }
+    }, this.closeTimeoutMs)
+    timer.unref?.()
+    try {
+      if (socket.readyState === 0 && typeof socket.terminate === 'function') socket.terminate()
+      else if (socket.readyState < this.WebSocketImpl.CLOSING) socket.close(1000, 'desktop stopping')
+    } catch {
+      try { socket.terminate?.() } catch { /* Preserve the lifecycle outcome. */ }
+    }
+  }
+
+  #disconnect(error, socket, generation) {
+    if (this.socket !== socket || this.generation !== generation) return
+    this.generation += 1
+    this.cancelReady?.()
+    this.cancelReady = null
+    this.socket = null
+    this.context = null
+    this.codec = null
     this.lastError = error?.message || 'WSS/443 中继连接已断开。'
     this.status = 'disconnected'
     this.detail = 'WSS/443 中继已断开'
-    for (const socket of this.streams.values()) socket.destroy()
+    for (const stream of this.streams.values()) stream.destroy()
     this.streams.clear()
-    this.socket = null
+    this.#retireSocket(socket)
     this.emit('state', this.state())
     this.emit('disconnect', error)
   }
 
   async stop() {
+    this.generation += 1
+    this.cancelReady?.()
+    this.cancelReady = null
     const socket = this.socket
     this.socket = null
     this.context = null
     this.codec = null
+    this.status = 'stopped'
     for (const stream of this.streams.values()) stream.destroy()
     this.streams.clear()
-    if (socket && socket.readyState < this.WebSocketImpl.CLOSING) socket.close(1000, 'desktop stopping')
-    this.status = 'stopped'
+    this.#retireSocket(socket)
     this.detail = this.available() ? 'WSS/443 通道待命' : '未配置 WSS/443 中继'
     this.emit('state', this.state())
   }

@@ -1,6 +1,6 @@
 const path = require('node:path')
 const { mkdirSync, writeFileSync } = require('node:fs')
-const { app, protocol } = require('electron')
+const { app, dialog, protocol } = require('electron')
 const { ComponentUpdateStore } = require('./bridge/component-update-store.cjs')
 const { bundledReleaseSupersedesPointer } = require('./bridge/component-update-service.cjs')
 const { confirmComponentActivation, prepareComponentActivation, rollbackUnhealthyActivation } = require('./bridge/component-update-health.cjs')
@@ -32,19 +32,24 @@ async function boot() {
   const bundledRoot = path.resolve(__dirname, '..')
   const componentRoot = path.join(app.getPath('userData'), 'component-updates')
   const store = new ComponentUpdateStore(componentRoot)
-  const [persistedState, persistedPointer] = await Promise.all([store.get(), store.pointer()])
-  if (bundledReleaseSupersedesPointer(app.getVersion(), persistedPointer, persistedState)) {
-    await store.adoptBundledBaseline()
-  }
-  let prepared = { action: 'use-current', pointer: null, state: await store.get() }
+  let prepared = { action: 'use-current', pointer: null, state: null }
   let layout
   try {
+    const [persistedState, persistedPointer] = await Promise.all([store.get(), store.pointer()])
+    if (bundledReleaseSupersedesPointer(app.getVersion(), persistedPointer, persistedState)) {
+      await store.adoptBundledBaseline()
+    }
     prepared = await prepareComponentActivation({ store })
     layout = resolveComponentLayout({ store, pointer: prepared.pointer, bundledRoot })
   } catch (error) {
     console.error(`Unable to activate desktop components; using bundled baseline: ${error.message}`)
-    prepared = { action: 'bundled-fallback', pointer: null, state: await store.get(), error: error.message }
+    // A corrupt/unreadable update store is not authority to execute an unknown
+    // pointer or to erase history. Keep those bytes, but keep diagnostics usable.
+    prepared = { action: 'bundled-fallback', pointer: null, state: null, error: error.message, recoveryRequired: true }
     layout = resolveComponentLayout({ store, pointer: null, bundledRoot })
+    void app.whenReady().then(() => {
+      dialog.showErrorBox('组件更新需要恢复', '组件更新状态无法安全读取或激活，已使用随应用安装的内置版本启动。原更新记录保持不变。你仍可打开设置和诊断；在修复更新记录前，增量更新操作会被拒绝。')
+    }).catch(diagnosticError => console.error(`Unable to show component recovery notice: ${diagnosticError.message}`))
   }
 
   installComponentModulePaths(layout, bundledRoot)

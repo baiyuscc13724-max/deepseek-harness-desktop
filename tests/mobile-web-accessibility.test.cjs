@@ -50,8 +50,54 @@ test('drawers and modal dialogs constrain focus and return it to their trigger',
   assert.match(androidRuntime, /mobileDrawerTrigger\?\.isConnected/u)
   assert.match(androidRuntime, /const syncDialogFocus = dialogs =>/u)
   assert.match(androidRuntime, /event\.key !== 'Tab'/u)
-  assert.match(androidRuntime, /activeMobileDialogTrigger/u)
-  assert.match(androidRuntime, /trigger\.focus\?\.\(\{ preventScroll: true \}\)/u)
+  assert.match(androidRuntime, /const mobileDialogTriggers = new Map\(\)/u)
+  assert.match(androidRuntime, /mobileDialogTriggers\.set\(current,/u)
+  assert.match(androidRuntime, /mobileDialogTriggers\.delete\(dialog\)/u)
+  assert.match(androidRuntime, /restore\.focus\?\.\(\{ preventScroll: true \}\)/u)
+})
+
+test('nested modal focus wraps in the top layer and returns through each opening trigger', () => {
+  const timers = []
+  const document = { activeElement: null, dialogs: [], querySelectorAll() { return this.dialogs } }
+  const node = (parent = null, zIndex = 'auto') => ({
+    parentElement: parent, isConnected: true, dataset: {}, attrs: {}, children: [], listeners: {},
+    style: { display: 'block', visibility: 'visible', zIndex },
+    getAttribute(k) { return this.attrs[k] ?? null },
+    hasAttribute(k) { return k in this.attrs },
+    matches() { return false },
+    contains(n) { for (; n; n = n.parentElement) if (n === this) return true; return false },
+    querySelectorAll() { return this.children },
+    addEventListener(k, fn) { this.listeners[k] = fn },
+    focus(options) { assert.deepEqual(options, { preventScroll: true }); document.activeElement = this }
+  })
+  const trigger = node(), lower = node(null, '10'), upper = node(null, '20')
+  const first = node(lower), opener = node(lower), upperFirst = node(upper), upperLast = node(upper)
+  const hiddenParent = node(upper); hiddenParent.inert = true
+  const inaccessible = node(hiddenParent)
+  lower.children = [first, opener]; upper.children = [upperFirst, upperLast, inaccessible]
+  document.activeElement = trigger; document.dialogs = [lower]
+  const slice = (start, end) => {
+    const a = androidRuntime.indexOf(start), b = androidRuntime.indexOf(end, a)
+    assert.ok(a >= 0 && b > a)
+    return androidRuntime.slice(a, b)
+  }
+  const source = slice('  const mobileDialogVisible =', '  const dismissTopMobileDialog =') + slice('  let activeMobileDialog =', '  const decorateDialogs =')
+  const sync = new Function('document', 'getComputedStyle', 'visible', 'setTimeout', `${source}\nreturn () => syncDialogFocus(document.dialogs)`) // eslint-disable-line no-new-func
+    (document, n => n.style, n => !n.hidden, fn => timers.push(fn))
+  const flush = () => { while (timers.length) timers.shift()() }
+  sync(); flush(); assert.equal(document.activeElement, first)
+  opener.focus({ preventScroll: true }); document.dialogs.push(upper)
+  sync(); flush(); assert.equal(document.activeElement, upperFirst)
+  let prevented = 0
+  const tab = shiftKey => ({ key: 'Tab', shiftKey, preventDefault() { prevented++ } })
+  upper.listeners.keydown(tab(true))
+  assert.equal(document.activeElement, upperLast, 'reverse Tab excludes the inert descendant')
+  upper.listeners.keydown(tab(false))
+  assert.equal(document.activeElement, upperFirst)
+  lower.listeners.keydown(tab(false))
+  assert.equal(prevented, 2, 'lower layer must not process the top layer Tab')
+  upper.hidden = true; sync(); flush(); assert.equal(document.activeElement, opener)
+  lower.hidden = true; sync(); flush(); assert.equal(document.activeElement, trigger)
 })
 
 test('core mobile controls use 48px hit boxes without enlarging the compact brand glyph', () => {

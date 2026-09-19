@@ -48,6 +48,7 @@ class PetWindowController {
 
   environment() {
     const window = this.ensure()
+    if (!window || window.isDestroyed()) return null
     const bounds = window.getBounds()
     const display = this.screen.getDisplayMatching(bounds)
     const mainBounds = this.getMainBounds?.() || null
@@ -56,7 +57,7 @@ class PetWindowController {
   }
 
   moveTo(x, y) {
-    if (this.quitting) return null
+    if (this.quitting || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isSafeInteger(Math.round(x)) || !Number.isSafeInteger(Math.round(y))) return null
     const window = this.ensure()
     if (!window || window.isDestroyed()) return null
     const current = window.getBounds()
@@ -148,6 +149,7 @@ class PetWindowController {
   }
 
   ensure() {
+    if (this.quitting) return null
     if (this.window && !this.window.isDestroyed()) return this.window
     const preferences = this.getPreferences()
     this.window = new this.BrowserWindow({
@@ -171,23 +173,38 @@ class PetWindowController {
         sandbox: true
       }
     })
-    this.window.setAlwaysOnTop(preferences.alwaysOnTop !== false, 'floating')
+    const window = this.window
+    window.setAlwaysOnTop(preferences.alwaysOnTop !== false, 'floating')
     const previewAction = !this.appRoot.includes('app.asar') && process.env.HARNESS_PET_PREVIEW_ACTION
     const loadOptions = previewAction ? { query: { rigAction: previewAction } } : undefined
-    this.window.loadFile(path.join(this.appRoot, 'renderer', 'pet', 'index.html'), loadOptions)
-    this.window.webContents.on('did-finish-load', () => {
+    const page = path.join(this.appRoot, 'renderer', 'pet', 'index.html')
+    const expectedUrl = require('node:url').pathToFileURL(page).href
+    const guardNavigation = (event, target) => {
+      try {
+        const url = new URL(target)
+        url.search = ''; url.hash = ''
+        if (url.href === expectedUrl) return
+      } catch {}
+      event.preventDefault()
+    }
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.on('will-navigate', guardNavigation)
+    window.webContents.on('will-redirect', guardNavigation)
+    window.loadFile(page, loadOptions)
+    window.webContents.on('did-finish-load', () => {
+      if (this.quitting || this.window !== window || window.isDestroyed()) return
       this.setInteractive(false)
-      if (this.lastState) this.window.webContents.send('pet:state', this.lastState)
+      if (this.lastState) window.webContents.send('pet:state', this.lastState)
     })
-    this.window.on('move', () => this.schedulePositionSave())
-    this.window.on('close', event => {
-      if (this.quitting) return
+    window.on('move', () => { if (this.window === window && !this.quitting) this.schedulePositionSave() })
+    window.on('close', event => {
+      if (this.quitting || this.window !== window) return
       event.preventDefault()
       this.updatePreferences({ awake: false })
-      this.window.hide()
+      window.hide()
     })
-    this.window.on('closed', () => { this.window = null })
-    return this.window
+    window.on('closed', () => { if (this.window === window) this.window = null })
+    return window
   }
 
   schedulePositionSave() {
@@ -202,8 +219,9 @@ class PetWindowController {
   }
 
   syncPreferences(preferences) {
+    if (this.quitting) return
     if (!preferences.enabled || !preferences.awake) {
-      this.window?.hide()
+      if (this.window && !this.window.isDestroyed()) this.window.hide()
       return
     }
     const window = this.ensure()

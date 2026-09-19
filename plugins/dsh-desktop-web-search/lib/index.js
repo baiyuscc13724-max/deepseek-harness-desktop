@@ -7,7 +7,7 @@ const DEFAULT_FETCH_PROVIDER_ID = 'http'
 const DEFAULT_TIMEOUT_MS = 20_000
 const DEFAULT_MAX_RESULTS = 10
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36 HarnessDesktop/1.0.59'
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36 HarnessDesktop/1.0.63'
 
 const name = 'desktop-public-web-search'
 const inject = ['web']
@@ -18,9 +18,10 @@ const Config = z.object({
 
 function decodeEntities(value) {
   const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
+  const scalar = code => Number.isInteger(code) && code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : '\uFFFD'
   return String(value || '')
-    .replace(/&#(\d+);/gu, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/giu, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/gu, (_, code) => scalar(Number(code)))
+    .replace(/&#x([0-9a-f]+);/giu, (_, code) => scalar(Number.parseInt(code, 16)))
     .replace(/&([a-z]+);/giu, (match, entity) => named[entity.toLowerCase()] ?? match)
 }
 
@@ -128,6 +129,29 @@ function boundedSignal(signal, timeoutMs) {
 async function boundedText(response) {
   const length = Number(response.headers.get('content-length') || 0)
   if (length > MAX_RESPONSE_BYTES) throw new WebError('公开搜索响应过大，已安全拒绝。', 'WEB_PROVIDER_ERROR')
+  if (typeof response.body?.getReader === 'function') {
+    const reader = response.body.getReader()
+    const chunks = []
+    let bytes = 0
+    let complete = false
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) { complete = true; break }
+        bytes += value.byteLength
+        if (bytes > MAX_RESPONSE_BYTES) throw new WebError('公开搜索响应超过大小上限。', 'WEB_PROVIDER_ERROR')
+        chunks.push(value)
+      }
+      const data = new Uint8Array(bytes)
+      let offset = 0
+      for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.byteLength }
+      return new TextDecoder().decode(data)
+    } finally {
+      if (!complete) await reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
+  }
+  // Compatibility for non-streaming provider implementations/test responses.
   const text = await response.text()
   if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) throw new WebError('公开搜索响应超过大小上限。', 'WEB_PROVIDER_ERROR')
   return text
@@ -142,12 +166,15 @@ async function requestText(url, options, signal) {
       headers: { accept: 'text/html,application/rss+xml,application/xml;q=0.9,*/*;q=0.8', 'user-agent': USER_AGENT },
       signal: boundedSignal(signal, options.timeoutMs)
     })
-  } catch (cause) {
-    if (signal?.aborted) throw new WebError('公开搜索已取消。', 'WEB_ABORTED', { cause })
-    throw new WebError(`公开搜索网络请求失败：${String(cause)}`, 'WEB_PROVIDER_ERROR', { cause })
+  } catch {
+    if (signal?.aborted) throw new WebError('公开搜索已取消。', 'WEB_ABORTED')
+    throw new WebError('公开搜索网络请求失败。', 'WEB_PROVIDER_ERROR')
   }
   if (!response.ok) throw new WebError(`公开搜索服务返回 HTTP ${response.status}。`, 'WEB_PROVIDER_ERROR')
-  return boundedText(response)
+  try { return await boundedText(response) } catch {
+    if (signal?.aborted) throw new WebError('公开搜索已取消。', 'WEB_ABORTED')
+    throw new WebError('公开搜索响应读取失败或超过大小上限。', 'WEB_PROVIDER_ERROR')
+  }
 }
 
 const ENGINES = Object.freeze([
@@ -189,8 +216,9 @@ class PublicSearchProvider {
     for (const engine of configured.engines || ENGINES) {
       const url = engine.url(request.query)
       try {
-        const sources = engine.parse(await requestText(url, options, signal), url).slice(0, options.maxResults)
-        if (sources.length > 0) return { sources, truncated: false }
+        const parsed = engine.parse(await requestText(url, options, signal), url)
+        const sources = parsed.slice(0, options.maxResults)
+        if (sources.length > 0) return { sources, truncated: parsed.length > sources.length }
         failures.push(new Error(`${engine.id}: no results`))
       } catch (error) {
         if (signal?.aborted || error?.code === 'WEB_ABORTED') throw error
@@ -235,7 +263,15 @@ class DesktopPublicFetchProvider {
     if (delegate === undefined || delegate.available?.() !== true || typeof delegate.fetch !== 'function') {
       throw new WebError(`公开网页抓取委托 ${this.delegateProviderId} 不可用。`, 'WEB_PROVIDER_CONFIGURED_UNAVAILABLE')
     }
-    return delegate.fetch(request, signal)
+    try {
+      return await delegate.fetch(request, signal)
+    } catch (error) {
+      // Third-party/core transport errors may retain proxy credentials in their
+      // message or cause. Preserve only closed public error codes at this seam.
+      const safeCodes = ['WEB_PROVIDER_ERROR', 'WEB_ABORTED', 'WEB_FETCH_TIMEOUT', 'WEB_BLOCKED_URL', 'WEB_INVALID_URL', 'WEB_REDIRECT_BLOCKED', 'WEB_FETCH_TOO_LARGE', 'WEB_UNSUPPORTED_CONTENT_TYPE']
+      const code = safeCodes.includes(error?.code) ? error.code : 'WEB_PROVIDER_ERROR'
+      throw new WebError('公开网页抓取未完成；请根据错误代码检查地址、网络或请求限制。', code)
+    }
   }
 }
 

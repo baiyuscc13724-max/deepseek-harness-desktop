@@ -136,13 +136,19 @@ public final class MainActivity extends AppCompatActivity {
     private MobileAssetCache mobileAssetCache;
     private PairingProfileStore pairingProfileStore;
     private PairingProfile pairingProfile;
-    private PairingProfile remoteReconnectProfile;
     private String pendingWorkbenchUrl;
     private String activeCacheIdentity = "";
     private MobileAssetCache.OfflineSnapshot activeOfflineSnapshot;
     private int offlineSyncGeneration;
+    private final Object offlineSyncLock = new Object();
+    private ManifestDownload activeManifestDownload;
     private int localGatewayPort;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final RemoteReconnectController remoteReconnectController = new RemoteReconnectController(
+        new RemoteReconnectController.Scheduler() {
+            @Override public void postDelayed(Runnable action, long delayMillis) { mainHandler.postDelayed(action, delayMillis); }
+            @Override public void removeCallbacks(Runnable action) { mainHandler.removeCallbacks(action); }
+        });
     private final MobileUiInjectionPolicy mobileUiInjectionPolicy = new MobileUiInjectionPolicy();
     private final Object rememberedSessionLock = new Object();
     private final ExecutorService offlineSyncExecutor = Executors.newSingleThreadExecutor();
@@ -157,8 +163,6 @@ public final class MainActivity extends AppCompatActivity {
     private boolean workbenchRetryScheduled;
     private int workbenchRetryAttempt;
     private int workbenchReadyGeneration;
-    private int remoteReconnectAttempt;
-    private int nativeReconnectAttempt;
     private int easyTierSocksPort;
     private int wssRelaySocksPort;
     private int nativeP2pSocksPort;
@@ -192,18 +196,6 @@ public final class MainActivity extends AppCompatActivity {
         retryableMainFrameUrl = null;
         webView.stopLoading();
         webView.loadUrl(currentUrl);
-    };
-    private final Runnable remoteReconnect = () -> {
-        PairingProfile profile = remoteReconnectProfile;
-        if (profile != null && profile == pairingProfile) {
-            if (profile.nativeP2p != null && nativeP2pClient != null) startNativeP2p(profile);
-            else if (profile.relay != null && wssRelayClient != null) startWssRelay(profile);
-            else if (profile.easyTier != null && easyTierClient != null) startEasyTier(profile);
-        }
-    };
-    private final Runnable nativeReconnect = () -> {
-        PairingProfile profile = remoteReconnectProfile;
-        if (profile != null && profile == pairingProfile && profile.nativeP2p != null && nativeP2pClient != null) startNativeP2p(profile);
     };
 
     private final ActivityResultLauncher<ScanOptions> scanner = registerForActivityResult(
@@ -788,7 +780,11 @@ public final class MainActivity extends AppCompatActivity {
         }
         pairingError.setText("");
         pairingError.setVisibility(View.GONE);
+        // Control consent belongs to the previous pairing, never the next one.
+        ControlPreferences.setEnabled(this, false);
+        ControlForegroundService.stop(this);
         pairingInProgress = true;
+        remoteReconnectController.stop();
         pairingProfile = nextProfile;
         prepareOfflineState(nextProfile);
         if (hasActiveSystemVpn()) {
@@ -819,12 +815,15 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void prepareOfflineState(PairingProfile profile) {
-        offlineSyncGeneration++;
-        offlineSyncRetryAttempt = 0;
-        mainHandler.removeCallbacks(offlineSyncRetry);
-        activeCacheIdentity = PairingProfileStore.cacheIdentity(profile);
-        activeOfflineSnapshot = mobileAssetCache == null || activeCacheIdentity.isEmpty()
-            ? null : mobileAssetCache.loadLatestSnapshot(activeCacheIdentity);
+        synchronized (offlineSyncLock) {
+            offlineSyncGeneration++;
+            if (activeManifestDownload != null) activeManifestDownload.cancel();
+            offlineSyncRetryAttempt = 0;
+            mainHandler.removeCallbacks(offlineSyncRetry);
+            activeCacheIdentity = PairingProfileStore.cacheIdentity(profile);
+            activeOfflineSnapshot = mobileAssetCache == null || activeCacheIdentity.isEmpty()
+                ? null : mobileAssetCache.loadLatestSnapshot(activeCacheIdentity);
+        }
     }
 
     private void publishOfflineState(WebView target) {
@@ -840,14 +839,16 @@ public final class MainActivity extends AppCompatActivity {
 
     private void requestOfflineSync(PairingProfile profile) {
         if (profile == null || profile != pairingProfile || localGatewayPort <= 0 || activeCacheIdentity.isEmpty()
-            || pairingInProgress || !networkReconnectPolicy.hasUsableNetwork()
+            || isFinishing() || isDestroyed() || pairingInProgress || !networkReconnectPolicy.hasUsableNetwork()
             || !offlineSyncInFlight.compareAndSet(false, true)) return;
         mainHandler.removeCallbacks(offlineSyncRetry);
         final int generation = offlineSyncGeneration;
+        final int gatewayPort = localGatewayPort;
         final String pairingIdentity = activeCacheIdentity;
         final MobileAssetCache.OfflineSnapshot resume = activeOfflineSnapshot;
         offlineSyncExecutor.execute(() -> {
-            HttpURLConnection connection = null;
+            ManifestDownload download = null;
+            String cookie = null;
             boolean refreshSucceeded = false;
             try {
                 String serverIdentity = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -858,61 +859,59 @@ public final class MainActivity extends AppCompatActivity {
                     query.append("&snapshotEpoch=").append(resume.snapshotEpoch);
                     query.append("&cursor=").append(encodeQuery(resume.cursor));
                 }
-                URL endpoint = new URL("http", "127.0.0.1", localGatewayPort, SYNC_MANIFEST_PATH + query);
-                connection = (HttpURLConnection) endpoint.openConnection();
-                connection.setConnectTimeout(8_000);
-                connection.setReadTimeout(45_000);
-                connection.setUseCaches(false);
-                connection.setInstanceFollowRedirects(false);
-                connection.setRequestMethod("GET");
-                connection.setRequestProperty("Accept", "application/json");
-                connection.setRequestProperty("Cache-Control", "no-store");
-                connection.setRequestProperty("Host", PairingProfile.STABLE_HOST + ":" + localGatewayPort);
-                String stableOrigin = profile.stableOrigin(localGatewayPort);
-                String cookie = CookieManager.getInstance().getCookie(stableOrigin);
-                // WebView persists Set-Cookie asynchronously. A missing cookie is a
-                // propagation delay, not proof that the just-claimed pair token was
-                // revoked; retry instead of sending an unauthenticated manifest call.
+                URL endpoint = new URL("http", "127.0.0.1", gatewayPort, SYNC_MANIFEST_PATH + query);
+                cookie = CookieManager.getInstance().getCookie(profile.stableOrigin(gatewayPort));
+                // Cookie propagation is asynchronous: absence is retryable, never a revocation.
                 if (cookie == null || cookie.trim().isEmpty()) return;
-                connection.setRequestProperty("Cookie", cookie);
-                int status = connection.getResponseCode();
-                if (status == 401 || status == 403 || status == 410) {
-                    if (shouldClearPairingFromSyncAuthFailure(
-                        status, cookie, connection.getHeaderField(SYNC_CACHE_ACTION_HEADER))) {
-                        mainHandler.post(() -> clearRevokedPairing(pairingIdentity, generation));
-                    }
-                    return;
+                download = new ManifestDownload(endpoint, PairingProfile.STABLE_HOST + ":" + gatewayPort, cookie, MAX_SYNC_RESPONSE_BYTES);
+                synchronized (offlineSyncLock) {
+                    if (generation != offlineSyncGeneration || profile != pairingProfile
+                        || !pairingIdentity.equals(activeCacheIdentity)) return;
+                    activeManifestDownload = download;
                 }
-                if (status != HttpURLConnection.HTTP_OK
-                    || !"1".equals(connection.getHeaderField("X-Harness-Mobile-Sync-Complete"))) return;
-                JSONObject response;
-                try (InputStream input = connection.getInputStream()) {
-                    response = new JSONObject(readBoundedUtf8(input, MAX_SYNC_RESPONSE_BYTES));
-                }
-                if (response.optBoolean("protected", false) || !response.optBoolean("complete", false)) return;
+                JSONObject response = new JSONObject(new String(download.download(), StandardCharsets.UTF_8));
                 String refreshedIdentity = response.optString("cacheIdentity", "");
-                if (!isServerCacheIdentity(refreshedIdentity)
-                    || !mobileAssetCache.applySyncResponse(pairingIdentity, response)) return;
-                MobileAssetCache.OfflineSnapshot refreshed = mobileAssetCache.loadLatestSnapshot(pairingIdentity);
-                if (refreshed == null) return;
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putString(SAVED_SYNC_IDENTITY_PREFIX + pairingIdentity, refreshedIdentity).apply();
-                refreshSucceeded = true;
+                if (!isServerCacheIdentity(refreshedIdentity)) return;
+                final MobileAssetCache.OfflineSnapshot refreshed;
+                // Full verification, merging, hashing and fsync occur on this background worker.
+                // Only the prepared rename is inside the same gate used by profile switch/revoke.
+                try (MobileAssetCache.PreparedSync prepared = mobileAssetCache.prepareSyncResponse(pairingIdentity, response)) {
+                    if (prepared == null) return;
+                    synchronized (offlineSyncLock) {
+                        if (generation != offlineSyncGeneration || profile != pairingProfile
+                            || !pairingIdentity.equals(activeCacheIdentity) || download.isCancelled()) return;
+                        refreshed = mobileAssetCache.commitPreparedSync(pairingIdentity, prepared);
+                        if (refreshed == null) return;
+                        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                            .putString(SAVED_SYNC_IDENTITY_PREFIX + pairingIdentity, refreshedIdentity).apply();
+                        refreshSucceeded = true;
+                    }
+                }
                 mainHandler.post(() -> {
                     if (generation != offlineSyncGeneration || profile != pairingProfile
                         || !pairingIdentity.equals(activeCacheIdentity)) return;
                     activeOfflineSnapshot = refreshed;
                     publishOfflineState(webView);
                 });
+            } catch (ManifestDownload.AuthException failure) {
+                if (shouldClearPairingFromSyncAuthFailure(failure.status, cookie, failure.cacheAction)) {
+                    mainHandler.post(() -> clearRevokedPairing(pairingIdentity, generation));
+                }
             } catch (Exception ignored) {
                 // A failed/incomplete refresh never replaces the last complete snapshot.
             } finally {
-                if (connection != null) connection.disconnect();
+                synchronized (offlineSyncLock) {
+                    if (activeManifestDownload == download) activeManifestDownload = null;
+                }
                 offlineSyncInFlight.set(false);
                 final boolean completed = refreshSucceeded;
                 mainHandler.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
                     if (generation != offlineSyncGeneration || profile != pairingProfile
-                        || !pairingIdentity.equals(activeCacheIdentity)) return;
+                        || !pairingIdentity.equals(activeCacheIdentity)) {
+                        requestOfflineSync(pairingProfile); // A cancelled old flight must not starve the new profile.
+                        return;
+                    }
                     if (completed) {
                         offlineSyncRetryAttempt = 0;
                         mainHandler.removeCallbacks(offlineSyncRetry);
@@ -1000,17 +999,12 @@ public final class MainActivity extends AppCompatActivity {
             easyTierSocksPort = 0;
             wssRelaySocksPort = 0;
             nativeP2pSocksPort = 0;
-            nativeReconnectAttempt = 0;
+            remoteReconnectController.stop();
             routeStatus = localNetworkAvailable ? "局域网候选线路正在验证" : "尚无已验证线路";
             easyTierClient.stop();
             wssRelayClient.stop();
             nativeP2pClient.stop();
-            mainHandler.removeCallbacks(nativeReconnect);
-            if (profile.nativeP2p == null && profile.relay == null && profile.easyTier == null) {
-                remoteReconnectProfile = null;
-                mainHandler.removeCallbacks(remoteReconnect);
-            } else {
-                remoteReconnectProfile = profile;
+            if (profile.nativeP2p != null || profile.relay != null || profile.easyTier != null) {
                 if (networkReconnectPolicy.hasUsableNetwork()) {
                     if (profile.nativeP2p != null) startNativeP2p(profile);
                     else if (profile.relay != null) startWssRelay(profile);
@@ -1074,8 +1068,7 @@ public final class MainActivity extends AppCompatActivity {
         localProxy.resetRoutePreference(transition.generation);
         if (!transition.usable) {
             updateRoutesBeforeRemoteReady(profile);
-            mainHandler.removeCallbacks(remoteReconnect);
-            mainHandler.removeCallbacks(nativeReconnect);
+            remoteReconnectController.stop();
             if (easyTierClient != null) easyTierClient.stop();
             if (wssRelayClient != null) wssRelayClient.stop();
             if (nativeP2pClient != null) nativeP2pClient.stop();
@@ -1104,9 +1097,7 @@ public final class MainActivity extends AppCompatActivity {
             : getString(R.string.network_switched_local_status));
         retryableMainFrameUrl = null;
         if (hasRemoteRoute) {
-            remoteReconnectProfile = profile;
-            remoteReconnectAttempt = 0;
-            nativeReconnectAttempt = 0;
+            remoteReconnectController.stop();
             if (profile.nativeP2p != null) startNativeP2p(profile);
             else if (profile.relay != null) startWssRelay(profile);
             else if (profile.easyTier != null) startEasyTier(profile);
@@ -1117,25 +1108,20 @@ public final class MainActivity extends AppCompatActivity {
 
     private void restartRemoteTransportsAfterNetworkSwitch(PairingProfile profile) {
         updateRoutesBeforeRemoteReady(profile);
-        mainHandler.removeCallbacks(remoteReconnect);
-        mainHandler.removeCallbacks(nativeReconnect);
+        remoteReconnectController.stop();
         if (easyTierClient != null) easyTierClient.stop();
         if (wssRelayClient != null) wssRelayClient.stop();
         if (nativeP2pClient != null) nativeP2pClient.stop();
         easyTierSocksPort = 0;
         wssRelaySocksPort = 0;
         nativeP2pSocksPort = 0;
-        remoteReconnectAttempt = 0;
-        nativeReconnectAttempt = 0;
 
         if (profile.nativeP2p != null || profile.relay != null || profile.easyTier != null) {
-            remoteReconnectProfile = profile;
             routeStatus = "网络切换已稳定；正在新网络上重连 P2P/WSS";
             if (profile.nativeP2p != null) startNativeP2p(profile);
             else if (profile.relay != null) startWssRelay(profile);
             else startEasyTier(profile);
         } else {
-            remoteReconnectProfile = null;
             routeStatus = "网络切换已稳定；正在验证局域网线路";
             retryWorkbenchNow();
         }
@@ -1193,25 +1179,28 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void disconnect() {
-        String previousCacheIdentity = activeCacheIdentity;
-        offlineSyncGeneration++;
-        offlineSyncRetryAttempt = 0;
-        mainHandler.removeCallbacks(offlineSyncRetry);
-        if (mobileAssetCache != null && !previousCacheIdentity.isEmpty()) {
-            mobileAssetCache.clearOfflineSnapshots(previousCacheIdentity);
+        ControlPreferences.setEnabled(this, false);
+        ControlForegroundService.stop(this);
+        synchronized (offlineSyncLock) {
+            String previousCacheIdentity = activeCacheIdentity;
+            offlineSyncGeneration++;
+            if (activeManifestDownload != null) activeManifestDownload.cancel();
+            offlineSyncRetryAttempt = 0;
+            mainHandler.removeCallbacks(offlineSyncRetry);
+            if (mobileAssetCache != null && !previousCacheIdentity.isEmpty()) {
+                mobileAssetCache.clearOfflineSnapshots(previousCacheIdentity);
+            }
+            android.content.SharedPreferences.Editor preferences = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .remove(SAVED_ORIGIN).remove(SAVED_SESSION);
+            if (!previousCacheIdentity.isEmpty()) preferences.remove(SAVED_SYNC_IDENTITY_PREFIX + previousCacheIdentity);
+            preferences.apply();
+            activeCacheIdentity = "";
+            activeOfflineSnapshot = null;
         }
-        android.content.SharedPreferences.Editor preferences = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .remove(SAVED_ORIGIN).remove(SAVED_SESSION);
-        if (!previousCacheIdentity.isEmpty()) preferences.remove(SAVED_SYNC_IDENTITY_PREFIX + previousCacheIdentity);
-        preferences.apply();
-        activeCacheIdentity = "";
-        activeOfflineSnapshot = null;
         pairingInProgress = false;
         if (pairingProfileStore != null) pairingProfileStore.clear();
         pairingProfile = null;
-        remoteReconnectProfile = null;
-        mainHandler.removeCallbacks(remoteReconnect);
-        mainHandler.removeCallbacks(nativeReconnect);
+        remoteReconnectController.stop();
         if (localProxy != null) localProxy.updateRoutes(Collections.emptyList());
         if (easyTierClient != null) easyTierClient.stop();
         if (wssRelayClient != null) wssRelayClient.stop();
@@ -1318,17 +1307,23 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
+    private boolean canApplyRemote(PairingProfile profile) {
+        return pairingProfile == profile && localProxy != null && !isFinishing() && !isDestroyed();
+    }
+
     private void startNativeP2p(PairingProfile profile) {
-        mainHandler.removeCallbacks(nativeReconnect);
-        if (profile.nativeP2p == null) return;
+        remoteReconnectController.start(profile, RemoteReconnectController.Channel.NATIVE, token -> connectNativeP2p(profile, token));
+    }
+
+    private void connectNativeP2p(PairingProfile profile, RemoteReconnectController.Token token) {
+        if (!canApplyRemote(profile) || profile.nativeP2p == null) return;
         setConnectionStatus("正在协商应用内 P2P 直连；WSS 备用线路同时保留…");
         nativeP2pClient.start(profile.nativeP2p, new NativeP2pClient.Listener() {
             @Override public void onRelayReady(int socksPort) {
-                if (pairingProfile != profile || localProxy == null) return;
-                wssRelaySocksPort = socksPort;
-                nativeReconnectAttempt = 0;
-                applyReadyRoutes(profile);
-                runOnUiThread(() -> {
+                remoteReconnectController.ready(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    wssRelaySocksPort = socksPort;
+                    applyReadyRoutes(profile);
                     routeStatus = "WSS/443 备用线路已实际连接；P2P 仍在协商";
                     setConnectionStatus("WSS/443 备用线路已连接，正在继续尝试 P2P 直连…");
                     openPendingWorkbenchOrRetry();
@@ -1336,15 +1331,14 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onDirectReady(int socksPort) {
-                if (pairingProfile != profile || localProxy == null) return;
-                nativeP2pSocksPort = socksPort;
-                nativeReconnectAttempt = 0;
-                // Drop an old fallback preference before restoring all ready routes.
-                localProxy.updateRoutes(readyRoutes(profile).stream()
-                    .filter(route -> !"wss-relay".equals(route.id) && !"easytier".equals(route.id))
-                    .collect(Collectors.toList()));
-                applyReadyRoutes(profile);
-                runOnUiThread(() -> {
+                remoteReconnectController.ready(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    nativeP2pSocksPort = socksPort;
+                    // Drop an old fallback preference before restoring all ready routes.
+                    localProxy.updateRoutes(readyRoutes(profile).stream()
+                        .filter(route -> !"wss-relay".equals(route.id) && !"easytier".equals(route.id))
+                        .collect(Collectors.toList()));
+                    applyReadyRoutes(profile);
                     routeStatus = "P2P DataChannel 已实际打开（WSS 备用线路已就绪）";
                     setConnectionStatus("P2P 直连 DataChannel 已打开，正在打开工作台…");
                     openPendingWorkbenchOrRetry();
@@ -1352,10 +1346,10 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onDirectFailure(String message) {
-                if (pairingProfile != profile) return;
-                nativeP2pSocksPort = 0;
-                applyReadyRoutes(profile);
-                runOnUiThread(() -> {
+                remoteReconnectController.post(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    nativeP2pSocksPort = 0;
+                    applyReadyRoutes(profile);
                     routeStatus = wssRelaySocksPort > 0
                         ? "P2P 未接通；当前实际可用线路为 WSS/443"
                         : "P2P 未接通；尚无已验证远程线路";
@@ -1366,32 +1360,31 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onFailure(String message) {
-                if (pairingProfile != profile) return;
-                nativeP2pSocksPort = 0;
-                wssRelaySocksPort = 0;
-                applyReadyRoutes(profile);
-                runOnUiThread(() -> {
+                remoteReconnectController.failed(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    nativeP2pSocksPort = 0;
+                    wssRelaySocksPort = 0;
+                    applyReadyRoutes(profile);
                     routeStatus = "P2P/WSS 均尚未验证接通";
                     setConnectionStatus("P2P/WSS 线路暂未接通，正在自动重试；局域网仍可用…");
-                    long delay = Math.min(30_000L, 5_000L + nativeReconnectAttempt * 5_000L);
-                    nativeReconnectAttempt = Math.min(nativeReconnectAttempt + 1, 6);
-                    mainHandler.removeCallbacks(nativeReconnect);
-                    mainHandler.postDelayed(nativeReconnect, delay);
                 });
             }
         });
     }
 
     private void startWssRelay(PairingProfile profile) {
-        mainHandler.removeCallbacks(remoteReconnect);
+        remoteReconnectController.start(profile, RemoteReconnectController.Channel.REMOTE, token -> connectWssRelay(profile, token));
+    }
+
+    private void connectWssRelay(PairingProfile profile, RemoteReconnectController.Token token) {
+        if (!canApplyRemote(profile) || profile.relay == null) return;
         setConnectionStatus(getString(R.string.wss_connecting_status));
         wssRelayClient.start(profile.relay, new WssRelayClient.Listener() {
             @Override public void onReady(int socksPort) {
-                if (pairingProfile != profile || localProxy == null) return;
-                wssRelaySocksPort = socksPort;
-                applyReadyRoutes(profile);
-                remoteReconnectAttempt = 0;
-                runOnUiThread(() -> {
+                remoteReconnectController.ready(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    wssRelaySocksPort = socksPort;
+                    applyReadyRoutes(profile);
                     routeStatus = nativeP2pSocksPort > 0
                         ? "P2P DataChannel 已实际打开（WSS 备用线路已就绪）"
                         : "WSS/443 备用线路已实际连接；P2P 仍在协商";
@@ -1403,33 +1396,32 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onFailure(String message) {
-                if (pairingProfile != profile) return;
-                wssRelaySocksPort = 0;
-                applyReadyRoutes(profile);
-                runOnUiThread(() -> {
+                remoteReconnectController.failed(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    wssRelaySocksPort = 0;
+                    applyReadyRoutes(profile);
                     routeStatus = nativeP2pSocksPort > 0
                         ? "P2P DataChannel 已实际打开；WSS 备用线路暂不可用"
                         : "WSS 与 P2P 均尚未验证接通";
                     setConnectionStatus(getString(R.string.wss_failed_status));
-                    long delay = Math.min(15_000L, 3_000L + remoteReconnectAttempt * 2_000L);
-                    remoteReconnectAttempt = Math.min(remoteReconnectAttempt + 1, 6);
-                    mainHandler.removeCallbacks(remoteReconnect);
-                    mainHandler.postDelayed(remoteReconnect, delay);
                 });
             }
         });
     }
 
     private void startEasyTier(PairingProfile profile) {
-        mainHandler.removeCallbacks(remoteReconnect);
+        remoteReconnectController.start(profile, RemoteReconnectController.Channel.REMOTE, token -> connectEasyTier(profile, token));
+    }
+
+    private void connectEasyTier(PairingProfile profile, RemoteReconnectController.Token token) {
+        if (!canApplyRemote(profile) || profile.easyTier == null) return;
         setConnectionStatus(getString(R.string.easytier_connecting_status));
         easyTierClient.start(profile, new EasyTierClient.Listener() {
             @Override public void onReady(int socksPort) {
-                if (pairingProfile != profile || localProxy == null) return;
-                easyTierSocksPort = socksPort;
-                applyReadyRoutes(profile);
-                remoteReconnectAttempt = 0;
-                runOnUiThread(() -> {
+                remoteReconnectController.ready(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    easyTierSocksPort = socksPort;
+                    applyReadyRoutes(profile);
                     routeStatus = "EasyTier 远程线路已实际连接";
                     setConnectionStatus(getString(R.string.easytier_ready_status));
                     openPendingWorkbenchOrRetry();
@@ -1437,16 +1429,12 @@ public final class MainActivity extends AppCompatActivity {
             }
 
             @Override public void onError(String message) {
-                if (pairingProfile != profile) return;
-                easyTierSocksPort = 0;
-                applyReadyRoutes(profile);
-                runOnUiThread(() -> {
+                remoteReconnectController.failed(token, () -> {
+                    if (!canApplyRemote(profile)) return;
+                    easyTierSocksPort = 0;
+                    applyReadyRoutes(profile);
                     routeStatus = "EasyTier 远程线路尚未接通";
                     setConnectionStatus(getString(R.string.easytier_failed_status));
-                    long delay = Math.min(15_000L, 3_000L + remoteReconnectAttempt * 2_000L);
-                    remoteReconnectAttempt = Math.min(remoteReconnectAttempt + 1, 6);
-                    mainHandler.removeCallbacks(remoteReconnect);
-                    mainHandler.postDelayed(remoteReconnect, delay);
                 });
             }
         });
@@ -1903,6 +1891,10 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        synchronized (offlineSyncLock) {
+            offlineSyncGeneration++;
+            if (activeManifestDownload != null) activeManifestDownload.cancel();
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && api33BackDispatcher != null) {
             api33BackDispatcher.unregister();
         }
@@ -1915,9 +1907,7 @@ public final class MainActivity extends AppCompatActivity {
         ControlForegroundService.stop(this);
         cancelWorkbenchRetry(true);
         workbenchReadyGeneration++;
-        remoteReconnectProfile = null;
-        mainHandler.removeCallbacks(remoteReconnect);
-        mainHandler.removeCallbacks(nativeReconnect);
+        remoteReconnectController.stop();
         mainHandler.removeCallbacks(offlineSyncRetry);
         unregisterNetworkMonitoring();
         webView.stopLoading();

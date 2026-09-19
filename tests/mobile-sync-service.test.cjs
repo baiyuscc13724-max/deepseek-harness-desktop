@@ -11,6 +11,124 @@ const { BROWSER_FORBIDDEN_PORTS, MOBILE_DOCUMENT_MAX_BYTES, MOBILE_DOCUMENT_UPLO
 const { LEGACY_STATE_SCHEMA_VERSION, MobileSyncStore } = require('../electron/store/mobile-sync-store.cjs')
 const electronMainSource = readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
 
+function manifestProbe(overrides = {}) {
+  const seen = { http: [], ws: [], auth: [] }
+  const cookie = 'dsh-auth-controlled=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl'
+  class WorkspaceSocket extends EventEmitter {
+    constructor(url, options) { super(); this.readyState = 1; seen.ws.push({ url, options }); queueMicrotask(() => this.emit('open')) }
+    send(raw) { const frame = JSON.parse(raw); queueMicrotask(() => this.emit('message', JSON.stringify({ type: 'item', streamId: frame.streamId, value: { type: 'baseline', value: { items: [] } } }))) }
+    close() { this.readyState = 3; this.emit('close') }
+    terminate() { this.close() }
+  }
+  const service = new MobileSyncService({
+    store: { readSyncChanges: () => ({}), readSyncReadMessages: () => [], commitSyncManifest: () => ({ complete: true, applied: true }) },
+    getRuntimeTarget: () => 'http://127.0.0.1:1',
+    cookieProvider: async (origin, options) => { seen.auth.push({ origin, options }); return cookie },
+    WebSocketImpl: WorkspaceSocket,
+    fetchImpl: async (url, options) => {
+      seen.http.push({ url: String(url), options })
+      const { rpcId } = JSON.parse(options.body)
+      return new Response(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: { items: [] } } }))
+    },
+    ...overrides
+  })
+  return { service, seen, cookie }
+}
+
+test('manifest internal requests carry controlled runtime auth without returning credentials', async () => {
+  const { service, seen, cookie } = manifestProbe()
+  const result = await service.refreshWorkspaceManifest()
+  assert.equal(result.complete, true)
+  assert.equal(seen.http[0].options.headers.Cookie, cookie)
+  assert.equal(seen.ws[0].options.headers.Cookie, cookie)
+  assert.ok(seen.auth.length >= 1)
+  assert.ok(seen.auth.every(item => item.origin === 'http://127.0.0.1:1' && item.options.force === false))
+  assert.doesNotMatch(JSON.stringify(result), /dsh-auth|c2lnbmVk/)
+})
+
+test('manifest auth waits cancel without dispatch after late credentials resolve', async () => {
+  let resolveCookie
+  const controller = new AbortController()
+  const { service, seen } = manifestProbe({ cookieProvider: () => new Promise(resolve => { resolveCookie = resolve }) })
+  const pending = service.refreshWorkspaceManifest({ signal: controller.signal })
+  await new Promise(setImmediate)
+  controller.abort(new Error('synthetic cancel'))
+  const result = await pending
+  assert.equal(result.protected, true)
+  resolveCookie?.('dsh-auth-controlled=v1.c2lnbmVkLWJvZHk.c2lnbmF0dXJl')
+  await new Promise(setImmediate)
+  assert.equal(seen.http.length, 0)
+  assert.equal(seen.ws.length, 0)
+})
+
+test('manifest auth wait is bounded by the existing refresh timeout', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { service, seen } = manifestProbe({ cookieProvider: () => new Promise(() => {}) })
+  const pending = service.refreshWorkspaceManifest()
+  await Promise.resolve()
+  t.mock.timers.tick(8000)
+  assert.equal((await pending).protected, true)
+  assert.equal(seen.http.length + seen.ws.length, 0)
+})
+
+test('manifest 401 is not replayed and never exposes upstream private errors', async () => {
+  let count = 0
+  const { service } = manifestProbe({ fetchImpl: async () => { count++; return new Response('private upstream details', { status: 401 }) } })
+  const result = await service.refreshWorkspaceManifest()
+  assert.equal(count, 1)
+  assert.equal(result.protected, true)
+  assert.doesNotMatch(JSON.stringify(result), /private upstream|dsh-auth/)
+})
+
+test('manifest auth cancellation and rejected destinations never invoke network', async () => {
+  for (const mode of ['cancelled', 'untrusted', 'provider-failed']) {
+    const controller = new AbortController()
+    if (mode === 'cancelled') controller.abort()
+    let authCalls = 0
+    const { service, seen } = manifestProbe({
+      getRuntimeTarget: () => mode === 'untrusted' ? 'https://example.invalid' : 'http://127.0.0.1:1',
+      cookieProvider: () => { authCalls++; throw new Error('private provider error') }
+    })
+    const result = await service.refreshWorkspaceManifest({ signal: controller.signal })
+    assert.equal(result.protected, true)
+    assert.equal(seen.http.length + seen.ws.length, 0)
+    assert.equal(authCalls, mode === 'provider-failed' ? 1 : 0)
+    assert.doesNotMatch(JSON.stringify(result), /private provider/)
+  }
+})
+
+test('manifest preserves socket-local teardown across 50 authenticated HTTP failures', async () => {
+  let created = 0
+  let closed = 0
+  class ConnectingSocket extends EventEmitter {
+    constructor(_url, options) {
+      super(); this.readyState = 0; created++
+      assert.match(options.headers.Cookie, /^dsh-auth-controlled=/)
+      assert.equal(options.followRedirects, false)
+    }
+    terminate() {
+      if (this.readyState === 3) return
+      this.readyState = 3; closed++
+      queueMicrotask(() => { this.emit('error', new Error('synthetic asynchronous teardown')); this.emit('close') })
+    }
+    close() { this.terminate() }
+  }
+  let requests = 0
+  const { service } = manifestProbe({
+    WebSocketImpl: ConnectingSocket,
+    fetchImpl: async (_url, options) => {
+      requests++
+      assert.equal(options.redirect, 'error')
+      return new Response('', { status: 401 })
+    }
+  })
+  for (let i = 0; i < 50; i++) {
+    assert.equal((await service.refreshWorkspaceManifest()).protected, true)
+    await new Promise(setImmediate)
+  }
+  assert.deepEqual({ created, closed, requests }, { created: 50, closed: 50, requests: 50 })
+})
+
 async function createRuntime(label, { websocketSetCookies = [] } = {}) {
   const upgradeHeaders = []
   const requests = []

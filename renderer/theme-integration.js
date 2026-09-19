@@ -1051,6 +1051,7 @@
 
   function createSkinPickerHost({ overlay, trigger, closeSettingsDialog }) {
     let openedFromSettings = false
+    let generation = 0
 
     const hide = () => {
       overlay.classList.add('hidden')
@@ -1060,17 +1061,22 @@
 
     return {
       open({ fromSettings = false } = {}) {
+        generation += 1
         openedFromSettings = fromSettings === true
         overlay.classList.remove('hidden')
         overlay.setAttribute('aria-hidden', 'false')
       },
       close() {
+        generation += 1
         openedFromSettings = false
         hide()
       },
       async apply(operation, applied = () => true) {
+        const requestGeneration = ++generation
         const value = await operation()
-        if (!applied(value)) return value
+        // An earlier save finishing after close/reopen must not close the new
+        // picker or its settings parent and steal focus from the newer action.
+        if (requestGeneration !== generation || !applied(value)) return value
         const shouldCloseSettings = openedFromSettings
         openedFromSettings = false
         hide()

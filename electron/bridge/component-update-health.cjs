@@ -24,6 +24,15 @@ async function rollbackUnhealthyActivation(store, error) {
 async function prepareComponentActivation({ store, accessImpl = access }) {
   const state = await store.get()
   const pointer = await store.pointer()
+  // Pointer and state are separate atomic files. A crash between their writes
+  // leaves applying/rollback-required durable: never execute that pointer.
+  if (state.phase === 'applying') {
+    return rollbackUnhealthyActivation(store, new Error('组件指针发布未完成，已恢复上一健康版本。'))
+  }
+  if (state.phase === 'rollback-required') {
+    const recovered = await store.rollback()
+    return { action: 'rolled-back', state: recovered, pointer: await store.pointer() }
+  }
   if (state.phase !== 'awaiting-health') return { action: 'use-current', state, pointer }
   if (!samePointer(state.active, pointer)) {
     return rollbackUnhealthyActivation(store, new Error('活动组件指针与更新状态不一致。'))

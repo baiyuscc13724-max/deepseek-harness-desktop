@@ -88,6 +88,14 @@ public final class ControlForegroundService extends Service {
         }
     }
 
+    static boolean isCommandActive(String commandId) {
+        ControlForegroundService service = instance;
+        if (service == null) return false;
+        ControlCommand command = service.current;
+        return ControlCommand.matchesActive(command == null ? null : command.id, commandId,
+            ControlPreferences.isEnabled(service), service.cancelled);
+    }
+
     static void completeExternal(ControlResult result) {
         ControlForegroundService service = instance;
         if (service != null) service.finish(result, 0);
@@ -171,8 +179,9 @@ public final class ControlForegroundService extends Service {
                 postStatus();
                 lastStatusAt = now;
             }
-            if (current != null) return;
-            JSONObject response = request("GET", "/__harness_mobile__/control/poll?protocolVersion=" + ControlCommand.PROTOCOL_VERSION, null, 64 * 1024);
+            // Confirmation/file/capture waits still need to receive stop/cancel.
+            boolean directivesOnly = current != null;
+            JSONObject response = request("GET", "/__harness_mobile__/control/poll?protocolVersion=" + ControlCommand.PROTOCOL_VERSION + "&directivesOnly=" + directivesOnly, null, 64 * 1024);
             JSONObject commandValue = response.optJSONObject("command");
             if (commandValue == null) return;
             ControlCommand command = ControlCommand.parse(commandValue);
@@ -189,13 +198,27 @@ public final class ControlForegroundService extends Service {
                 if (current != null && command.payload.optString("commandId").equals(current.id)) cancelCurrent("COMMAND_CANCELLED", "命令已取消。 ");
                 return;
             }
-            current = command;
-            cancelled = false;
+            boolean admitted;
+            synchronized (this) {
+                admitted = !directivesOnly && current == null && ControlPreferences.isEnabled(this);
+                if (admitted) {
+                    current = command;
+                    cancelled = false;
+                }
+            }
+            if (!admitted) {
+                // An older desktop may ignore directivesOnly. Never replace an
+                // active command; do not hold the cancellation lock during I/O.
+                request("POST", "/__harness_mobile__/control/result", ControlResult.fail(command.id, "NOT_DISPATCHED_BUSY_OR_STOPPED", "手机正在执行其他命令或已停止；未执行本命令。 ").toJson(), 128 * 1024);
+                return;
+            }
             phase = "executing";
             detail = actionLabel(command.action);
             updateNotification(detail + " · 可随时停止");
             postStatus();
-            timeoutTask = () -> finish(ControlResult.fail(command.id, "TIMEOUT", "手机操作超时，已取消。 "), 0);
+            timeoutTask = () -> {
+                if (isCommandActive(command.id)) cancelCurrent("TIMEOUT", "手机操作已超时，停止后续执行；已派发操作的最终状态可能未知。 ");
+            };
             mainHandler.postDelayed(timeoutTask, command.timeoutMs);
             execute(command, 0);
         } catch (Exception error) {
@@ -229,6 +252,7 @@ public final class ControlForegroundService extends Service {
     private void executeApproved(ControlCommand command, int attempt) {
         if (cancelled || current != command) return;
         mainHandler.post(() -> {
+            if (!isCommandActive(command.id)) return;
             try {
                 switch (command.action) {
                     case "observe" -> executeObserve(command, attempt);
@@ -380,6 +404,7 @@ public final class ControlForegroundService extends Service {
             detail = "已打开存储设置，正在查找“清除缓存”";
             updateNotification(detail);
             mainHandler.postDelayed(() -> {
+                if (!isCommandActive(command.id)) return;
                 HarnessControlAccessibilityService service = HarnessControlAccessibilityService.get();
                 if (service != null && service.clickClearCacheButton()) {
                     finish(ControlResult.ok(command.id, "已点击系统“清除缓存”按钮；未触碰“清除数据”。", new JSONObject()), attempt);
@@ -424,6 +449,10 @@ public final class ControlForegroundService extends Service {
 
     private synchronized void cancelCurrent(String code, String message) {
         cancelled = true;
+        mainHandler.post(() -> {
+            HarnessControlAccessibilityService service = HarnessControlAccessibilityService.get();
+            if (service != null) service.cancelConfirmation();
+        });
         ControlCommand command = current;
         if (command != null) finish(ControlResult.fail(command.id, code, message), command.retryLimit);
         current = null;

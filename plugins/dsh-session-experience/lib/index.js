@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { lstat, mkdir, open, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
+import { link, lstat, mkdir, mkdtemp, open, readdir, realpath, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 const name = 'session-experience'
@@ -55,8 +55,9 @@ function rootAgent(ctx, sessionId) {
 }
 
 function safeFileName(value) {
-  const normalized = String(value || '').normalize('NFC').replace(/[\\/\u0000-\u001f\u007f]/gu, '_').replace(/^\.+/u, '').trim().slice(0, 160)
+  let normalized = String(value || '').normalize('NFC').replace(/[<>:"\\/|?*\u0000-\u001f\u007f]/gu, '_').replace(/^\.+/u, '').trim().slice(0, 160).replace(/[. ]+$/u, '')
   if (!normalized || normalized === '.' || normalized === '..') throw new TypeError('invalid file name')
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(normalized)) normalized = `_${normalized}`
   return normalized
 }
 
@@ -275,35 +276,35 @@ function collisionName(fileName, sequence) {
 async function saveUpload(cwd, fileName, content) {
   const { root, directory } = await uploadRoot(cwd)
   const safe = safeFileName(fileName)
-  for (let sequence = 0; sequence < 10_000; sequence += 1) {
-    const candidate = path.join(directory, collisionName(safe, sequence))
-    if (!inside(directory, candidate)) throw new Error('invalid upload path')
-    const temporary = `${candidate}.${process.pid}.${Date.now()}.tmp`
-    let handle
-    try {
-      handle = await open(temporary, 'wx', 0o600)
-      await handle.writeFile(content)
-      await handle.sync()
-      await handle.close()
-      handle = null
-      try {
-        await lstat(candidate)
-        await rm(temporary, { force: true })
-        continue
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error
+  // Stage outside the visible file list, then publish with an atomic no-replace
+  // link. A check followed by rename can overwrite another concurrent upload.
+  const staging = await mkdtemp(path.join(directory, '.upload-'))
+  const temporary = path.join(staging, 'payload')
+  let handle
+  try {
+    handle = await open(temporary, 'wx', 0o600)
+    await handle.writeFile(content)
+    await handle.sync()
+    await handle.close()
+    handle = null
+    for (let sequence = 0; sequence < 10_000; sequence += 1) {
+      const candidate = path.join(directory, collisionName(safe, sequence))
+      if (!inside(directory, candidate)) throw new Error('invalid upload path')
+      try { await link(temporary, candidate) } catch (error) {
+        if (error.code === 'EEXIST') continue
+        if (['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV'].includes(error.code)) {
+          throw Object.assign(new Error('当前工作区不支持安全发布附件（硬链接不可用）。原文件未被覆盖。请改用支持硬链接且有写入权限的本地工作区（Windows 建议 NTFS）后重试。'), { code: 'UPLOAD_ATOMIC_PUBLISH_UNAVAILABLE', status: 409 })
+        }
+        throw error
       }
-      await rename(temporary, candidate)
       const relativePath = path.relative(root, candidate).split(path.sep).join('/')
       return { path: relativePath, name: path.basename(candidate), size: content.length }
-    } catch (error) {
-      await handle?.close().catch(() => {})
-      await rm(temporary, { force: true }).catch(() => {})
-      if (error.code === 'EEXIST') continue
-      throw error
     }
+    throw new Error('too many files with the same name')
+  } finally {
+    await handle?.close().catch(() => {})
+    await rm(staging, { recursive: true, force: true }).catch(() => {})
   }
-  throw new Error('too many files with the same name')
 }
 
 async function listUploads(cwd) {

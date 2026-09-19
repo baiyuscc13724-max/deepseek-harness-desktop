@@ -56,22 +56,46 @@ function socketBufferedBytes(socket) {
   return Number.isFinite(value) && value > 0 ? value : 0
 }
 
-function closeBackpressured(socket, reason) {
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) socket.close(4429, reason)
+const HEARTBEAT_INTERVAL_MS = 20_000
+const PONG_TIMEOUT_MS = 10_000
+const CLOSE_TIMEOUT_MS = 1_000
+const closingSockets = new WeakMap()
+
+function closeBounded(socket, code, reason) {
+  if (!socket || socket.readyState === WebSocket.CLOSED) return
+  if (!closingSockets.has(socket) && typeof socket.terminate === 'function') {
+    const timer = setTimeout(() => { closingSockets.delete(socket); socket.terminate() }, CLOSE_TIMEOUT_MS)
+    timer.unref?.()
+    closingSockets.set(socket, timer)
+    socket.once?.('close', () => { clearTimeout(timer); closingSockets.delete(socket) })
+  }
+  if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+    try { socket.close(code, reason) } catch { socket.terminate?.() }
+  }
 }
 
-function sendBounded({ clients, destination, source, data, binary = false, maxConnectionBufferedBytes = MAX_CONNECTION_BUFFERED_BYTES, maxGlobalBufferedBytes = MAX_GLOBAL_BUFFERED_BYTES }) {
+function closeBackpressured(socket, reason) {
+  closeBounded(socket, 4429, reason)
+}
+
+function sendBounded({ clients, destination, source, data, binary = false, closeSourceOnFailure = true, maxConnectionBufferedBytes = MAX_CONNECTION_BUFFERED_BYTES, maxGlobalBufferedBytes = MAX_GLOBAL_BUFFERED_BYTES }) {
   if (!destination || destination.readyState !== WebSocket.OPEN) return false
   const bytes = Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data))
   let globalBufferedBytes = 0
   for (const socket of clients) globalBufferedBytes += socketBufferedBytes(socket)
   if (socketBufferedBytes(destination) + bytes > maxConnectionBufferedBytes || globalBufferedBytes + bytes > maxGlobalBufferedBytes) {
     closeBackpressured(destination, 'outbound backpressure exceeded')
-    if (source && source !== destination) closeBackpressured(source, 'relay destination backpressure exceeded')
+    if (closeSourceOnFailure && source && source !== destination) closeBackpressured(source, 'relay destination backpressure exceeded')
     return false
   }
-  destination.send(data, binary ? { binary: true } : undefined)
-  return true
+  const failed = () => {
+    closeBounded(destination, 1011, 'relay write failed')
+    if (closeSourceOnFailure && source && source !== destination) closeBounded(source, 1011, 'relay destination write failed')
+  }
+  try {
+    destination.send(data, binary ? { binary: true } : undefined, error => { if (error) failed() })
+    return true // Queued, not an application delivery acknowledgement.
+  } catch { failed(); return false }
 }
 
 function rateAllowed(client, bytes, now = Date.now()) {
@@ -113,7 +137,7 @@ function relaySourceAddress(request) {
   return direct
 }
 
-function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketServer, limits = {} } = {}) {
+function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketServer, limits = {}, timing = {} } = {}) {
   if (!server) throw new Error('WSS relay requires an HTTP server behind a TLS reverse proxy.')
   const maxTotalConnections = relayLimit(limits.maxTotalConnections, MAX_TOTAL_CONNECTIONS)
   const maxPendingHellos = relayLimit(limits.maxPendingHellos, MAX_PENDING_HELLOS)
@@ -122,8 +146,11 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
   const maxConnectionBufferedBytes = relayByteLimit(limits.maxConnectionBufferedBytes, MAX_CONNECTION_BUFFERED_BYTES)
   const maxGlobalBufferedBytes = relayByteLimit(limits.maxGlobalBufferedBytes, MAX_GLOBAL_BUFFERED_BYTES)
   if (maxGlobalBufferedBytes < maxConnectionBufferedBytes) throw new Error('WSS relay global buffer limit must cover one connection buffer.')
+  const heartbeatIntervalMs = relayLimit(timing.heartbeatIntervalMs, HEARTBEAT_INTERVAL_MS)
+  const pongTimeoutMs = relayLimit(timing.pongTimeoutMs, PONG_TIMEOUT_MS)
   const rooms = new Map()
   const sourceCounts = new Map()
+  const desktopSockets = new WeakSet()
   let pendingHellos = 0
   const wss = new WebSocketServerImpl({ server, maxPayload: MAX_ENVELOPE_BYTES, perMessageDeflate: false })
 
@@ -132,6 +159,8 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
       clients: wss.clients,
       destination,
       source,
+      // A desktop multiplexes peers: one slow mobile must not disconnect its siblings.
+      closeSourceOnFailure: !desktopSockets.has(source),
       data: JSON.stringify(value),
       maxConnectionBufferedBytes,
       maxGlobalBufferedBytes
@@ -143,6 +172,8 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
       clients: wss.clients,
       destination,
       source,
+      // A desktop multiplexes peers: one slow mobile must not disconnect its siblings.
+      closeSourceOnFailure: !desktopSockets.has(source),
       data: value,
       binary: true,
       maxConnectionBufferedBytes,
@@ -185,11 +216,13 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
   }
 
   wss.on('connection', (socket, request) => {
-    if (wss.clients.size > maxTotalConnections) return socket.close(4429, 'connection limit exceeded')
+    // Admission rejects also need an error sink while their close is in flight.
+    socket.on('error', () => socket.terminate())
+    if (wss.clients.size > maxTotalConnections) return closeBounded(socket, 4429, 'connection limit exceeded')
     const source = relaySourceAddress(request)
     const sourceCount = sourceCounts.get(source) || 0
-    if (sourceCount >= maxConnectionsPerSource) return socket.close(4429, 'source connection limit exceeded')
-    if (pendingHellos >= maxPendingHellos) return socket.close(4429, 'hello capacity exceeded')
+    if (sourceCount >= maxConnectionsPerSource) return closeBounded(socket, 4429, 'source connection limit exceeded')
+    if (pendingHellos >= maxPendingHellos) return closeBounded(socket, 4429, 'hello capacity exceeded')
     sourceCounts.set(source, sourceCount + 1)
     pendingHellos += 1
     const client = { socket, source, role: '', room: null, peerId: null, capabilities: [], rate: null, pendingHello: true, removed: false }
@@ -198,20 +231,37 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
       client.pendingHello = false
       pendingHellos = Math.max(0, pendingHellos - 1)
     }
-    const helloTimer = setTimeout(() => socket.close(4408, 'hello timeout'), HELLO_TIMEOUT_MS)
+    const helloTimer = setTimeout(() => closeBounded(socket, 4408, 'hello timeout'), HELLO_TIMEOUT_MS)
     helloTimer.unref?.()
+    let pongTimer = null
+    const onPong = () => { if (pongTimer) clearTimeout(pongTimer); pongTimer = null }
+    socket.on('pong', onPong)
+    const heartbeatTimer = setInterval(() => {
+      if (client.removed || socket.readyState !== WebSocket.OPEN || pongTimer) return
+      // Control-frame liveness only: never inspect or replay encrypted payloads.
+      pongTimer = setTimeout(() => { pongTimer = null; socket.terminate() }, pongTimeoutMs)
+      pongTimer.unref?.()
+      try { socket.ping(error => { if (error) socket.terminate() }) } catch { socket.terminate() }
+    }, heartbeatIntervalMs)
+    heartbeatTimer.unref?.()
+    const cleanup = () => {
+      clearTimeout(helloTimer); clearInterval(heartbeatTimer); onPong()
+      socket.removeListener('pong', onPong)
+      remove(client)
+    }
 
     socket.on('message', (raw, isBinary) => {
+      if (client.removed || socket.readyState !== WebSocket.OPEN) return
       if (!client.room) {
-        if (isBinary) return socket.close(4400, 'hello required')
+        if (isBinary) return closeBounded(socket, 4400, 'hello required')
         let hello
-        try { hello = JSON.parse(String(raw)) } catch { return socket.close(4400, 'invalid hello') }
+        try { hello = JSON.parse(String(raw)) } catch { return closeBounded(socket, 4400, 'invalid hello') }
         if (hello.type !== 'hello' || hello.version !== 1 || !['desktop', 'mobile'].includes(hello.role) || !validRoomId(hello.roomId)) {
-          return socket.close(4400, 'invalid hello')
+          return closeBounded(socket, 4400, 'invalid hello')
         }
         let room = rooms.get(hello.roomId)
         if (!room) {
-          if (rooms.size >= maxRooms) return socket.close(4429, 'room capacity exceeded')
+          if (rooms.size >= maxRooms) return closeBounded(socket, 4429, 'room capacity exceeded')
           room = { id: hello.roomId, desktop: null, mobiles: new Map() }
           rooms.set(room.id, room)
         }
@@ -221,9 +271,10 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
         if (client.role === 'desktop') {
           if (room.desktop) {
             client.room = null
-            return socket.close(4409, 'desktop already connected')
+            return closeBounded(socket, 4409, 'desktop already connected')
           }
           room.desktop = client
+          desktopSockets.add(socket)
           finishHello()
           clearTimeout(helloTimer)
           sendJson(socket, { type: 'welcome', version: 1, role: 'desktop', signalingVersion: SIGNALING_VERSION }, socket)
@@ -235,7 +286,7 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
         }
         if (room.mobiles.size >= MAX_MOBILE_PEERS_PER_ROOM) {
           client.room = null
-          return socket.close(4429, 'room full')
+          return closeBounded(socket, 4429, 'room full')
         }
         client.peerId = nextPeerId(room)
         room.mobiles.set(client.peerId.toString('hex'), client)
@@ -248,18 +299,18 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
 
       if (!isBinary) {
         let message
-        try { message = JSON.parse(String(raw)) } catch { return socket.close(4400, 'invalid control message') }
-        if (message.type !== 'signal' || message.version !== SIGNALING_VERSION) return socket.close(4400, 'binary tunnel frames or signal required')
-        if (!validSignalPayload(message.payload) || !rateAllowed(client, Buffer.byteLength(String(raw)))) return socket.close(4429, 'signaling limit exceeded')
+        try { message = JSON.parse(String(raw)) } catch { return closeBounded(socket, 4400, 'invalid control message') }
+        if (message.type !== 'signal' || message.version !== SIGNALING_VERSION) return closeBounded(socket, 4400, 'binary tunnel frames or signal required')
+        if (!validSignalPayload(message.payload) || !rateAllowed(client, Buffer.byteLength(String(raw)))) return closeBounded(socket, 4429, 'signaling limit exceeded')
         if (client.role === 'mobile') {
-          if (message.target !== 'desktop') return socket.close(4403, 'mobile signal target denied')
+          if (message.target !== 'desktop') return closeBounded(socket, 4403, 'mobile signal target denied')
           const destination = client.room.desktop?.socket
           if (destination?.readyState === WebSocket.OPEN) {
             sendJson(destination, { type: 'signal', version: SIGNALING_VERSION, source: client.peerId.toString('hex'), payload: message.payload }, socket)
           }
           return
         }
-        if (!/^[a-f0-9]{16}$/.test(String(message.target || ''))) return socket.close(4403, 'desktop signal target denied')
+        if (!/^[a-f0-9]{16}$/.test(String(message.target || ''))) return closeBounded(socket, 4403, 'desktop signal target denied')
         const destination = client.room.mobiles.get(message.target)?.socket
         if (destination?.readyState === WebSocket.OPEN) {
           sendJson(destination, { type: 'signal', version: SIGNALING_VERSION, source: 'desktop', payload: message.payload }, socket)
@@ -267,7 +318,7 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
         return
       }
       const packet = Buffer.from(raw)
-      if (packet.length < 8 || packet.length > MAX_ENVELOPE_BYTES || !rateAllowed(client, packet.length)) return socket.close(4429, 'relay limit exceeded')
+      if (packet.length < 8 || packet.length > MAX_ENVELOPE_BYTES || !rateAllowed(client, packet.length)) return closeBounded(socket, 4429, 'relay limit exceeded')
       if (client.role === 'mobile') {
         if (!packet.subarray(0, 8).equals(DESKTOP_PEER_ID) || !client.room.desktop) return
         const destination = client.room.desktop.socket
@@ -278,11 +329,14 @@ function createRelayRouter({ server, WebSocketServerImpl = WebSocket.WebSocketSe
       const destination = client.room.mobiles.get(peerHex)?.socket
       if (destination?.readyState === WebSocket.OPEN) sendBinary(destination, Buffer.concat([DESKTOP_PEER_ID, packet.subarray(8)]), socket)
     })
-    socket.once('close', () => { clearTimeout(helloTimer); remove(client) })
-    socket.once('error', () => { clearTimeout(helloTimer); remove(client) })
+    socket.once('close', cleanup)
+    socket.on('error', cleanup)
   })
 
-  return { wss, rooms, close: () => new Promise(resolve => wss.close(resolve)) }
+  return { wss, rooms, close: () => new Promise(resolve => {
+    for (const socket of wss.clients) socket.terminate()
+    wss.close(resolve)
+  }) }
 }
 
 function createHealthServer() {

@@ -18,9 +18,10 @@ function between(source, start, end) {
 }
 
 test('completion is claimant-fenced submission and only lead acceptance is authoritative completion', () => {
-  const update = between(indexSource, 'async function updateTask(store, caller, input)', 'function markMemberShuttingDown')
+  const update = between(indexSource, 'async function updateTask(store, caller, input, ctx)', 'function markMemberShuttingDown')
   assert.match(update, /action === "complete"[\s\S]*?assertCurrentTaskLease\(team, task, caller, input, \{ leadMayOverride: false \}\)/u)
-  assert.match(update, /task\.state = "submitted"[\s\S]*task\.submission = taskSubmission\(task, caller\.id, submittedAt\)/u)
+  assert.match(update, /task\.state = "submitted"[\s\S]*task\.submission = \{ \.\.\.taskSubmission\(task, caller\.id, submittedAt\)/u)
+  assert.match(update, /requireActiveTeam\(team\);\s*assertCurrentTaskLease\(team, task, caller, input, \{ leadMayOverride: false \}\);\s*const submittedAt/u, 'asynchronous artifact binding must recheck the original fence')
   assert.doesNotMatch(update, /task\.acceptance = isLead \?/u)
   assert.match(update, /action === "accept"[\s\S]*?task\.state = "completed"[\s\S]*?task\.acceptance = \{/u)
   assert.match(update, /acceptance requires a current submitted task-scoped delivery/u)
@@ -38,7 +39,7 @@ test('unverified checkpoint and coordinator delivery cannot be mistaken for Host
 })
 
 test('reopen remains lead-only and establishes a fresh fence on the next claim', () => {
-  const update = between(indexSource, 'async function updateTask(store, caller, input)', 'function markMemberShuttingDown')
+  const update = between(indexSource, 'async function updateTask(store, caller, input, ctx)', 'function markMemberShuttingDown')
   assert.match(update, /action === "reopen"[\s\S]*?if \(!isLead\) reject\("only the team lead can reopen/u)
   assert.match(update, /only a completed or cancelled task can be reopened/u)
   assert.match(update, /clearTaskTerminalMetadata\(task\)/u)

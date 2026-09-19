@@ -1,0 +1,14 @@
+param([Parameter(Mandatory=$true)][ValidatePattern('^[a-zA-Z0-9-]+$')][string]$Run,[ValidateSet('before','after')][string]$Phase='after')
+$ErrorActionPreference='Stop'
+$repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
+$out=[IO.Path]::GetFullPath((Join-Path $repo ".artifacts/deep-audit-round2-sidebar-layout-fix/$Run"))
+if(Test-Path $out){throw 'Evidence directory exists; choose a fresh Run'}
+$profile=Join-Path $out 'profile'
+New-Item -ItemType Directory -Path $profile -Force | Out-Null
+$node=(Get-Command node -ErrorAction Stop).Source
+$allowed=@{SystemRoot=$env:SystemRoot;WINDIR=$env:WINDIR;PATH="$(Split-Path $node);$env:SystemRoot\System32";HOME=$profile;USERPROFILE=$profile;APPDATA=$profile;LOCALAPPDATA=$profile;TEMP=$profile;TMP=$profile;DSH_HOME=(Join-Path $profile 'dsh');SIDEBAR_AUDIT_RUN=$out;SIDEBAR_AUDIT_PHASE=$Phase}
+$start=[Diagnostics.ProcessStartInfo]::new($node)
+$start.UseShellExecute=$false;$start.WorkingDirectory=$repo;$start.Environment.Clear()
+foreach($entry in $allowed.GetEnumerator()){$start.Environment[$entry.Key]=$entry.Value}
+$start.ArgumentList.Add('--test');$start.ArgumentList.Add('--test-reporter=tap');$start.ArgumentList.Add("--test-reporter-destination=$out/node.tap");$start.ArgumentList.Add('tests/deep-audit-sidebar-layout-fix.test.cjs')
+$process=[Diagnostics.Process]::Start($start);$process.WaitForExit();exit $process.ExitCode

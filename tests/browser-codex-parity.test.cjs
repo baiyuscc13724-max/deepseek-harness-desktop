@@ -43,7 +43,7 @@ test('browser screenshots become model-visible image attachments instead of JSON
 
 test('browser host provides background CDP/DOM control with visual fallback, tabs, diagnostics and bounded private origins', async () => {
   const main = await source('electron/main.cjs')
-  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage()', 'inspectBrowserMediaForModel', 'captureBrowserMediaFrameForModel', 'textTracks', 'activeCues', 'extractBrowserData', 'sensitive-screenshot-blocked', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'browserModelBootstrapTrustedPrivateOrigins', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
+  for (const contract of ['new BrowserDiagnostics()', 'new BrowserHistoryStore(', 'capturePage(rect, { stayHidden: true, stayAwake: true })', 'inspectBrowserMediaForModel', 'captureBrowserMediaFrameForModel', 'textTracks', 'activeCues', 'extractBrowserData', 'sensitive-screenshot-blocked', 'browserTabs', 'activeBrowserTabId', 'recordConsole', 'recordNetwork', 'browserModelBootstrapTrustedPrivateOrigins', 'interactivePicker: true', 'uploadBrowserFileInteractively', 'browserDownloadDestination', 'downloadBrowserResource', 'consumeTrustedDownloadIntent', 'activeBrowserTransfers', 'withBrowserTransferLock', 'AbortController', 'Page.handleJavaScriptDialog']) {
     assert.ok(main.includes(contract), `browser host missing ${contract}`)
   }
   assert.match(main, /key === 'Enter' \|\| key === 'Space'[^\n]*\? 'submit'/)
@@ -57,14 +57,18 @@ test('browser host provides background CDP/DOM control with visual fallback, tab
   assert.match(main, /setBrowserSidebarVisible\(true\)/)
   assert.match(main, /口令\|密码[\s\S]{0,200}账号\|帐号\|账户\|用户名\|邮箱/)
   assert.doesNotMatch(main, /function requireBrowserForModel[\s\S]{0,700}tab-not-visible/)
-  assert.match(main, /DOM\.resolveNode/)
+  assert.doesNotMatch(main, /DOM\.resolveNode/, 'do not restore the replaceable-node upload chain')
+  assert.match(main, /globalThis\.__HARNESS_BROWSER_REFS__\?\.get/)
+  assert.match(main, /element\.files=transfer\.files/)
+  assert.match(main, /browser-reference-stale/)
   assert.match(main, /const accessibleName = element/)
   assert.match(main, /const implicitRole = element/)
   assert.match(main, /removeAttribute\(referenceAttribute\)/)
   assert.match(main, /allowedModes = new Set\(\['text', 'links', 'tables'\]\)/)
   assert.match(main, /Math\.min\(200, maxItems\)/)
   assert.match(main, /safeBrowserDiagnosticUrl\(item\.url\)/)
-  assert.match(main, /Runtime\.callFunctionOn/)
+  assert.match(main, /executeJavaScriptInIsolatedWorld\(1005, \[\{ code \}\]\)/)
+  assert.doesNotMatch(main, /Runtime\.callFunctionOn/, 'upload remains a single isolated original-Element assignment')
   assert.match(main, /navigationGeneration/)
   assert.match(main, /session\.fetch\(current, \{ redirect: 'manual', signal: controller\.signal \}\)/)
   assert.match(main, /open\(destinationPath, 'wx'\)/)

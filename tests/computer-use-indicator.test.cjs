@@ -155,7 +155,21 @@ test('Desktop Host shows the indicator across the whole desktop while a global a
   assert.match(main, /onStop:\s*\(\) => setComputerUseEnabled\(false\)/u)
   assert.match(main, /shouldShowComputerUseIndicator\(sharedComputerUseControlState\(\), target\)/u)
   assert.match(main, /await syncComputerUseIndicator\(COMPUTER_USE_DESKTOP_TARGET\)[\s\S]*finally \{\s*await syncComputerUseIndicator\(\)/u)
-  assert.match(main, /if \(input\.scope === 'computer'\) return modelComputerUseAction\(input\)\s*await syncComputerUseIndicator\(\)/u)
+  const start = main.indexOf('async function desktopModelToolAction(')
+  const end = main.indexOf('async function ensureBrowserControlServer(', start)
+  assert.ok(start >= 0 && end > start)
+  const events = []
+  const dispatch = new Function('deps', `const { modelComputerUseAction, syncComputerUseIndicator, modelBrowserAction, modelMemoryAction } = deps; ${main.slice(start, end)}; return desktopModelToolAction`)(
+    { modelComputerUseAction: async () => events.push('computer'), syncComputerUseIndicator: async () => events.push('sync'), modelBrowserAction: async () => events.push('browser'), modelMemoryAction: async () => events.push('memory') }
+  )
+  await dispatch({ scope: 'browser', action: 'status' })
+  assert.deepEqual(events.splice(0), ['browser'], 'read-only status does not trigger overlay work')
+  await dispatch({ scope: 'browser', action: 'click' })
+  assert.deepEqual(events.splice(0), ['sync', 'browser'], 'real action synchronizes before dispatch')
+  await dispatch({ scope: 'computer', action: 'type' })
+  assert.deepEqual(events.splice(0), ['computer'], 'global computer action owns its overlay lifecycle')
+  await assert.rejects(dispatch({ scope: 'browser', action: 'click' }, { signal: { aborted: true } }), { code: 'browser-action-cancelled' })
+  assert.deepEqual(events.splice(0), ['sync'], 'cancelled action never reaches browser dispatch')
   assert.doesNotMatch(main, /setActive\(sharedComputerUseControlState\(\)\.active\)/u)
   assert.match(main, /ensureComputerUseIndicator\(\)\.track\(mainWindow\.webContents, \{ mode: 'cursor' \}\)/u)
   assert.match(main, /ensureComputerUseIndicator\(\)\.track\(guest, \{ mode: 'cursor' \}\)/u)

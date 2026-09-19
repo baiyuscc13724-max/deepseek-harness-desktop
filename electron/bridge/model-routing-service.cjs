@@ -159,7 +159,10 @@ function selectedBasePreset(settings, stored) {
   return PRESET_ID.test(storedBase) && storedBase !== ROUTING_PRESET_ID ? storedBase : 'standard'
 }
 
-async function getModelRouting(options) {
+function getModelRouting(options) {
+  return withRoutingOperation(options, () => readModelRouting(options))
+}
+async function readModelRouting(options) {
   const paths = pathsFor(options)
   const document = settingsDocument(await readText(paths.settingsFile))
   const settings = document.toJS() || {}
@@ -323,8 +326,7 @@ async function buildManagedPreset(paths, basePreset, subagentRoute) {
       compactionPolicyVersion: DESKTOP_COMPACTION_POLICY_VERSION
     }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
 
-    await rm(paths.managedPreset, { recursive: true, force: true })
-    await rename(temporary, paths.managedPreset)
+    return temporary
   } catch (error) {
     await rm(temporary, { recursive: true, force: true }).catch(() => {})
     throw error
@@ -383,7 +385,24 @@ async function routingAlreadyCurrent(paths, stored, current, subagent, inheritMa
   return managedPresetMatches(paths, subagent, current.basePreset)
 }
 
-async function saveModelRouting(options, next) {
+// Serialize one home's complete read/build/commit/rollback lifecycle. Different
+// homes remain independent; failed operations never poison the next attempt.
+const routingOperations = new Map()
+function withRoutingOperation(options, operation) {
+  const resolved = path.resolve(options.dshHome)
+  const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  const previous = routingOperations.get(key) || Promise.resolve()
+  const result = previous.catch(() => {}).then(operation)
+  const settled = result.then(() => {}, () => {}).finally(() => {
+    if (routingOperations.get(key) === settled) routingOperations.delete(key)
+  })
+  routingOperations.set(key, settled)
+  return result
+}
+function saveModelRouting(options, next) {
+  return withRoutingOperation(options, () => saveModelRoutingUnlocked(options, next))
+}
+async function saveModelRoutingUnlocked(options, next) {
   const paths = pathsFor(options)
   const main = validRoute(next?.main, '主模型')
   const inheritMain = next?.subagent?.inheritMain !== false
@@ -398,38 +417,62 @@ async function saveModelRouting(options, next) {
     ? requestedBase
     : selectedBasePreset(settings, stored)
 
-  await buildManagedPreset(paths, basePreset, subagent)
   document.setIn(['agent-default-model', 'provider'], main.provider)
   document.setIn(['agent-default-model', 'model'], main.model)
   document.setIn(['agent-presets', 'default'], ROUTING_PRESET_ID)
   await mkdir(paths.home, { recursive: true, mode: 0o700 })
   const atomicWrite = options.writeFileAtomic || writeFileAtomic
   const stateText = `${JSON.stringify({ schemaVersion: ROUTING_SCHEMA_VERSION, main, subagent: { ...subagent, inheritMain }, basePreset }, null, 2)}\n`
-  await atomicWrite(paths.stateFile, stateText, { encoding: 'utf8', mode: 0o600 })
+  const candidate = await buildManagedPreset(paths, basePreset, subagent)
+  const backup = `${paths.managedPreset}.bak-${require('node:crypto').randomUUID()}`
+  let hadPreviousPreset = false
+  let activated = false
+  let stateWritten = false
   try {
+    try {
+      await rename(paths.managedPreset, backup)
+      hadPreviousPreset = true
+    } catch (error) { if (error.code !== 'ENOENT') throw error }
+    await rename(candidate, paths.managedPreset)
+    activated = true
+    await atomicWrite(paths.stateFile, stateText, { encoding: 'utf8', mode: 0o600 })
+    stateWritten = true
     await atomicWrite(paths.settingsFile, String(document), { encoding: 'utf8', mode: 0o600 })
   } catch (error) {
-    try {
-      if (previousStateText === null) await rm(paths.stateFile, { force: true })
-      else await atomicWrite(paths.stateFile, previousStateText, { encoding: 'utf8', mode: 0o600 })
-    } catch (rollbackError) {
-      throw new AggregateError([error, rollbackError], '模型路由保存失败，且权威状态回滚失败。')
+    const rollbackErrors = []
+    if (stateWritten) {
+      try {
+        if (previousStateText === null) await rm(paths.stateFile, { force: true })
+        else await atomicWrite(paths.stateFile, previousStateText, { encoding: 'utf8', mode: 0o600 })
+      } catch (rollbackError) { rollbackErrors.push(rollbackError) }
     }
+    try {
+      if (activated) await rm(paths.managedPreset, { recursive: true, force: true })
+      if (hadPreviousPreset) await rename(backup, paths.managedPreset)
+    } catch (rollbackError) { rollbackErrors.push(rollbackError) }
+    if (rollbackErrors.length) throw new AggregateError([error, ...rollbackErrors], '模型路由保存失败，且权威状态或预设回滚失败。')
     throw error
+  } finally {
+    await rm(candidate, { recursive: true, force: true }).catch(() => {})
   }
-  return getModelRouting(options)
+  // Commit succeeded; a leftover backup is cleanup debt, not a failed save.
+  if (hadPreviousPreset) await rm(backup, { recursive: true, force: true }).catch(() => {})
+  return readModelRouting(options)
 }
 
-async function ensureModelRouting(options) {
+function ensureModelRouting(options) {
+  return withRoutingOperation(options, () => ensureModelRoutingUnlocked(options))
+}
+async function ensureModelRoutingUnlocked(options) {
   const paths = pathsFor(options)
   const stored = await readJson(paths.stateFile)
-  const current = await getModelRouting(options)
+  const current = await readModelRouting(options)
   if (!optionalRoute(current.main)) return current
   const storedSubagent = optionalRoute(stored?.subagent)
   const inheritMain = stored?.subagent?.inheritMain !== false || !storedSubagent
   const subagent = inheritMain ? current.main : storedSubagent
   if (await routingAlreadyCurrent(paths, stored, current, subagent, inheritMain)) return current
-  return saveModelRouting(options, {
+  return saveModelRoutingUnlocked(options, {
     main: current.main,
     subagent: { ...subagent, inheritMain },
     basePreset: current.basePreset

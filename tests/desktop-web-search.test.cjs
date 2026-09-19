@@ -133,7 +133,11 @@ test('desktop public search installs into the Web profile idempotently', async (
   try {
     const first = await ensureDesktopWebSearchPlugin({ dshHome: root, bundledRoot })
     const second = await ensureDesktopWebSearchPlugin({ dshHome: root, bundledRoot })
-    assert.equal(first.version, '1.0.59')
+    const sourceManifest = JSON.parse(await readFile(path.join(bundledRoot, 'package.json'), 'utf8'))
+    const deployedManifest = JSON.parse(await readFile(path.join(first.destination, 'package.json'), 'utf8'))
+    assert.equal(first.version, sourceManifest.version)
+    assert.equal(deployedManifest.version, sourceManifest.version)
+    assert.equal(deployedManifest.name, sourceManifest.name)
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')

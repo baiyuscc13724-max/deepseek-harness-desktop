@@ -1,0 +1,403 @@
+{
+  "schemaVersion": 1,
+  "kind": "round3-independent-bounded-evidence-sidecar",
+  "reviewerAcceptance": "bounded-evidence-submitted-to-root",
+  "globalCoveragePromotion": false,
+  "wholeUserAccepted": false,
+  "masterPreserved": {
+    "path": "docs/deep-audit/coverage-master.json",
+    "sha256": "8d5cad11503953cb9044a96902ab92d718cb21ae17107313549c5e45fb527794",
+    "summary": {
+      "userOperations": 115,
+      "independentlyAccepted": 104,
+      "domainFindingRows": 598
+    }
+  },
+  "counts": {
+    "mobileChecks": 12,
+    "appframeChecks": 148,
+    "unit": "explicit fixture assertions, not USER operations",
+    "independentRunsPerStream": 1,
+    "uiRpcPosts": 8,
+    "httpRequests": 8,
+    "controlledBusinessReceipts": 7,
+    "oldAborted": 1,
+    "presentations": 9,
+    "resultDomMounts": 1,
+    "appframeMeasurements": 35,
+    "captures": 5
+  },
+  "receiptBindings": {
+    "mobile": {
+      "path": ".artifacts/deep-audit-round3-acceptance/mobile-v1/result.json",
+      "sha256": "b0696f49deafd4674a495efb27ec5089314eb7d8de3c80f00c125862c104017d"
+    },
+    "appframe": {
+      "path": ".artifacts/deep-audit-round3-acceptance/appframe-v1/receipt.json",
+      "sha256": "896299931ce0d8ea9a06980a13489857a92b7eee57972acc1261aedb4f90a5dc"
+    },
+    "summary": {
+      "path": ".artifacts/deep-audit-round3-acceptance/independent-summary-v1.json",
+      "sha256": "714bc16d737546e465be44f79ee800bc33351c4c885ab9a78e1b0cda41007b6c"
+    },
+    "mobileCleanup": {
+      "path": ".artifacts/deep-audit-round3-acceptance/mobile-v1/cleanup.json",
+      "sha256": "4f9f50e8f86f2c495a70a6e40004108f5712a89bb196a077f1766a3a0845f6b6"
+    },
+    "derivations": {
+      "path": ".artifacts/deep-audit-round3-acceptance/runner-derivations.json",
+      "sha256": "973a6b7c1c841f380ab3647ba49a11a2229b112e3943982528513b66858c25ec"
+    }
+  },
+  "chain": {
+    "mobile": "real-ui-rpc-parser-controlled-business",
+    "appframe": "complete-official-modules-synthetic-data-bootstrap",
+    "mobileSeams": [
+      "synthetic Context identity/slot/pending registry",
+      "controlled event source and business settlement",
+      "manual result mount from observed receipt",
+      "Chromium/native-disabled mobile platform marker; no Java bridge"
+    ],
+    "appframeSeams": [
+      "official shell dependency export and unused config evaluator denial",
+      "manual synthetic stores/hooks/slots",
+      "actual AppFrame and theme/component factories",
+      "desktop app auto bootstrap omitted, synthetic desktopHarness"
+    ]
+  },
+  "clock": {
+    "renderer": "performance.now",
+    "server": "separate Node performance.now",
+    "crossClockSubtraction": false,
+    "httpResponseMeaning": "headers-not-parsed-ACK",
+    "resultDOM": "manual-injection-of-observed-controlled-receipt",
+    "percentiles": false,
+    "largeSnapshot": false,
+    "controlledDelaySampleCount": 1,
+    "controlledDelayMs": 350,
+    "observed": {
+      "label": "same-tick-delayed",
+      "rpcId": "c56fb392-c873-400e-909a-9f1002060553",
+      "cardKey": "question:2",
+      "click": 3495.5,
+      "removed": 3497,
+      "submit": 3554.199999999255,
+      "headers": 3914.2999999988824,
+      "status": 200,
+      "clickToSubmitMs": 58.69999999925494,
+      "submitToHeadersMs": 360.09999999962747,
+      "removedToHeadersMs": 417.2999999988824
+    }
+  },
+  "transportSemantics": {
+    "rpcSuccess": "parsed-transport-not-business-winner",
+    "preDispatchProof": "controlled-source-and-request-mode-not-status-alone"
+  },
+  "unverified": {
+    "android": true,
+    "wan": true,
+    "fullHost": true,
+    "realResultProjection": true,
+    "nativeOverlay": true,
+    "productionCSP": true,
+    "persistentWhiteColumnResolved": true,
+    "preReadPixelsProven": true,
+    "snapshotOrdering": true,
+    "nonceIsolation": true,
+    "expiryDeadlineMatrix": true,
+    "screenReader": true,
+    "physicalInput": true
+  },
+  "findings": [
+    "ROUND3-QUESTION-ACK-LIFETIME",
+    "ROUND3-QUESTION-RETRY-DRAFT"
+  ],
+  "observation": {
+    "captureCanAffectLayout": true,
+    "terminalReadCanForceLayout": true,
+    "hiddenWindow": true,
+    "early2200": {
+      "passive": 124.78125,
+      "early-rect": 56,
+      "early-capture": 280
+    },
+    "longPassive": [
+      {
+        "duration": 5200,
+        "sidebar": 280,
+        "center": 860,
+        "frame": 1140,
+        "noIntermediateObservationMs": 5206.099499999997,
+        "terminalRectStillIntrusive": true
+      },
+      {
+        "duration": 10000,
+        "sidebar": 280,
+        "center": 860,
+        "frame": 1140,
+        "noIntermediateObservationMs": 10006.983099999998,
+        "terminalRectStillIntrusive": true
+      }
+    ],
+    "home": {
+      "frame": 1140,
+      "sidebar": 280,
+      "center": 860,
+      "conversationRight": 1140,
+      "content": 680
+    }
+  },
+  "rows": [
+    {
+      "id": "ROUND3-QUESTION-CHAIN",
+      "relatedIds": [
+        "QUESTION-INSTALL-20260912-1",
+        "USER-MOBILE-EXTERNAL-RECOVERY",
+        "USER-MOBILE-REALTIME-LATENCY"
+      ],
+      "status": "bounded-protocol-evidence-with-reproduced-UX-failures",
+      "wholeUserAccepted": false,
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": {
+          "status": "bounded-pass",
+          "evidence": [
+            "trusted Chromium touch → actual UI/mux/HTTP parser → controlled selected",
+            "same-tick DOM.click has untrusted events; once-only submission",
+            "one actual result card manual mount"
+          ],
+          "unverified": [
+            "not complete Host business-to-session-to-UI chain"
+          ]
+        },
+        "error-recovery": {
+          "status": "bounded-failure-with-recovery",
+          "evidence": [
+            "ACK wait has no card",
+            "503 re-presentation drops selected and lacks in-card retry state",
+            "explicit second submission succeeds",
+            "wrong-rpc response reconnects with no business replay"
+          ],
+          "unverified": [
+            "not WAN retry guarantees",
+            "source-specific UX findings, no repair"
+          ]
+        },
+        "concurrency-switch": {
+          "status": "bounded-pass",
+          "evidence": [
+            "same tick second selection/double submit one RPC",
+            "old session abort/carrier rejects",
+            "wrong client rejects and completed duplicate inert"
+          ],
+          "unverified": [
+            "snapshot ordering",
+            "nonce/expiry deadline isolation",
+            "arbitrary concurrent/malicious clients"
+          ]
+        },
+        "isolation": {
+          "status": "bounded-pass",
+          "evidence": [
+            "fresh synthetic profiles",
+            "one registered loopback origin and two protocol paths",
+            "Node denied current GUI/external connect/listen/child before dispatch"
+          ],
+          "unverified": [
+            "not OS egress capture",
+            "no real authentication/paired device"
+          ]
+        },
+        "a11y": {
+          "status": "bounded-pass",
+          "evidence": [
+            "390×844 long card scrolled submit 56×44 CSS px with hit=true"
+          ],
+          "unverified": [
+            "Android dp/IME",
+            "screen reader",
+            "physical touch"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ROUND3-APPFRAME-LAYOUT",
+      "relatedIds": [
+        "MENU-LABEL-ff7edbb57fc5",
+        "USER-36be79d18ec4"
+      ],
+      "relationQualifier": "existing browser sidebar entry and theme rendering only; not navigation or theme persistence acceptance",
+      "status": "bounded-layout-evidence-persistent-white-column-unresolved",
+      "wholeUserAccepted": false,
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": {
+          "status": "bounded-pass",
+          "evidence": [
+            "complete official AppFrame/Conversation/ChatView/Details and actual CSS",
+            "home frame/conversation extends to x1140; content680 centered",
+            "35 real style tags, theme lifecycle cleanup"
+          ],
+          "unverified": [
+            "full app.js/main bootstrap",
+            "real session tree/large assistant/tool history"
+          ]
+        },
+        "error-recovery": {
+          "status": "bounded-pass-with-observation-limit",
+          "evidence": [
+            "browser-home transition measured",
+            "delay base/theme assets then real font size18→14",
+            "5.2/10s independent no-intermediate-observation endpoints normal"
+          ],
+          "unverified": [
+            "user white column cause",
+            "any network-font liveness",
+            "pixels before terminal read"
+          ]
+        },
+        "concurrency-switch": {
+          "status": "bounded-pass",
+          "evidence": [
+            "session change closes details",
+            "100/125/200% zoom, width480/760/900/1460/1800",
+            "early capture differs from early rect/passive at2200ms"
+          ],
+          "unverified": [
+            "native overlay/IPC ownership",
+            "arbitrary font/session snapshot races"
+          ]
+        },
+        "isolation": {
+          "status": "bounded-pass",
+          "evidence": [
+            "file whitelist, real sandboxed webview and Shadow DOM",
+            "permissions/download/native/renderer network denied; empty attempts"
+          ],
+          "unverified": [
+            "real production CSP",
+            "current GUI or compositor",
+            "author final-v10 engine Widget diagnostic remains unclassified"
+          ]
+        },
+        "a11y": {
+          "status": "bounded-pass",
+          "evidence": [
+            "programmatic zoom/narrow layout and details DOM close"
+          ],
+          "unverified": [
+            "keyboard/IME",
+            "readers",
+            "contrast and comprehensive accessibility"
+          ]
+        }
+      }
+    },
+    {
+      "id": "USER-MOBILE-REALTIME-LATENCY",
+      "relatedIds": [
+        "USER-MOBILE-EXTERNAL-RECOVERY"
+      ],
+      "status": "unverified-user-objective",
+      "wholeUserAccepted": false,
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": {
+          "status": "unverified",
+          "evidence": [
+            "single renderer click→fetch→headers timeline only"
+          ],
+          "unverified": [
+            "real Android/WAN/Host→UI latency"
+          ]
+        },
+        "error-recovery": {
+          "status": "unverified",
+          "evidence": [
+            "real browser connection recovery in controlled HTTP failure"
+          ],
+          "unverified": [
+            "WAN reconnection/liveness"
+          ]
+        },
+        "concurrency-switch": {
+          "status": "unverified",
+          "evidence": [
+            "seven settlements/eight RPC requests are heterogeneous cases, not sampling distribution"
+          ],
+          "unverified": [
+            "large synchronous snapshot HOL/load/tail latency"
+          ]
+        },
+        "isolation": {
+          "status": "bounded-pass",
+          "evidence": [
+            "no paired device/account/current GUI used"
+          ],
+          "unverified": [
+            "real deployment security"
+          ]
+        },
+        "a11y": {
+          "status": "unverified",
+          "evidence": [],
+          "unverified": [
+            "physical mobile feedback perception"
+          ]
+        }
+      }
+    }
+  ],
+  "preservation": {
+    "round2-rejected-v1": 365,
+    "round2-accepted-v2": 383,
+    "historical": 638,
+    "mappedRejectedFiles": 4,
+    "authorAppframeFreeze": 807,
+    "authorMobileHandoff": 16,
+    "authorMobileRuns": {
+      "v1": 60,
+      "v2": 62,
+      "v3": 63,
+      "v4": 63,
+      "v5": 67,
+      "v6": 69
+    },
+    "authorMobileInputClosure": 5075,
+    "uniqueFrozenOrInputFiles": 6571,
+    "sourceDrift": 0,
+    "oldTests": {
+      "total": 2929,
+      "passed": 2889,
+      "failed": 7,
+      "skipped": 33
+    },
+    "oldTestCountsAreHistoricalNotRerun": true
+  },
+  "retainedDiagnostics": {
+    "authorMobileFailedRuns": [
+      "recovery-v1",
+      "recovery-v2",
+      "recovery-v3",
+      "recovery-v4"
+    ],
+    "authorAppframeFailedRuns": [
+      "mount-v1",
+      "mount-v2",
+      "mount-v3",
+      "mount-v4",
+      "themed-v6"
+    ],
+    "authorAppframeEngineDiagnostic": "final-v10 blink.mojom.Widget Message2 rejected retained, not classified",
+    "independentMobileLog": "Electron fixture unsafe-eval CSP warning; deprecated console-message warning; two controlled connection-loss logs",
+    "independentAppframeLogEmpty": true,
+    "independentAnalysisCorrection": "Initial analyzer incorrectly required generation in connection-state callbacks; that field is omitted there. Preserved analysis-failure JSON; now verifies actual connecting→connected trace interval, never fabricates missing samples."
+  },
+  "limits": [
+    "This is independent member evidence submitted for root review, not Host approval or all-user completion",
+    "No production modification, no deployment, no old pins/master rewrites",
+    "Failed and skipped historical evidence retained; current two runs do not erase it",
+    "No new nonce/expiry/snapshot matrix: previous evidence remains separately bounded"
+  ]
+}

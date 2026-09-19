@@ -1,0 +1,43 @@
+# Agent Teams professional delivery contract (v1)
+
+Status: implementation contract, not a statement of deployed behavior. Applies to the maintained plugin only. Existing Stop, authorization, project, claim/lease and fixed-root OCC gates remain authoritative.
+
+## Task and skills
+
+- Public `team_task_create` and bootstrap task entries accept optional `required_skills: string[]` (max 8 exact installed skill names) and `acceptance_criteria: string[]` (max 12, each 1000 chars). Role/name is a duty label, never a skill or certification.
+- New public tasks carry `professionalContractVersion: 1`, `requiredSkills` and `acceptanceCriteria`; old stored tasks without the version remain explicit legacy mode. Task requirements participate in the existing plan hash.
+- Task projection adds `professional: { mode: 'general'|'specialized'|'missing_skills'|'legacy', skills: [{name,status:'bound'|'loaded'|'missing', evidence?:{source:'skill_tool',provider?,origin?,loadedAt,contentHash}}], limitations: string[] }`.
+- Skill availability and loading must come from existing runtime skill catalogs/directories and trusted successful `skill` tool execution. A model cannot submit `loaded`, a tool result or an evidence source. Directory presence alone means bound, not loaded; successful loading must belong to the actual current claimant after the current claim, in the same workspace. Missing/unobservable evidence stays missing/bound with a limitation. No skills means general execution, not an error.
+
+### Skill source, reuse and professional-quality boundary
+
+- Assets stay in the existing shared project/user/custom/bundled filesystem roots or registered providers. The plugin calls the existing persistent `ctx.skills` SkillRegistry; it does not copy a skill folder for each transient member or build another catalog platform. Before claim, `bound` means a chosen task requirement and its limitation says availability is not yet checked; claim checks the actual worker scope.
+- Exact task skill names are de-duplicated in first-seen order. The existing registry resolves same-name provider precedence and scoped winners. This is exact-name/provider conflict resolution, **not** semantic similarity de-duplication or a promise that differently named skills are nonredundant.
+- A successful current claimant's real `skill` execution is compared with the exact current scoped registry definition. Only provider/source labels (`provider`, `origin`, max 128 chars each), time and SHA-256 content fingerprint are projected; arbitrary resource paths and the skill body are not copied into Team state. `contentHash` identifies loaded instruction bytes, not quality or certification.
+- The strategy intentionally requires fresh load evidence for a new claim. Shared persistent skill assets are reused, but each independent model context still needs instructions and the verifier re-reads the winning definition. Do not promise zero redundant model-context loading, automatic cross-context expertise, or historical `$skill` injection certification; historical seeds/injected text do not qualify as a new live tool result.
+- Root decomposition matches actual catalog descriptions to task needs; it is model judgment constrained to exact real names, not a deterministic expert-selection benchmark. Missing tools/catalogs/skills remain missing/general with limitations. Bound, loaded and lead-reviewed are never professional-quality certification. No domain benchmark, expert accreditation or stable expert-performance gain has been demonstrated by this change.
+
+## Submission and review
+
+- `team_task_update action='submit'` is the clear preferred name; `complete` remains a compatibility alias. Both still produce **submitted**, not completed.
+- New v1 tasks require `delivery: {summary, content?: string, artifacts?:[{path}], criteria:[{criterion,evidence}], limitations?: string[]}`. Summary max 4000 chars; 0–16 artifact paths, each workspace-relative, max 1024 chars; 1–12 criteria items, criterion/evidence max 1000/2000 chars; max 12 limitations of 1000 chars. Either provide files or non-empty inline `content` (max 16000 chars, no minimum length or summary-duplication rule); both are allowed. Ordinary narrative/analysis tasks need no file. Host persists `content` plus derived `contentHash` (SHA-256); content is plain untrusted text, never executed or rendered as HTML. Only explicit task `requires_file_artifact:true` (persisted `requiresFileArtifact`, plan-hash bound) requires at least one real file artifact; `files` is a writable scope, not an output requirement. Required acceptance criteria must all have evidence. Empty or summary-only delivery is rejected. Inline-only submission uses `deliveryMode:'inline_bound'`; mixed/file submission uses `artifact_bound`. Both require current-submission review.
+- Host reads regular current files under the exact root workspace, refuses traversal/absolute paths/symlink escapes and bounded-size excess, and derives artifact `sha256` and `bytes`; model-supplied digests are not proof. Validation observes current files, not their business correctness.
+- Claim catalog lookup, delivery binding and submission review capture the exact live caller/root objects and IDs, canonical workspace paths and team project key before awaiting. Before committing their result, Host revalidates those same identities against the live agent registry/root list and compares the current paths/key to the captured values. Same-cwd replacement agents and changed cwd are rejected (`AGENT_TEAMS_TASK_SCOPE_CHANGED`), never silently rebound to a replacement or newer scope. Existing Stop/lease/OCC gates remain separate and authoritative; failed mutation does not advance task state, revision or ledger. Invalid/unavailable paths may retain the existing scope-unavailable errors. Legacy no-delivery synchronous transitions retain their compatibility path.
+- Submission adds `id`, `delivery` and `deliveryMode:'artifact_bound'|'inline_bound'|'legacy_unverified'`. It remains bound to taskId/claimId/leaseEpoch/submittedBy. Exact replay cannot replace a submission with different content.
+- `accept` of an artifact- or inline-bound submission requires `review:{submission_id,summary,criteria:[{criterion,evidence}],limitations:[]}` against the exact current submission. Host rechecks artifact bytes/digests before acceptance. Persisted acceptance carries `review` and `quality:'lead_reviewed'`; it is never `host_verified` and never a project quality gate pass.
+- Project runner evidence is not accepted through a free-form quality/pass field. Until a verified registered-runner bridge is present, reference actual test reports as artifacts and state limitations; no fabricated project quality promotion.
+- Legacy `complete` without delivery remains usable for old stored tasks; projection explicitly says legacy_unverified. Old completed data is not silently upgraded. Supplying a delivery opts that individual submission into artifact-bound review even on a legacy task.
+
+## Minimal control projection
+
+- Add conservative `nextAction` and `availableActions` observations to task/tool projections: pending assigned unblocked→claim; claimed→work_and_submit; submitted→review_submission; paused/risky→attention; terminal→none. These are suggestions, not authorization.
+- Existing required claimId/leaseEpoch and fixed-root expected task revision/pause epoch remain unchanged. No automatic substitution with newest values. Opaque action references will be omitted unless their observation-time binding and stale rejection are fully validated.
+- Registration remains persist-before-work. Eliminating the initial registration-only model turn is out of scope unless the existing subagent API proves a non-dispatching prepare/start barrier; do not weaken this invariant just to reduce turns.
+
+## UI compatibility
+
+All additions are optional to old clients. `submitted` must display awaiting lead review, never ready. Show bound/loaded/missing distinctly; none of them proves professional qualification. Default user UI prioritizes lead, current progress, artifacts and real attention. Legacy/missing evidence must not appear verified. Diagnostic metadata remains discoverable rather than deleted.
+
+## Acceptance boundaries
+
+Test invalid/missing skill and forged role-name loading, current successful skill calls, wrong scope/old claim/Stop, empty/nonexistent/escaped artifact, digest change before review, mismatched submission review, replay/OCC, general tasks and legacy round-trip. Tests must use real filesystem/runtime-event fixtures; source regex alone is not behavioral proof. No deploy, install, authorization change, publication, Git commit or runtime-profile mutation is authorized by this contract.

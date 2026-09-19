@@ -16,6 +16,7 @@ let socket = null
 let config = null
 let signalKey = null
 let signalingEnabled = false
+let lifecycleGeneration = 0
 let iceServers = DEFAULT_ICE_SERVERS
 const peers = new Map()
 const seenSignalNonces = new Set()
@@ -73,12 +74,16 @@ async function decryptSignal(value) {
   if (!encoded || encoded.length > MAX_SIGNAL_PAYLOAD_CHARS || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error('Native P2P signal envelope is invalid.')
   const envelope = new Uint8Array(Buffer.from(encoded, 'base64url'))
   if (envelope.byteLength < 30 || envelope.byteLength > MAX_TUNNEL_PACKET_BYTES || envelope[0] !== 1) throw new Error('Native P2P signal envelope is invalid.')
+  const generation = lifecycleGeneration
   const nonceKey = Buffer.from(envelope.subarray(1, 13)).toString('hex')
   if (seenSignalNonces.has(nonceKey)) throw new Error('Native P2P replayed signal was rejected.')
   const plain = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: envelope.subarray(1, 13), additionalData: new Uint8Array([1]), tagLength: 128 }, signalKey, envelope.subarray(13)))
   if (plain.byteLength < 7 || plain[0] !== 1 || plain[1] !== 2 || plain[2] !== 0 || plain[3] !== 0 || plain[4] !== 0 || plain[5] !== 0) {
     throw new Error('Native P2P signal frame is invalid.')
   }
+  if (generation !== lifecycleGeneration) throw new Error('Native P2P stale signal generation was rejected.')
+  // Concurrent decrypts may pass the initial replay check before either settles.
+  if (seenSignalNonces.has(nonceKey)) throw new Error('Native P2P replayed signal was rejected.')
   seenSignalNonces.add(nonceKey)
   seenSignalNonceOrder.push(nonceKey)
   if (seenSignalNonceOrder.length > MAX_SIGNAL_REPLAY_NONCES) seenSignalNonces.delete(seenSignalNonceOrder.shift())
@@ -95,7 +100,10 @@ async function sendSignal(peerId, kind, payload = {}) {
     ...(peer?.desktopNonce ? { desktopNonce: peer.desktopNonce } : {}),
     ...(peer?.mobileNonce ? { mobileNonce: peer.mobileNonce } : {})
   }
+  const current = socket
+  const generation = lifecycleGeneration
   const encoded = await encryptSignal(inner)
+  if (generation !== lifecycleGeneration || socket !== current || current.readyState !== WebSocket.OPEN || peers.get(peerId) !== peer) return false
   if (encoded.length > MAX_SIGNAL_PAYLOAD_CHARS) return false
   const outer = JSON.stringify({ type: 'signal', version: 1, target: peerId, payload: encoded })
   if (socket.bufferedAmount + Buffer.byteLength(outer) > MAX_BUFFERED_BYTES) {
@@ -115,14 +123,17 @@ function closePeer(peerId, notify = true) {
   if (notify) emit('peer-left', { peerId })
 }
 function attachChannel(peerId, peer, channel) {
+  if (peers.get(peerId) !== peer) { try { channel.close() } catch {}; return }
   if (peer.channel && peer.channel !== channel) peer.channel.close()
   peer.channel = channel
   channel.binaryType = 'arraybuffer'
   channel.bufferedAmountLowThreshold = 512 * 1024
-  channel.onopen = () => peerPath(peerId, peer.sessionReady ? 'direct' : 'negotiating')
-  channel.onclose = () => peerPath(peerId, 'relay')
-  channel.onerror = () => peerPath(peerId, 'relay')
+  const current = () => peers.get(peerId) === peer && peer.channel === channel
+  channel.onopen = () => { if (current()) peerPath(peerId, peer.sessionReady ? 'direct' : 'negotiating') }
+  channel.onclose = () => { if (current()) peerPath(peerId, 'relay') }
+  channel.onerror = () => { if (current()) peerPath(peerId, 'relay') }
   channel.onmessage = event => {
+    if (!current()) return
     const packet = event.data instanceof ArrayBuffer
       ? new Uint8Array(event.data)
       : ArrayBuffer.isView(event.data)
@@ -153,14 +164,16 @@ function ensurePeer(peerId) {
   peers.set(peerId, peer)
   connection.ondatachannel = event => attachChannel(peerId, peer, event.channel)
   connection.onicecandidate = event => {
+    if (peers.get(peerId) !== peer) return
     const item = { kind: event.candidate ? 'ice' : 'end-of-candidates', payload: event.candidate ? { candidate: event.candidate.toJSON() } : {} }
     if (!peer.offerSent) {
       if (peer.pendingLocalIce.length < MAX_ICE_CANDIDATES + 1) peer.pendingLocalIce.push(item)
       return
     }
-    peer.signalChain = peer.signalChain.then(() => sendSignal(peerId, item.kind, item.payload)).catch(error => emit('error', { message: error.message }))
+    peer.signalChain = peer.signalChain.then(() => peers.get(peerId) === peer && sendSignal(peerId, item.kind, item.payload)).catch(error => { if (peers.get(peerId) === peer) emit('error', { message: error.message }) })
   }
   connection.onconnectionstatechange = () => {
+    if (peers.get(peerId) !== peer) return
     if (connection.connectionState === 'connected' && peer.channel?.readyState === 'open' && peer.sessionReady) peerPath(peerId, 'direct')
     else if (connection.connectionState === 'connecting') peerPath(peerId, 'negotiating')
     else if (['failed', 'disconnected'].includes(connection.connectionState)) peerPath(peerId, 'relay')
@@ -180,12 +193,19 @@ async function createOffer(peerId) {
   peer.pendingLocalIce = []
   peer.signalChain = Promise.resolve()
   if (!peer.channel) attachChannel(peerId, peer, peer.connection.createDataChannel('harness-sync-v1', { ordered: true }))
+  const generation = lifecycleGeneration
+  const nonce = peer.desktopNonce
+  const current = () => generation === lifecycleGeneration && peers.get(peerId) === peer && peer.desktopNonce === nonce
   const offer = await peer.connection.createOffer()
+  if (!current()) return
   await peer.connection.setLocalDescription(offer)
-  if (!await sendSignal(peerId, 'offer', { description: peer.connection.localDescription.toJSON() })) throw new Error('Native P2P offer could not be sent.')
+  if (!current()) return
+  const sent = await sendSignal(peerId, 'offer', { description: peer.connection.localDescription.toJSON() })
+  if (!current()) return
+  if (!sent) throw new Error('Native P2P offer could not be sent.')
   peer.offerSent = true
   for (const item of peer.pendingLocalIce.splice(0)) {
-    peer.signalChain = peer.signalChain.then(() => sendSignal(peerId, item.kind, item.payload)).catch(error => emit('error', { message: error.message }))
+    peer.signalChain = peer.signalChain.then(() => peers.get(peerId) === peer && sendSignal(peerId, item.kind, item.payload)).catch(error => { if (peers.get(peerId) === peer) emit('error', { message: error.message }) })
   }
 }
 async function handleSignal(peerId, message) {
@@ -199,10 +219,14 @@ async function handleSignal(peerId, message) {
     if (peer.sessionReady) throw new Error('Native P2P duplicate answer was rejected.')
     if (message.description?.type !== 'answer' || typeof message.description.sdp !== 'string' || !validNonce(message.mobileNonce)) return
     if (peer.pendingMobileNonce && peer.pendingMobileNonce !== message.mobileNonce) throw new Error('Native P2P answer nonce binding was rejected.')
+    const generation = lifecycleGeneration
+    const current = () => generation === lifecycleGeneration && peers.get(peerId) === peer && peer.desktopNonce === message.desktopNonce
     const sessionId = await expectedSessionId(peerId, peer.desktopNonce, message.mobileNonce)
+    if (!current()) return
     peer.mobileNonce = message.mobileNonce
     peer.sessionId = sessionId
     await peer.connection.setRemoteDescription(message.description)
+    if (!current()) return
     peer.sessionReady = true
     emit('session', { peerId, desktopNonce: peer.desktopNonce, mobileNonce: peer.mobileNonce, sessionId })
     if (peer.channel?.readyState === 'open' && peer.connection.connectionState === 'connected') peerPath(peerId, 'direct')
@@ -239,6 +263,7 @@ function sendPacket({ peerId, data, path, streamId }) {
   emit('stream-failed', { peerId, streamId, path })
 }
 function stop() {
+  lifecycleGeneration++
   for (const peerId of [...peers.keys()]) closePeer(peerId, false)
   if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'desktop stopping')
   socket = null
@@ -256,11 +281,22 @@ async function start(next) {
     emit('error', { message: 'Native P2P configuration is invalid.' })
     return
   }
-  signalKey = await importSignalKey(config.signalKey)
-  const current = new WebSocket(config.relayUrl)
+  const generation = lifecycleGeneration
+  const nextConfig = config
+  let importedKey
+  try { importedKey = await importSignalKey(nextConfig.signalKey) } catch (error) {
+    if (generation !== lifecycleGeneration || config !== nextConfig) return
+    throw error
+  }
+  if (generation !== lifecycleGeneration || config !== nextConfig) return
+  signalKey = importedKey
+  const current = new WebSocket(nextConfig.relayUrl)
   socket = current
   current.binaryType = 'arraybuffer'
-  current.onopen = () => current.send(JSON.stringify({ type: 'hello', version: 1, role: 'desktop', roomId: config.roomId, capabilities: ['native-p2p-v2'] }))
+  current.onopen = () => {
+    if (socket !== current || generation !== lifecycleGeneration) return
+    current.send(JSON.stringify({ type: 'hello', version: 1, role: 'desktop', roomId: nextConfig.roomId, capabilities: ['native-p2p-v2'] }))
+  }
   let messageChain = Promise.resolve()
   current.onmessage = event => {
     messageChain = messageChain.then(async () => {
@@ -280,14 +316,16 @@ async function start(next) {
         iceServers = signalingEnabled ? safeIceServers(message.iceServers) : DEFAULT_ICE_SERVERS
         emit('relay-ready')
       } else if (signalingEnabled && message.type === 'signal' && message.version === 1 && validPeerId(message.source)) {
-        await handleSignal(message.source, await decryptSignal(message.payload))
+        const decoded = await decryptSignal(message.payload)
+        if (socket !== current || generation !== lifecycleGeneration) return
+        await handleSignal(message.source, decoded)
       } else if (signalingEnabled && message.type === 'peer-joined' && validPeerId(message.peerId) && Array.isArray(message.capabilities) && message.capabilities.includes('native-p2p-v2')) {
         await createOffer(message.peerId)
       } else if (message.type === 'peer-left' && validPeerId(message.peerId)) closePeer(message.peerId)
       else if (message.type === 'error') emit('error', { message: String(message.message || 'P2P signaling rejected.') })
-    }).catch(error => emit('error', { message: error.message }))
+    }).catch(error => { if (socket === current && generation === lifecycleGeneration) emit('error', { message: error.message }) })
   }
-  current.onerror = () => emit('error', { message: 'Native P2P signaling socket failed.' })
+  current.onerror = () => { if (socket === current && generation === lifecycleGeneration) emit('error', { message: 'Native P2P signaling socket failed.' }) }
   current.onclose = () => { if (socket === current) { socket = null; emit('closed') } }
 }
 

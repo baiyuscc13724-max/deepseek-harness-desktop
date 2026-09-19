@@ -1,5 +1,7 @@
 const path = require('node:path')
-const { mkdir, readFile, rename, rm, writeFile } = require('node:fs/promises')
+const { mkdir, open, readFile, rename, rm, writeFile } = require('node:fs/promises')
+const { AsyncLocalStorage } = require('node:async_hooks')
+const { setTimeout: delay } = require('node:timers/promises')
 const { randomBytes } = require('node:crypto')
 const { COMPONENT_STATE_SCHEMA_VERSION, normalizeHash, normalizeVersion } = require('./component-update-contract.cjs')
 
@@ -80,23 +82,18 @@ function normalizeFailure(value) {
 }
 
 function normalizeState(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return defaultState()
-  if (value.schemaVersion !== COMPONENT_STATE_SCHEMA_VERSION) return defaultState()
-  const phase = UPDATE_PHASES.has(value.phase) ? value.phase : 'failed'
-  const revision = Number(value.revision || 0)
-  if (!Number.isSafeInteger(revision) || revision < 0) return defaultState()
-  try {
-    return {
-      schemaVersion: COMPONENT_STATE_SCHEMA_VERSION,
-      revision,
-      phase,
-      active: normalizeReleasePointer(value.active),
-      lastKnownGood: normalizeReleasePointer(value.lastKnownGood),
-      pending: normalizePending(value.pending),
-      failure: normalizeFailure(value.failure)
-    }
-  } catch {
-    return defaultState()
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.schemaVersion !== COMPONENT_STATE_SCHEMA_VERSION) throw new Error('组件更新状态格式无效；已保留原文件。')
+  const phase = value.phase
+  const revision = value.revision
+  if (!UPDATE_PHASES.has(phase) || !Number.isSafeInteger(revision) || revision < 0) throw new Error('组件更新状态阶段或版本无效；已保留原文件。')
+  return {
+    schemaVersion: COMPONENT_STATE_SCHEMA_VERSION,
+    revision,
+    phase,
+    active: normalizeReleasePointer(value.active),
+    lastKnownGood: normalizeReleasePointer(value.lastKnownGood),
+    pending: normalizePending(value.pending),
+    failure: normalizeFailure(value.failure)
   }
 }
 
@@ -122,6 +119,29 @@ class ComponentUpdateStore {
     this.readFile = options.readFileImpl || readFile
     this.atomicWrite = options.atomicWriteImpl || atomicWriteJson
     this.rm = options.rmImpl || rm
+    const mutationContext = new AsyncLocalStorage()
+    // Cover the read/check, pointer write and revision commit as one operation.
+    // Separate instances/processes share the same wx lock; never steal stale
+    // locks or turn an uncertain interrupted writer into an automatic retry.
+    for (const name of ['writeState', 'beginStaging', 'markFailed', 'markReady', 'markApplying', 'activatePending', 'beginHealthCheck', 'confirmHealthy', 'requireRollback', 'rollback', 'adoptBundledBaseline', 'discardStaging']) {
+      const operation = this[name].bind(this)
+      this[name] = async (...args) => {
+        if (mutationContext.getStore() === this) return operation(...args)
+        await mkdir(this.root, { recursive: true })
+        const lockFile = path.join(this.root, 'state.lock')
+        const deadline = Date.now() + 5_000
+        let handle
+        for (;;) {
+          try { handle = await open(lockFile, 'wx', 0o600); break }
+          catch (error) {
+            if (error.code !== 'EEXIST' || Date.now() >= deadline) throw new Error('组件更新状态正在被其他进程修改或需要恢复。', { cause: error })
+            await delay(10)
+          }
+        }
+        try { return await mutationContext.run(this, () => operation(...args)) }
+        finally { await handle.close(); await rm(lockFile, { force: true }) }
+      }
+    }
   }
 
   componentPath(record) {
@@ -135,12 +155,12 @@ class ComponentUpdateStore {
 
   async get() {
     try { return normalizeState(JSON.parse(await this.readFile(this.stateFile, 'utf8'))) }
-    catch { return defaultState() }
+    catch (error) { if (error.code === 'ENOENT') return defaultState(); throw error }
   }
 
   async pointer() {
     try { return normalizeReleasePointer(JSON.parse(await this.readFile(this.pointerFile, 'utf8'))) }
-    catch { return null }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error }
   }
 
   async writeState(next, expectedRevision) {
@@ -261,12 +281,16 @@ class ComponentUpdateStore {
 
   async rollback() {
     const current = await this.get()
-    if (current.phase !== 'rollback-required' || !current.lastKnownGood) throw new Error('没有可用的上一健康版本。')
-    await this.atomicWrite(this.pointerFile, current.lastKnownGood)
+    if (current.phase !== 'rollback-required') throw new Error('没有可用的上一健康版本。')
+    // The first component upgrade has a valid bundled baseline, represented by
+    // a null pointer. Restoring it must also finish the durable rollback state.
+    const previous = current.lastKnownGood || (current.active?.releaseVersion !== current.pending?.releaseVersion ? current.active : null)
+    if (previous) await this.atomicWrite(this.pointerFile, previous)
+    else await this.rm(this.pointerFile, { force: true })
     return this.writeState({
       ...current,
       phase: 'failed',
-      active: current.lastKnownGood,
+      active: previous,
       pending: null
     }, current.revision)
   }

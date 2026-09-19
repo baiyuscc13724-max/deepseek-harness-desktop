@@ -23,7 +23,7 @@ const MOBILE_PROTOCOL_DESCRIPTOR = Object.freeze({
 const COOKIE_NAME = 'harness_mobile_auth'
 const PAIRING_TTL_MS = 10 * 60 * 1000
 const DEVICE_TOUCH_INTERVAL_MS = 60 * 1000
-const CURRENT_MOBILE_VERSION = '1.0.59'
+const CURRENT_MOBILE_VERSION = '1.0.63'
 const CURRENT_MOBILE_RELEASE_TAG = CURRENT_MOBILE_VERSION.split('.').length === 4
   ? `android-v${CURRENT_MOBILE_VERSION}`
   : `v${CURRENT_MOBILE_VERSION}`
@@ -54,6 +54,9 @@ const MOBILE_DOCUMENT_UPLOAD_CONTRACT = Object.freeze({
 const MOBILE_SYNC_MANIFEST_PATH = '/__harness_mobile__/sync/manifest'
 const MOBILE_SYNC_RESPONSE_MAX_BYTES = 2 * 1024 * 1024
 const MOBILE_SYNC_REFRESH_TIMEOUT_MS = 8 * 1000
+const MOBILE_MANIFEST_PAGE_BYTES = 16 * 1024
+const MOBILE_MANIFEST_DOWNLOAD_TTL_MS = 180 * 1000
+const MOBILE_MANIFEST_DOWNLOAD_LIMIT = 4 // At most 4 * 2 MiB immutable payloads, including pending starts.
 const MOBILE_SYNC_MANIFEST_CONTRACT = Object.freeze({
   schemaVersion: SYNC_PROTOCOL_VERSION,
   path: MOBILE_SYNC_MANIFEST_PATH,
@@ -62,6 +65,7 @@ const MOBILE_SYNC_MANIFEST_CONTRACT = Object.freeze({
   snapshotEpochQuery: 'snapshotEpoch',
   cursorQuery: 'cursor',
   refreshQuery: 'refresh',
+  paging: Object.freeze({ version: 1, optInQuery: 'paging', tokenQuery: 'token', offsetQuery: 'offset', pageBytes: MOBILE_MANIFEST_PAGE_BYTES, maxBytes: MOBILE_SYNC_RESPONSE_MAX_BYTES, ttlMs: MOBILE_MANIFEST_DOWNLOAD_TTL_MS }),
   completeRequiredForReplacement: true,
   deletionRequiresTombstone: true,
   cursorOpaque: true,
@@ -543,6 +547,9 @@ class MobileSyncService extends EventEmitter {
     this.deviceSockets = new Map()
     this.lastTouchByDevice = new Map()
     this.runtimeAuthRefresh = null
+    this.manifestDownloads = new Map()
+    this.manifestStarts = new Map()
+    this.manifestGeneration = 0
     this.transportManager?.on('state', () => this.publish())
   }
 
@@ -558,7 +565,24 @@ class MobileSyncService extends EventEmitter {
     }
   }
 
-  async #fetchSessionIndex(target, signal) {
+  async #manifestAuthHeaders(target, signal) {
+    signal.throwIfAborted()
+    // The provider may not implement cancellation. Race it locally so a late
+    // credential resolution can never dispatch a request after the refresh ends.
+    const runtimeCookie = await new Promise((resolve, reject) => {
+      const aborted = () => reject(new Error('Runtime manifest authentication cancelled.'))
+      signal.addEventListener('abort', aborted, { once: true })
+      Promise.resolve().then(() => {
+        signal.throwIfAborted()
+        return this.cookieProvider(target, { force: false, signal })
+      }).then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted))
+    })
+    signal.throwIfAborted()
+    const cookie = upstreamRuntimeCookieHeader('', runtimeCookie)
+    return cookie ? { Cookie: cookie } : {}
+  }
+
+  async #fetchSessionIndex(target, signal, authHeaders) {
     const method = 'session/list'
     const rpcId = `mobile-sync-${randomBytes(12).toString('base64url')}`
     const response = await this.fetchImpl(new URL(`/api/${method}`, `${target}/`), {
@@ -566,7 +590,7 @@ class MobileSyncService extends EventEmitter {
       redirect: 'error',
       cache: 'no-store',
       signal,
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      headers: { 'Content-Type': 'application/json; charset=utf-8', ...authHeaders },
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args: { _request: {} } } })
     })
     if (!response.ok) throw new Error('Runtime Session index is unavailable.')
@@ -575,49 +599,96 @@ class MobileSyncService extends EventEmitter {
     return payload.result.value.items
   }
 
-  async #fetchWorkspaceBaseline(target, signal) {
+  async #fetchWorkspaceBaseline(target, signal, authHeaders) {
     const url = new URL('/api/remote.mux', `${target}/`)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const streamId = `workspace-${randomBytes(12).toString('base64url')}`
     return new Promise((resolve, reject) => {
-      const socket = new this.WebSocketImpl(url.toString())
+      signal.throwIfAborted()
+      const socket = new this.WebSocketImpl(url.toString(), { headers: authHeaders, followRedirects: false })
       let settled = false
       const finish = (error, items) => {
         if (settled) return
         settled = true
         signal?.removeEventListener?.('abort', aborted)
-        socket.removeAllListeners?.()
-        socket.close()
+        // ws aborts a CONNECTING handshake asynchronously: both close() and
+        // terminate() can emit error on nextTick. Keep ownership of teardown
+        // errors for this socket's lifetime, including after close; never remove
+        // injected transport listeners or install a process-wide exception sink.
+        socket.on('error', () => {})
+        socket.removeListener('open', opened)
+        socket.removeListener('message', message)
+        socket.removeListener('error', failed)
+        socket.removeListener('close', closed)
+        if (socket.readyState !== WebSocket.CLOSED) {
+          let timer
+          const clearCloseTimer = () => {
+            clearTimeout(timer)
+            socket.removeListener('close', clearCloseTimer)
+          }
+          socket.once('close', clearCloseTimer)
+          // Bound an uncooperative peer's close handshake without retaining a
+          // live timer after normal close. No retry or reconnect is introduced.
+          timer = setTimeout(() => {
+            clearCloseTimer()
+            try { socket.terminate?.() } catch { /* Already settled; socket-local teardown only. */ }
+          }, 1000)
+          timer.unref?.()
+          try {
+            if (socket.readyState === WebSocket.CONNECTING && typeof socket.terminate === 'function') socket.terminate()
+            else socket.close()
+          } catch (closeError) {
+            error ||= closeError
+            try { socket.terminate?.() } catch { /* Preserve the original failure. */ }
+          }
+        }
         if (error) reject(error)
         else resolve(items)
       }
       const aborted = () => finish(signal.reason instanceof Error ? signal.reason : new Error('Runtime Workspace stream aborted.'))
-      signal?.addEventListener?.('abort', aborted, { once: true })
-      socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'workspace/follow', payload: { args: {} } })))
-      socket.on('message', raw => {
+      const opened = () => {
+        if (settled) return
+        try {
+          socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'workspace/follow', payload: { args: {} } }), error => { if (error) finish(error) })
+        } catch (error) { finish(error) }
+      }
+      const message = raw => {
+        if (settled) return
         let frame
         try { frame = JSON.parse(String(raw)) } catch { finish(new Error('Runtime Workspace stream frame is invalid.')); return }
         if (frame?.streamId !== streamId) return
         if (frame.type === 'error' || frame.type === 'end') { finish(new Error('Runtime Workspace stream ended before its baseline.')); return }
         if (frame.type !== 'item' || frame.value?.type !== 'baseline' || !Array.isArray(frame.value?.value?.items)) { finish(new Error('Runtime Workspace baseline is invalid.')); return }
         finish(null, frame.value.value.items)
-      })
-      socket.once('error', error => finish(error))
-      socket.once('close', () => finish(new Error('Runtime Workspace stream closed before its baseline.')))
+      }
+      const failed = error => finish(error)
+      const closed = () => finish(new Error('Runtime Workspace stream closed before its baseline.'))
+      socket.once('open', opened)
+      socket.on('message', message)
+      socket.on('error', failed)
+      socket.once('close', closed)
+      signal?.addEventListener?.('abort', aborted, { once: true })
+      if (signal?.aborted) aborted()
     })
   }
 
-  async refreshWorkspaceManifest({ operationId = null } = {}) {
+  async refreshWorkspaceManifest({ operationId = null, signal = null } = {}) {
     const target = this.runtimeTarget()
     if (!target) return { ...this.store.readSyncChanges(), complete: false, applied: false, protected: true, refreshState: 'unavailable' }
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), MOBILE_SYNC_REFRESH_TIMEOUT_MS)
     timer.unref?.()
+    const aborted = () => controller.abort()
+    signal?.addEventListener('abort', aborted, { once: true })
+    if (signal?.aborted) aborted()
     try {
+      const authHeaders = await this.#manifestAuthHeaders(target, controller.signal)
+      controller.signal.throwIfAborted()
       const [workspaces, sessions] = await Promise.all([
-        this.#fetchWorkspaceBaseline(target, controller.signal),
-        this.#fetchSessionIndex(target, controller.signal)
+        this.#fetchWorkspaceBaseline(target, controller.signal, authHeaders),
+        this.#fetchSessionIndex(target, controller.signal, authHeaders)
       ])
+      controller.signal.throwIfAborted()
       const readMessages = this.store.readSyncReadMessages?.() || this.store.readSyncChanges().snapshot?.readMessages || []
       const committed = this.store.commitSyncManifest({
         complete: true,
@@ -632,6 +703,11 @@ class MobileSyncService extends EventEmitter {
       return { ...this.store.readSyncChanges(), complete: false, applied: false, protected: true, refreshState: 'unavailable' }
     } finally {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', aborted)
+      // Promise.all may reject on session/list before the WebSocket settles.
+      // Cancel that sibling too, instead of clearing its only timeout and
+      // leaving a CONNECTING socket/listeners alive indefinitely.
+      controller.abort(new Error('Runtime manifest refresh finished.'))
     }
   }
 
@@ -648,6 +724,85 @@ class MobileSyncService extends EventEmitter {
     }
     if (refreshed?.protected) return { ...identityBound, complete: false, protected: true, refreshState: refreshed.refreshState }
     return { ...identityBound, protected: false, refreshState: refresh ? 'authoritative' : 'cached' }
+  }
+
+  #dropManifestDownload(deviceId, expected = null) {
+    const entry = this.manifestDownloads.get(deviceId)
+    if (!entry || (expected && entry !== expected)) return
+    clearTimeout(entry.timer)
+    this.manifestDownloads.delete(deviceId)
+  }
+
+  #manifestError(response, status, code, clear = false) {
+    if (response.destroyed || response.writableEnded) return
+    writeResponse(response, status, JSON.stringify({ ok: false, code }), {
+      'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff', ...(clear ? { 'X-Harness-Mobile-Cache-Action': 'clear' } : {})
+    })
+  }
+
+  #sendManifestPage(response, device, entry, offset) {
+    if (entry.busy) return this.#manifestError(response, 429, 'MANIFEST_PAGE_IN_FLIGHT')
+    if (offset !== entry.nextOffset || offset >= entry.body.length) return this.#manifestError(response, 409, 'MANIFEST_PAGE_ORDER')
+    const end = Math.min(offset + MOBILE_MANIFEST_PAGE_BYTES, entry.body.length)
+    entry.busy = true
+    entry.nextOffset = end
+    response.once('finish', () => { entry.busy = false })
+    response.once('close', () => { if (!response.writableFinished) this.#dropManifestDownload(device.id, entry) })
+    response.writeHead(206, {
+      'Cache-Control': 'no-store', 'Content-Type': 'application/octet-stream', 'X-Content-Type-Options': 'nosniff',
+      'Content-Length': end - offset, 'Content-Range': `bytes ${offset}-${end - 1}/${entry.body.length}`,
+      'X-Harness-Mobile-Sync-Complete': '0', 'X-Harness-Manifest-Paging': '1',
+      'X-Harness-Manifest-Token': entry.token, 'X-Harness-Manifest-SHA256': entry.digest,
+      'X-Harness-Manifest-Identity': entry.identity, 'X-Harness-Manifest-Epoch': String(entry.epoch),
+      'X-Harness-Manifest-Cursor': entry.cursor
+    })
+    // Copy only a page; a queued view must not pin an otherwise released 2 MiB transfer.
+    response.end(Buffer.from(entry.body.subarray(offset, end)))
+    if (end === entry.body.length) this.#dropManifestDownload(device.id, entry)
+  }
+
+  async #pagedManifest(request, response, device, requestUrl, options) {
+    for (const [id, entry] of this.manifestDownloads) if (entry.expiresAt <= this.now()) this.#dropManifestDownload(id, entry)
+    const token = requestUrl.searchParams.get('token')
+    if (token != null) {
+      const entry = this.manifestDownloads.get(device.id)
+      // Authorization was checked by #deviceFromRequest for this individual GET.
+      if (!entry || token !== entry.token || entry.identity !== mobileSyncCacheIdentity(device)) return this.#manifestError(response, 409, 'MANIFEST_TRANSFER_EXPIRED')
+      const current = this.store.readSyncChanges()
+      if (!current.complete || current.snapshotEpoch !== entry.epoch) {
+        this.#dropManifestDownload(device.id, entry)
+        return this.#manifestError(response, 409, 'MANIFEST_EPOCH_CHANGED')
+      }
+      return this.#sendManifestPage(response, device, entry, Number(requestUrl.searchParams.get('offset')))
+    }
+    if (this.manifestStarts.has(device.id) || this.manifestStarts.size + this.manifestDownloads.size - (this.manifestDownloads.has(device.id) ? 1 : 0) >= MOBILE_MANIFEST_DOWNLOAD_LIMIT) return this.#manifestError(response, 429, 'MANIFEST_DOWNLOAD_LIMIT')
+    this.#dropManifestDownload(device.id) // Explicit fresh read supersedes its old, incomplete transfer.
+    const claim = Symbol('manifest-start'), generation = this.manifestGeneration
+    this.manifestStarts.set(device.id, claim)
+    try {
+      const manifest = await this.workspaceManifest({ device, ...options })
+      if (response.destroyed) return
+      const authorized = this.#deviceFromRequest(request)
+      if (!authorized || mobileSyncCacheIdentity(authorized) !== mobileSyncCacheIdentity(device)) return this.#manifestError(response, 401, 'PAIRING_REVOKED', true)
+      if (generation !== this.manifestGeneration || this.manifestStarts.get(device.id) !== claim) return this.#manifestError(response, 409, 'MANIFEST_TRANSFER_SUPERSEDED')
+      if (!manifest.complete || manifest.protected) return this.#manifestError(response, 503, 'MANIFEST_UNAVAILABLE')
+      const body = Buffer.from(JSON.stringify({ ok: true, ...manifest }))
+      if (body.length > MOBILE_SYNC_RESPONSE_MAX_BYTES) return this.#manifestError(response, 413, 'MANIFEST_TOO_LARGE')
+      const entry = {
+        token: randomBytes(32).toString('base64url'), body, digest: createHash('sha256').update(body).digest('hex'),
+        identity: manifest.cacheIdentity, epoch: manifest.snapshotEpoch, cursor: manifest.cursor,
+        expiresAt: this.now() + MOBILE_MANIFEST_DOWNLOAD_TTL_MS, nextOffset: 0, busy: false, timer: null
+      }
+      entry.timer = setTimeout(() => this.#dropManifestDownload(device.id, entry), MOBILE_MANIFEST_DOWNLOAD_TTL_MS)
+      entry.timer.unref?.()
+      this.manifestDownloads.set(device.id, entry)
+      this.#sendManifestPage(response, device, entry, 0)
+    } catch {
+      this.#manifestError(response, 503, 'MANIFEST_UNAVAILABLE')
+    } finally {
+      if (this.manifestStarts.get(device.id) === claim) this.manifestStarts.delete(device.id)
+    }
   }
 
   origins() {
@@ -805,6 +960,9 @@ class MobileSyncService extends EventEmitter {
   }
 
   async stop({ persist = true } = {}) {
+    this.manifestGeneration++
+    this.manifestStarts.clear()
+    for (const id of this.manifestDownloads.keys()) this.#dropManifestDownload(id)
     this.pairing = null
     this.controlBroker.stop(null, 'SYNC_STOPPED')
     await this.#removeDesktopControlState()
@@ -898,6 +1056,8 @@ class MobileSyncService extends EventEmitter {
   }
 
   revokeDevice(id) {
+    this.manifestStarts.delete(id)
+    this.#dropManifestDownload(id)
     this.store.revokeDevice(id)
     this.controlBroker.clearDevice(id, 'DEVICE_REVOKED')
     for (const socket of this.deviceSockets.get(id) || []) socket.destroy()
@@ -1150,11 +1310,25 @@ class MobileSyncService extends EventEmitter {
       const rawEpoch = requestUrl.searchParams.get('snapshotEpoch')
       const rawCursor = requestUrl.searchParams.get('cursor')
       const rawRefresh = requestUrl.searchParams.get('refresh')
+      const paging = requestUrl.searchParams.get('paging'), token = requestUrl.searchParams.get('token'), offset = requestUrl.searchParams.get('offset')
+      if ((paging != null && paging !== '1') || ((token != null || offset != null) && paging !== '1') ||
+          ((token == null) !== (offset == null)) || (token != null && (!/^[A-Za-z0-9_-]{43}$/.test(token) || !/^(0|[1-9]\d{0,7})$/.test(offset))) ||
+          ['paging', 'token', 'offset'].some(key => requestUrl.searchParams.getAll(key).length > 1)) {
+        this.#manifestError(response, 400, 'MANIFEST_PAGE_QUERY_INVALID')
+        return
+      }
       if ((rawCacheIdentity != null && !/^[A-Za-z0-9_-]{16,128}$/.test(rawCacheIdentity)) ||
           (rawEpoch != null && (!/^\d{1,16}$/.test(rawEpoch) || !Number.isSafeInteger(Number(rawEpoch)))) ||
           (rawCursor != null && !/^[A-Za-z0-9_-]{16,128}$/.test(rawCursor)) ||
           (rawRefresh != null && !['0', '1'].includes(rawRefresh))) {
         writeResponse(response, 400, JSON.stringify({ ok: false, error: 'Workspace sync cursor is invalid.' }), { 'Content-Type': 'application/json; charset=utf-8' })
+        return
+      }
+      if (paging === '1') {
+        await this.#pagedManifest(request, response, device, requestUrl, {
+          cacheIdentity: rawCacheIdentity, snapshotEpoch: rawEpoch == null ? null : Number(rawEpoch),
+          cursor: rawCursor, refresh: rawRefresh !== '0'
+        })
         return
       }
       const manifest = await this.workspaceManifest({
@@ -1261,7 +1435,7 @@ class MobileSyncService extends EventEmitter {
       return
     }
     if (requestUrl.pathname === '/__harness_mobile__/control/poll' && request.method === 'GET') {
-      const payload = this.controlBroker.poll(device.id, requestUrl.searchParams.get('protocolVersion'))
+      const payload = this.controlBroker.poll(device.id, requestUrl.searchParams.get('protocolVersion'), requestUrl.searchParams.get('directivesOnly') === 'true')
       response.writeHead(200, { 'Cache-Control': 'no-store', 'Content-Type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify(payload))
       return

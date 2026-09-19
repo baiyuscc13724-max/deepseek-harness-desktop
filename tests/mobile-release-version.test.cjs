@@ -24,15 +24,21 @@ test('Android revision versions remain monotonic across the next integration pat
   assert.equal(encodeAndroidVersionCode('1.0.58'), 1_005_800)
 })
 
-test('checked-in Android mobile version has the unified 1.0.59 release identity', () => {
+test('checked-in Android mobile identity binds source properties, integration version and derived assets', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+  const raw = fs.readFileSync(path.join(root, 'mobile/android/app/version.properties'), 'utf8')
+  const integrationVersion = /^integrationVersion=(.+)$/mu.exec(raw)?.[1].trim()
+  const versionName = /^versionName=(.+)$/mu.exec(raw)?.[1].trim()
+  const versionCode = Number(/^versionCode=(\d+)$/mu.exec(raw)?.[1])
+  assert.equal(integrationVersion, pkg.version)
+  assert.ok(versionName === integrationVersion || versionName.startsWith(`${integrationVersion}.`))
+  assert.equal(versionCode, encodeAndroidVersionCode(versionName))
   const version = readAndroidMobileVersion(root)
   assert.deepEqual(version, {
-    integrationVersion: '1.0.59',
-    versionName: '1.0.59',
-    versionCode: 1_005_900,
-    tag: 'android-v1.0.59',
-    assetName: 'Harness-Mobile-1.0.59-android-universal.apk',
-    checksumName: 'Harness-Mobile-1.0.59-android-universal.apk.sha256'
+    integrationVersion, versionName, versionCode,
+    tag: `android-v${versionName}`,
+    assetName: `Harness-Mobile-${versionName}-android-universal.apk`,
+    checksumName: `Harness-Mobile-${versionName}-android-universal.apk.sha256`
   })
 })
 

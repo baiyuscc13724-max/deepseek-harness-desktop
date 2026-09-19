@@ -1,14 +1,22 @@
 const net = require('node:net')
 
+function validPort(port) { return Number.isInteger(port) && port >= 1 && port <= 65535 }
+function validHost(host) {
+  return typeof host === 'string' && host.length > 0 && host.length <= 253 &&
+    (net.isIP(host) !== 0 || /^(?=.{1,253}$)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.?$/.test(host))
+}
 function parseHostPort(value) {
   const text = String(value || '').trim()
   const ipv6 = /^\[([^\]]+)]:(\d+)$/.exec(text)
-  if (ipv6) return { host: ipv6[1], port: Number(ipv6[2]) }
+  if (ipv6) {
+    const port = Number(ipv6[2])
+    return net.isIP(ipv6[1]) === 6 && validPort(port) ? { host: ipv6[1], port } : null
+  }
   const separator = text.lastIndexOf(':')
   if (separator <= 0) return null
-  const port = Number(text.slice(separator + 1))
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return null
-  return { host: text.slice(0, separator), port }
+  const host = text.slice(0, separator), portText = text.slice(separator + 1), port = Number(portText)
+  if (!/^\d+$/.test(portText) || !validPort(port) || !validHost(host) || host.includes(':')) return null
+  return { host, port }
 }
 
 function selectHttpProxy(value) {
@@ -22,8 +30,10 @@ function selectHttpProxy(value) {
 }
 
 function createConnectBridge({ proxy, targetHost, targetPort, connectTimeout = 10000 }) {
-  if (!proxy?.host || !proxy?.port) throw new Error('HTTP proxy address is invalid.')
-  if (!targetHost || !Number.isInteger(targetPort)) throw new Error('Relay target is invalid.')
+  if (!validHost(proxy?.host) || !validPort(proxy?.port)) throw new Error('HTTP proxy address is invalid.')
+  if (!validHost(targetHost) || !validPort(targetPort)) throw new Error('Relay target is invalid.')
+  if (!Number.isSafeInteger(connectTimeout) || connectTimeout < 1 || connectTimeout > 300_000) throw new Error('Relay target timeout is invalid.')
+  const authority = `${net.isIP(targetHost) === 6 ? `[${targetHost}]` : targetHost}:${targetPort}`
   const sockets = new Set()
   const server = net.createServer(client => {
     sockets.add(client)
@@ -46,8 +56,8 @@ function createConnectBridge({ proxy, targetHost, targetPort, connectTimeout = 1
     client.once('error', () => upstream.destroy())
     upstream.once('error', fail)
     upstream.once('connect', () => upstream.write(
-      `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n` +
-      `Host: ${targetHost}:${targetPort}\r\n` +
+      `CONNECT ${authority} HTTP/1.1\r\n` +
+      `Host: ${authority}\r\n` +
       'Proxy-Connection: keep-alive\r\n\r\n'
     ))
     const inspect = chunk => {

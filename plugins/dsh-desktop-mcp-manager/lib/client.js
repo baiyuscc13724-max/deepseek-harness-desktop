@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
-    const { useCallback, useEffect, useState } = React
+    const { useCallback, useEffect, useState, useRef } = React
     const h = React.createElement
     const API = '/api/desktop-mcp/servers'
     const headers = { 'x-dsh-mcp-manager': '1' }
@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
       configured: '已配置服务器', count: '{count} 个', empty: '尚未配置 MCP 服务器', emptyHint: '添加后可在这里查看连接状态、重新连接或停用。',
       enable: '启用', disable: '停用', reconnect: '重新连接', delete: '删除', refresh: '刷新', noRefs: '未配置凭据引用',
       enabled: '已启用', disabled: '已停用', confirm: '确认执行此 MCP 配置变更？启用 stdio 会在本机启动所列程序。',
-      saved: 'MCP 配置已更新。', failed: '操作失败：{error}', loading: '正在读取 MCP 配置…'
+      saved: 'MCP 配置已更新。', failed: '操作失败：{error}', loading: '正在读取 MCP 配置…', refreshFailed: '列表读取失败：{error}。请点击“刷新”重试读取；不要重复提交已完成的变更。', cleanupUnconfirmed: '配置已保存，但无法确认旧连接已停止。请重启工作台后检查连接状态；不要重复提交已完成的变更。'
     }
     const en = {
       title: 'MCP servers', eyebrow: 'Tool connections', intro: 'Manage remote HTTP and local stdio tool services used by Harness.',
@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
       configured: 'Configured servers', count: '{count}', empty: 'No MCP servers configured', emptyHint: 'Added servers appear here with connection state and lifecycle controls.',
       enable: 'Enable', disable: 'Disable', reconnect: 'Reconnect', delete: 'Delete', refresh: 'Refresh', noRefs: 'No credential references',
       enabled: 'Enabled', disabled: 'Disabled', confirm: 'Confirm this MCP configuration change? Enabling stdio starts the listed program on this computer.',
-      saved: 'MCP configuration updated.', failed: 'Action failed: {error}', loading: 'Loading MCP configuration…'
+      saved: 'MCP configuration updated.', failed: 'Action failed: {error}', loading: 'Loading MCP configuration…', refreshFailed: 'Could not load the list: {error}. Use Refresh to retry reading; do not resubmit a completed change.', cleanupUnconfirmed: 'Configuration saved, but could not confirm that the old connection stopped. Restart the workbench and check its connection state; do not resubmit a completed change.'
     }
     const lang = ((navigator.language || 'en').toLowerCase().indexOf('zh') === 0) ? 'zh' : 'en'
     function t(key, values) {
@@ -162,25 +162,45 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
+      const [readError, setReadError] = useState('')
+      const [cleanupWarning, setCleanupWarning] = useState(false)
+      // A ref fences same-turn clicks before React commits disabled controls.
+      // Reads and writes share the fence so old list revisions cannot win late.
+      const operationRef = useRef(false)
       const refresh = useCallback(async (silent = false) => {
-        if (!silent) setLoading(true)
-        try { setServers((await request()).servers || []); setError('') } catch (reason) { setError(String(reason.message || reason)) } finally { if (!silent) setLoading(false) }
+        if (!silent && operationRef.current) return false
+        if (!silent) { operationRef.current = true; setLoading(true) }
+        try {
+          setServers((await request()).servers || [])
+          setReadError('')
+          return true
+        } catch (reason) {
+          setReadError(String(reason.message || reason))
+          return false
+        } finally {
+          if (!silent) { operationRef.current = false; setLoading(false) }
+        }
       }, [])
       useEffect(() => { refresh() }, [refresh])
+      const mutationDisabled = busy || loading || Boolean(readError)
       const act = async payload => {
+        if (operationRef.current || mutationDisabled) return false
         if (!window.confirm(t('confirm'))) return false
+        operationRef.current = true
         setBusy(true)
         setError('')
         setNotice('')
         try {
-          await request(payload)
-          await refresh(true)
+          const result = await request(payload)
+          if (result?.result?.cleanup?.outcome === 'unknown') setCleanupWarning(true)
           setNotice(t('saved'))
+          await refresh(true)
           return true
         } catch (reason) {
           setError(String(reason.message || reason))
           return false
         } finally {
+          operationRef.current = false
           setBusy(false)
         }
       }
@@ -195,7 +215,7 @@ window.__ModuleLoader__.load({
         const created = await act({ action: 'create', server: { id: draft.id, serverName: draft.serverName, label: draft.label, enabled: draft.enabled, transport } })
         if (created) setDraft(emptyDraft())
       }
-      const input = (key, props = {}) => h('input', { ...props, className: `dmm-input ${props.className || ''}`.trim(), value: draft[key], onChange: event => setDraft({ ...draft, [key]: event.target.value }) })
+      const input = (key, props = {}) => h('input', { ...props, disabled: busy, className: `dmm-input ${props.className || ''}`.trim(), value: draft[key], onChange: event => setDraft({ ...draft, [key]: event.target.value }) })
       return h('section', { className: 'dmm-root', 'data-mcp-manager': true, 'aria-labelledby': 'dmm-title' },
         h('header', { className: 'dmm-head' },
           h('div', { className: 'dmm-heading' },
@@ -225,25 +245,27 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dmm-group' },
                 h('h4', { className: 'dmm-group-title' }, t('connection')),
                 h('div', { className: 'dmm-connection-grid' },
-                  h(Field, { label: t('transport') }, h('select', { className: 'dmm-select', value: draft.kind, onChange: event => setDraft({ ...draft, kind: event.target.value, endpoint: '', refs: '' }) }, h('option', { value: 'streamable-http' }, t('http')), h('option', { value: 'stdio' }, t('stdio')))),
+                  h(Field, { label: t('transport') }, h('select', { className: 'dmm-select', disabled: busy, value: draft.kind, onChange: event => setDraft({ ...draft, kind: event.target.value, endpoint: '', refs: '' }) }, h('option', { value: 'streamable-http' }, t('http')), h('option', { value: 'stdio' }, t('stdio')))),
                   h(Field, { label: t('endpoint') }, input('endpoint', { required: true, placeholder: draft.kind === 'stdio' ? t('stdioEndpoint') : t('httpEndpoint'), autoComplete: 'off' }))
                 ),
-                h(Field, { label: t('refs'), hint: t('refsHint'), className: 'dmm-refs' }, h('textarea', { className: 'dmm-textarea', value: draft.refs, onChange: event => setDraft({ ...draft, refs: event.target.value }), rows: 3, spellCheck: false, autoComplete: 'off', placeholder: draft.kind === 'stdio' ? t('stdioRefs') : t('httpRefs') }))
+                h(Field, { label: t('refs'), hint: t('refsHint'), className: 'dmm-refs' }, h('textarea', { className: 'dmm-textarea', disabled: busy, value: draft.refs, onChange: event => setDraft({ ...draft, refs: event.target.value }), rows: 3, spellCheck: false, autoComplete: 'off', placeholder: draft.kind === 'stdio' ? t('stdioRefs') : t('httpRefs') }))
               ),
               h('div', { className: 'dmm-form-foot' },
-                h('label', { className: 'dmm-toggle' }, h('input', { type: 'checkbox', role: 'switch', checked: draft.enabled, onChange: event => setDraft({ ...draft, enabled: event.target.checked }) }), h('span', null, h('strong', null, t('enableAfterCreate')), h('small', null, t('enableHint')))),
-                h('button', { className: 'dmm-button dmm-primary', type: 'submit', disabled: busy }, h(Icon, { name: 'plus' }), busy ? t('creating') : t('create'))
+                h('label', { className: 'dmm-toggle' }, h('input', { type: 'checkbox', role: 'switch', disabled: busy, checked: draft.enabled, onChange: event => setDraft({ ...draft, enabled: event.target.checked }) }), h('span', null, h('strong', null, t('enableAfterCreate')), h('small', null, t('enableHint')))),
+                h('button', { className: 'dmm-button dmm-primary', type: 'submit', disabled: mutationDisabled }, h(Icon, { name: 'plus' }), busy ? t('creating') : t('create'))
               )
             )
           ),
           error || notice ? h('div', { className: `dmm-status${error ? ' dmm-error' : ''}`, role: error ? 'alert' : 'status', 'aria-live': 'polite' }, error ? t('failed', { error }) : notice) : null,
+          readError ? h('div', { className: 'dmm-status dmm-error', role: 'alert' }, t('refreshFailed', { error: readError })) : null,
+          cleanupWarning ? h('div', { className: 'dmm-status dmm-error', role: 'alert' }, t('cleanupUnconfirmed')) : null,
           h('section', { 'aria-labelledby': 'dmm-configured-title' },
             h('div', { className: 'dmm-panel-head', style: { paddingLeft: 2, paddingRight: 2, borderBottom: 0 } },
               h('div', { className: 'dmm-panel-title' }, h('span', { className: 'dmm-panel-icon' }, h(Icon, { name: 'server' })), h('div', null, h('h3', { id: 'dmm-configured-title' }, t('configured')))),
               !loading ? h('span', { className: 'dmm-count' }, t('count', { count: servers.length })) : null
             ),
             loading ? h('div', { className: 'dmm-panel dmm-feedback', role: 'status' }, t('loading')) : null,
-            !loading && servers.length === 0 ? h('div', { className: 'dmm-panel dmm-empty' }, h('div', { className: 'dmm-empty-inner' }, h('span', { className: 'dmm-empty-icon' }, h(Icon, { name: 'server' })), h('h4', null, t('empty')), h('p', null, t('emptyHint')))) : null,
+            !loading && !readError && servers.length === 0 ? h('div', { className: 'dmm-panel dmm-empty' }, h('div', { className: 'dmm-empty-inner' }, h('span', { className: 'dmm-empty-icon' }, h(Icon, { name: 'server' })), h('h4', null, t('empty')), h('p', null, t('emptyHint')))) : null,
             !loading && servers.length ? h('div', { className: 'dmm-server-list' }, ...servers.map(server => {
               const refs = refsText(server.transport.envRefs || server.transport.headerRefs)
               const endpoint = server.transport.kind === 'stdio' ? server.transport.command : server.transport.url
@@ -255,9 +277,9 @@ window.__ModuleLoader__.load({
                 ),
                 h('div', { className: 'dmm-server-meta' }, h('code', { title: endpoint }, endpoint), h('code', null, refs || t('noRefs'))),
                 h('div', { className: 'dmm-actions' },
-                  h('button', { className: 'dmm-button', type: 'button', disabled: busy, onClick: () => act({ action: 'set-enabled', id: server.id, revision: server.revision, enabled: !server.enabled }) }, server.enabled ? t('disable') : t('enable')),
-                  h('button', { className: 'dmm-button', type: 'button', disabled: busy || !server.enabled, onClick: () => act({ action: 'reconnect', id: server.id, revision: server.revision }) }, t('reconnect')),
-                  h('button', { className: 'dmm-button dmm-danger', type: 'button', disabled: busy, onClick: () => act({ action: 'delete', id: server.id, revision: server.revision }) }, t('delete'))
+                  h('button', { className: 'dmm-button', type: 'button', disabled: mutationDisabled, onClick: () => act({ action: 'set-enabled', id: server.id, revision: server.revision, enabled: !server.enabled }) }, server.enabled ? t('disable') : t('enable')),
+                  h('button', { className: 'dmm-button', type: 'button', disabled: mutationDisabled || !server.enabled, onClick: () => act({ action: 'reconnect', id: server.id, revision: server.revision }) }, t('reconnect')),
+                  h('button', { className: 'dmm-button dmm-danger', type: 'button', disabled: mutationDisabled, onClick: () => act({ action: 'delete', id: server.id, revision: server.revision }) }, t('delete'))
                 )
               )
             })) : null

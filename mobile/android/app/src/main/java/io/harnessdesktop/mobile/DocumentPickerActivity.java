@@ -24,6 +24,7 @@ public final class DocumentPickerActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         commandId = getIntent().getStringExtra("commandId");
+        if (!ControlForegroundService.isCommandActive(commandId)) { finishAndRemoveTask(); return; }
         mode = getIntent().getStringExtra("mode");
         maxBytes = getIntent().getIntExtra("maxBytes", 2 * 1024 * 1024);
         String mimeType = getIntent().getStringExtra("mimeType");
@@ -53,6 +54,7 @@ public final class DocumentPickerActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQUEST_DOCUMENT) return;
+        if (!ControlForegroundService.isCommandActive(commandId)) { finishAndRemoveTask(); return; }
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             fail("FILE_PICKER_CANCELLED", "用户取消了系统文件选择。 ");
             return;
@@ -74,6 +76,7 @@ public final class DocumentPickerActivity extends Activity {
 
     private void readDocument(Uri uri) {
         new Thread(() -> {
+            if (!ControlForegroundService.isCommandActive(commandId)) { runOnUiThread(this::finishAndRemoveTask); return; }
             try (InputStream input = getContentResolver().openInputStream(uri)) {
                 if (input == null) throw new IllegalStateException("无法读取所选文件");
                 ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -81,6 +84,7 @@ public final class DocumentPickerActivity extends Activity {
                 int count;
                 int total = 0;
                 while ((count = input.read(buffer)) >= 0) {
+                    if (!ControlForegroundService.isCommandActive(commandId)) throw new IllegalStateException("命令已停止");
                     total += count;
                     if (total > maxBytes) throw new IllegalStateException("所选文件超过授权读取上限");
                     output.write(buffer, 0, count);
@@ -97,6 +101,8 @@ public final class DocumentPickerActivity extends Activity {
 
     private void writeDocument(Uri uri) {
         new Thread(() -> {
+            if (!ControlForegroundService.isCommandActive(commandId)) { runOnUiThread(this::finishAndRemoveTask); return; }
+            // Once provider I/O begins, cancellation cannot promise rollback.
             try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
                 if (output == null) throw new IllegalStateException("无法写入所选文件");
                 output.write(content);

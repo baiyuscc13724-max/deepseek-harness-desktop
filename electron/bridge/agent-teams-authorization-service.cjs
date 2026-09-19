@@ -344,7 +344,10 @@ function createAgentTeamsAuthorizationService({
   let server
   let consumed = new Map()
   let closed = false
+  let closePromise
   let queue = Promise.resolve()
+  const sockets = new Set()
+  const cancelDialogs = new Set()
 
   const nextAuthorizationEpoch = previous => {
     const candidate = validateAuthorizationEpoch(createAutopilotEpoch())
@@ -460,18 +463,23 @@ function createAgentTeamsAuthorizationService({
   }
   const consume = request => {
     const operation = queue.then(async () => {
+      if (closed) throw authorizationError('HOST_AUTHORIZATION_REVOKED')
       const normalized = validateRequest(request)
       return withStateLock(stateFile, async () => {
+        if (closed) throw authorizationError('HOST_AUTHORIZATION_REVOKED')
         readCurrentAuthorizationState()
         if (consumed.has(normalized.authorizationId)) throw authorizationError('HOST_AUTHORIZATION_REPLAY')
         if (consumed.size >= maxConsumed) throw authorizationError('HOST_AUTHORIZATION_CAPACITY')
         const decision = await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => resolve(false), dialogTimeoutMs)
-          Promise.resolve().then(() => showMessageBox(dialogOptions(normalized))).then(
-            result => { clearTimeout(timer); resolve(result?.response === 0) },
-            error => { clearTimeout(timer); reject(error) }
+          const cancel = () => { clearTimeout(timer); cancelDialogs.delete(cancel); resolve(false) }
+          const timer = setTimeout(cancel, dialogTimeoutMs)
+          cancelDialogs.add(cancel)
+          Promise.resolve().then(() => closed ? { response: 1 } : showMessageBox(dialogOptions(normalized))).then(
+            result => { clearTimeout(timer); cancelDialogs.delete(cancel); resolve(result?.response === 0) },
+            error => { clearTimeout(timer); cancelDialogs.delete(cancel); reject(error) }
           )
         })
+        if (closed) throw authorizationError('HOST_AUTHORIZATION_REVOKED')
         if (!decision) throw authorizationError('HOST_AUTHORIZATION_DENIED')
         const consumedAt = now()
         if (!Number.isSafeInteger(consumedAt) || consumedAt < 0) throw authorizationError()
@@ -623,6 +631,10 @@ function createAgentTeamsAuthorizationService({
     await initializeAuthorizationState()
     if (process.platform !== 'win32') await rm(endpoint, { force: true }).catch(() => undefined)
     server = net.createServer(socket => {
+      if (closed) return socket.destroy()
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      socket.setTimeout(30_000, () => socket.destroy())
       let bytes = 0
       let text = ''
       socket.setEncoding('utf8')
@@ -647,17 +659,24 @@ function createAgentTeamsAuthorizationService({
     if (!server || closed) throw authorizationError()
     return { ...env, [ENDPOINT_ENV]: endpoint, [TOKEN_ENV]: capabilityToken.toString('base64url') }
   }
-  const close = async () => {
-    if (closed) return
+  const close = () => {
+    if (closePromise) return closePromise
     closed = true
     for (const authorizationId of pendingAutopilot.keys()) rememberAutopilotTombstone(authorizationId, 'HOST_AUTHORIZATION_REVOKED')
     pendingAutopilot.clear()
     autopilotSettingsProof = null
     capabilityToken.fill(0)
+    for (const cancel of cancelDialogs) cancel()
     const active = server
     server = undefined
-    if (active) await new Promise(resolve => active.close(() => resolve()))
-    if (process.platform !== 'win32') await rm(endpoint, { force: true }).catch(() => undefined)
+    const serverClosed = active ? new Promise(resolve => active.close(() => resolve())) : Promise.resolve()
+    for (const socket of sockets) socket.destroy()
+    closePromise = (async () => {
+      await queue
+      await serverClosed
+      if (process.platform !== 'win32') await rm(endpoint, { force: true }).catch(() => undefined)
+    })()
+    return closePromise
   }
   return Object.freeze({
     start,

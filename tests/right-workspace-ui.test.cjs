@@ -142,9 +142,33 @@ test('Desktop shell exposes one unified right workspace with browser, files, sch
   assert.match(integration, /openMode\(item\.id, \{ push: true \}\)/u)
   assert.match(integration, /quickButton\?\.setAttribute\('aria-expanded'/u)
   assert.match(integration, /getRightWorkspaceResource/u)
-  assert.match(integration, /factory\.loadDocumentPreview\(target/u)
-  assert.match(integration, /workspacePreview: path => resource\('filePreview', \{ path \}\)/u)
-  assert.match(integration, /localPreview: path => api\.previewRightWorkspaceLocal\(path\)/u)
+  const documentStart = integration.indexOf('async function openDocument(')
+  const documentEnd = integration.indexOf('function scheduleDraft(', documentStart)
+  assert.ok(documentStart >= 0 && documentEnd > documentStart)
+  let revision = 0
+  const previews = []
+  const rendered = []
+  const errors = []
+  let releasePreview
+  const preview = new Function('deps', `const { beginDocumentRequest, isCurrentDocumentRequest, api, renderDocument, documentView, statusPanel, factory } = deps; ${integration.slice(documentStart, documentEnd)}; return openLocalDocument`)(
+    { beginDocumentRequest: () => ++revision, isCurrentDocumentRequest: value => value === revision,
+      api: { previewRightWorkspaceLocal: value => { previews.push(value); return new Promise(resolve => { releasePreview = resolve }) } },
+      renderDocument: (...args) => rendered.push(args), documentView: { replaceChildren: value => errors.push(value) }, statusPanel: value => value,
+      factory: { isExplicitLocalTarget: value => value === '/synthetic/local.md' } }
+  )
+  assert.equal(await preview('secret.md', { sourceKind: 'workspace-link' }), false)
+  assert.equal(previews.length, 0, 'missing source session rejects before any preview API call')
+  const stale = preview('100%25 报告.md', { sourceKind: 'workspace-link', sessionId: 'source-A' })
+  const staleRelease = releasePreview
+  const latest = preview('new.md', { sourceKind: 'workspace-link', sessionId: 'source-B' })
+  releasePreview({ file: { text: 'B' } })
+  assert.equal(await latest, true)
+  staleRelease({ file: { text: 'A' } })
+  assert.equal(await stale, false)
+  assert.deepEqual(previews, [{ target: '100%25 报告.md', sessionId: 'source-A', sourceKind: 'workspace-link' }, { target: 'new.md', sessionId: 'source-B', sourceKind: 'workspace-link' }])
+  assert.equal(rendered.length, 1, 'late source-A preview cannot replace source-B')
+  assert.equal(rendered[0][2].sessionId, 'source-B')
+  assert.equal(errors.length, 1)
   assert.match(integration, /runtimeView\.addEventListener\('ipc-message'/u)
   assert.match(integration, /runtimeView\.send\('right-workspace:command'/u)
   assert.match(integration, /schedulesSnapshot\.history/u)
@@ -194,7 +218,25 @@ test('Desktop shell exposes one unified right workspace with browser, files, sch
   assert.match(integration, /function setBrowserContentVisible\(visible\)/u)
   assert.match(integration, /browserStateModeAction\(/u)
   assert.match(integration, /if \(action === 'restore-browser'\) openMode\('browser', \{ nativeAlreadyVisible: true \}\)/u)
-  assert.match(integration, /else \{[\s\S]{0,220}api\.setBrowserVisible\(false\)/u)
+  assert.match(integration, /else \{[\s\S]{0,260}await setBrowserVisible\(false\)/u)
+  const visibilityStart = integration.indexOf('function setBrowserVisible(')
+  const visibilityEnd = integration.indexOf('function element(', visibilityStart)
+  assert.ok(visibilityStart >= 0 && visibilityEnd > visibilityStart)
+  const visibilityCalls = []
+  let settleVisibility
+  const setVisible = new Function('api', `let requestedBrowserVisible = null; let browserVisibilityRequest = null; ${integration.slice(visibilityStart, visibilityEnd)}; return setBrowserVisible`)(
+    { setBrowserVisible: value => { visibilityCalls.push(value); return new Promise(resolve => { settleVisibility = resolve }) } }
+  )
+  const firstHide = setVisible(false)
+  assert.equal(setVisible(false), firstHide, 'only in-flight duplicates are coalesced')
+  assert.deepEqual(visibilityCalls, [false])
+  settleVisibility()
+  await firstHide
+  const laterHide = setVisible(false)
+  assert.notEqual(laterHide, firstHide, 'later explicit hide reconciles native state again')
+  assert.deepEqual(visibilityCalls, [false, false])
+  settleVisibility()
+  await laterHide
   assert.doesNotMatch(integration, /next\?\.visible === true[^\n]*openMode\('browser'\)/u)
   assert.doesNotMatch(browser, /workspace\) await workspace\.openMode\('browser'\)[\s\S]{0,80}api\.setBrowserVisible\(true\)/u)
   assert.match(app, /target\.hostname === 'preview-local'/u)
@@ -211,8 +253,10 @@ test('Desktop shell exposes one unified right workspace with browser, files, sch
   assert.match(links, /for \(const node of record\.addedNodes\) decorateNode\(node\)/u)
   assert.match(links, /characterData: true/u)
   assert.doesNotMatch(links, /code\.querySelector\('a,button'\)/u)
-  assert.match(links, /相对路径只从当前工作区读取/u)
-  assert.match(links, /明确绝对路径可只读预览本机文件/u)
+  // The behavior above proves source binding; the user hint must describe that
+  // same boundary rather than advertising an active-workspace/local-path fallback.
+  assert.match(links, /仅从此消息来源会话的工作区读取/u)
+  assert.match(links, /不会切换工作区或搜索其他项目/u)
   assert.match(links, /程序和安装包不会执行/u)
 })
 
@@ -236,7 +280,32 @@ test('guest bridge publishes bounded session/browser intents and accepts bounded
   assert.match(preload, /rightWorkspace:openFile/u)
   assert.match(main, /ipcMain\.handle\('rightWorkspace:openFile'/u)
   assert.match(main, /materializeRightWorkspaceFile/u)
-  assert.match(main, /openLocalTarget\(file\.destination/u)
+  const openStart = main.indexOf('async function openRightWorkspaceTarget(')
+  const openEnd = main.indexOf('function browserIntentForLink(', openStart)
+  assert.ok(openStart >= 0 && openEnd > openStart)
+  const localService = require('../electron/bridge/local-target-service.cjs')
+  const url = require('node:url')
+  const operations = []
+  const copies = []
+  let destination = path.join(root, 'synthetic-only', 'literal%2Fname.md')
+  const opener = new Function('deps', `const { rightWorkspaceFileSource, materializeRightWorkspaceFile, runtimeState, runtimeApiFetch, app, mkdir, mkdtemp, open, realpath, lstat, rm, pathToFileURL, normalizeLocalTarget, openLocalTarget, stat, shell, setTimeout, RIGHT_WORKSPACE_OPEN_CLEANUP_MS } = deps; ${main.slice(openStart, openEnd)}; return openRightWorkspaceTarget`)(
+    { rightWorkspaceFileSource: value => value, materializeRightWorkspaceFile: async input => { copies.push(input); return { destination, directory: path.dirname(destination), name: path.basename(destination) } },
+      runtimeState: { status: 'ready', url: 'http://synthetic.invalid' }, runtimeApiFetch: () => { throw new Error('unexpected real fetch') }, app: { getPath: () => '/synthetic-temp' },
+      mkdir() {}, mkdtemp() {}, open() {}, realpath() {}, lstat() {}, rm: async () => {},
+      pathToFileURL: url.pathToFileURL, normalizeLocalTarget: localService.normalizeLocalTarget, openLocalTarget: localService.openLocalTarget,
+      stat: async value => { operations.push(['stat', value]); return { isDirectory: () => false } },
+      shell: { openPath: async value => { operations.push(['open', value]); return '' }, showItemInFolder: value => operations.push(['reveal', value]) },
+      setTimeout: () => ({ unref() {} }), RIGHT_WORKSPACE_OPEN_CLEANUP_MS: 1 }
+  )
+  const sourceA = { target: '100%25.md', sessionId: 'source-A' }
+  assert.equal((await opener(sourceA)).opened, true)
+  assert.equal(copies[0].sessionId, 'source-A')
+  assert.equal(copies[0].path, '100%25.md')
+  assert.deepEqual(operations, [['stat', destination], ['open', destination]], 'encoded percent stays literal through the real native opener adapter')
+  operations.length = 0
+  destination = path.join(root, 'synthetic-only', 'unsafe.ps1')
+  assert.equal((await opener(sourceA)).revealed, true)
+  assert.deepEqual(operations, [['stat', destination], ['reveal', destination]], 'active script is revealed, never executed')
   assert.match(main, /tempBase: app\.getPath\('temp'\)/u)
   assert.match(main, /mkdtempImpl: mkdtemp/u)
   assert.match(main, /openPath: target => shell\.openPath\(target\)/u)

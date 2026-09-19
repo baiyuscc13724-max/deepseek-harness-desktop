@@ -1,0 +1,180 @@
+{
+  "kind": "deep-audit-round4-deliverable-manifest",
+  "capturedAt": "2026-09-19T11:41:01.101Z",
+  "purpose": "Byte identity of every file this round created or updated, so an independent reviewer can verify exactly what changed without trusting this session's narration.",
+  "scopeNote": "This manifest is an audit record, not production output. It lists files under tests/, docs/deep-audit/ and the two round-4 artifact roots. It does not list the isolated upstream fetch at D:\\DeepSeek-Harness-Desktop\\core-compat-upstream (deliberately outside the checkout).",
+  "verifiedByRootOnly": true,
+  "independentReviewStillRequired": true,
+  "files": [
+    {
+      "file": "tests/deep-audit-core-compat.test.cjs",
+      "sha256": "24a0815770e74a19a31fb3d6d12b399c592673b538908b8c356f730f77eabd3b",
+      "role": "core version guard (baseline 9/9; checklist mode lists 32 required edits for a hypothetical target)"
+    },
+    {
+      "file": "tests/deep-audit-round4-question-install-compat.test.cjs",
+      "sha256": "a49a23d0be4f69c6a9636a1fffd23a9f7fae321d25c448ada2f9b46eb0be160d",
+      "role": "pair-install candidate, 4/4 pass; does not migrate or mask the legacy suite"
+    },
+    {
+      "file": "tests/deep-audit-round4-relay-backpressure.test.cjs",
+      "sha256": "c60a4a92c7bf527ebc7534036de49727c994a83017805346ed4225dd88a1e64f",
+      "role": "relay outbound backpressure boundary, 8/8 pass; verifies sendBounded's decision logic with fake sockets only — NOT real-transport end-to-end backpressure"
+    },
+    {
+      "file": "docs/deep-audit/core-compat-upgrade.md",
+      "sha256": "cf51446aee15cacf5f1e44a8ec5479174f290e334aed0bf91a74a39160f1c250",
+      "role": "core bump inventory, target selection, upgrade verification plan"
+    },
+    {
+      "file": "docs/deep-audit/round4-status.md",
+      "sha256": "6c46faceecbfc6f5df057d459898e2d03455d7abcaabd8115f190ab62a8d09b9",
+      "role": "round-4 execution record incl. corrections"
+    },
+    {
+      "file": "docs/deep-audit/round4-validation.md",
+      "sha256": "2897818de2b9b5b411bb217b61438b1e5d8e7dda6f867d6567232d7f0136b97b",
+      "role": "explicitly non-independent validation record; regression table; copy/paste review; pin-drift enumeration; white-column phase evidence; known-limitation classification",
+      "note": "this file was revised repeatedly during the round; the hash above is the latest state and supersedes any earlier hash quoted in this manifest"
+    },
+    {
+      "file": "docs/deep-audit/deep-audit-suite-runbook.md",
+      "sha256": "496539c48f72d1889ad8e1124af8d94435e9ceb183b5e66a5a5479eb7530f356",
+      "role": "how to run every deep-audit suite correctly: three entry-contract shapes, pwsh requirement, unique run names, expected red/green states, known retained limitations"
+    },
+    {
+      "file": "docs/deep-audit/round4-question-install-compat.md",
+      "sha256": "578611567a66aebcf132501fd4db72b342eaa8b3d947ab6d0befcc1ca3d8dc38",
+      "role": "legacy-suite scope correction (measured 6/5/1) and per-assertion mapping"
+    },
+    {
+      "file": "docs/deep-audit/delegation-failure-investigation.md",
+      "sha256": "6fede886a16feb72f4a308a685e5f18b5aede3e170c154c37787731be10cdba5",
+      "role": "delegation root cause (child transport to openai-codex) with withdrawn hypotheses preserved"
+    },
+    {
+      "file": "docs/deep-audit/delegation-classifier-fix-spec.md",
+      "sha256": "7d9d452a44c00e2e9b1b9811d8b57b0154563b562d3daa49b878e8698ca5e118",
+      "role": "minimal fix spec for the TRANSPORT misclassification; not implemented"
+    },
+    {
+      "file": ".artifacts/deep-audit-core-compat/source-before.json",
+      "sha256": "96a044d9d1e6704f01a9a3b41246275ac86edab950de9bfa7b09d85966fdef50",
+      "role": "version pin/gate source bytes before any change"
+    },
+    {
+      "file": ".artifacts/deep-audit-core-compat/fetched-0.1.6-alpha.2.json",
+      "sha256": "eb289b9ca6a2c8f3b71d12a0370a3a8646b9789df14d14ed069dbd93fe48fbcd",
+      "role": "target selection, fetch provenance, 5 patched targets all DIFF"
+    },
+    {
+      "file": ".artifacts/deep-audit-core-compat/anchor-survival-0.1.6-alpha.2.json",
+      "sha256": "cabf504735dbc8d71e9d01cd89a015e08e743eef3134ca07e717eeb30d931ac5",
+      "role": "patch anchor survival map (16 survive, 4 lost)"
+    },
+    {
+      "file": ".artifacts/deep-audit-core-compat/re-derivation-0.1.6-alpha.2.json",
+      "sha256": "1eca856f5f021dc8778eb99290272ecfe9c204a2f9ad878b578e1f713117fe51",
+      "role": "per-patch verdicts; contains the corrected chat-scroll conclusion"
+    },
+    {
+      "file": ".artifacts/deep-audit-core-compat/gate-survival-0.1.6-alpha.2.json",
+      "sha256": "7b54681a1f161f604064aceac7feb81a36aee496d9a2bfc51284d359ec791d8a",
+      "role": "13 native gates anchor survival (24/27 verbatim)"
+    },
+    {
+      "file": ".artifacts/deep-audit-core-compat/gate-hash-candidates-0.1.6-alpha.2.json",
+      "sha256": "483f4c860244c499fafbcea8031ac7967d70bb6d7e8f0cc65f3971b69a374299",
+      "role": "official hashes for the target core; 3 gates carry over unchanged"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-mobile-snapshot/multirun-2026-09-19.json",
+      "sha256": "b866433f871428b023006c83b20a223d2124b383e89f42ea1332fce97dc367ea",
+      "role": "v1 mobile multirun record — SUPERSEDED (wrong denominator)"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-mobile-snapshot/multirun-2026-09-19-v2.json",
+      "sha256": "945abd8564c84e2e0ac428db08c605b4b1bf10201d41c349eaf7f31cfa01a6f4",
+      "role": "corrected 9-run record, n=54 per side; lists v1's two errors"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-mobile-snapshot/segment-breakdown-2026-09-19.json",
+      "sha256": "c7485da183673aa81cd9cf2ff1afc6772a8e5c4543f0ff9ef44c0a33bb3d317d",
+      "role": "12-segment staged latency; ackRelayQueue holds 98.9% of the whole-body median"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-mobile-snapshot/ack-queue-model-2026-09-19.json",
+      "sha256": "f329a16ee1eb5968d63722524fecab1546a861a3069c10fbb61ca8c837cfa028",
+      "role": "queue model — verdict superseded in part, see correction"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-mobile-snapshot/queue-model-correction-2026-09-19.json",
+      "sha256": "837c35673967df3bc325977b4fefc1052d66ec265209f6f873f280fdfd5928c4",
+      "role": "withdraws the physical attribution to the shipped relay; documents the circularity"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-mobile-snapshot/relay-queue-mechanism-2026-09-19.json",
+      "sha256": "c178ae9c37d2f16211f010b3a8c89758ed9f1b0f4b41df58a77f09bb7d44600f",
+      "role": "relay sendBounded/4MiB/4429 mechanism, read not exercised"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-mobile-snapshot/coverage-addendum-2026-09-19.json",
+      "sha256": "23d88623568db9562c9da438ccd0dbee8956e99e326143eff5efd24f4fdded86",
+      "role": "profile/integrity/interruption/JVM-check coverage inventory and its gaps"
+    },
+    {
+      "file": "docs/deep-audit/round4-collateral-check.md",
+      "sha256": "512e26aaafc14e6d630ec8843a21a6871121fcc7eda37af8e2222eb42be37d82",
+      "role": "collateral-impact check after this session edits to README, release-notes, verify-static and the workspace links file; records one cross-gate conflict introduced and fixed, plus 30/30 consumers of the edited links file"
+    },
+    {
+      "file": "docs/deep-audit/core-upgrade-execution-plan.md",
+      "sha256": "c8fad5f38b1f372b30717f76755da8937238e92cae4b8d059c5fdf1d56e88f74",
+      "role": "ordered plan for the authorized core upgrade; sections 1b-1g carry the measured risk profile (71 pins, missing package, 16/16 plugin load, import surface, gate port-vs-rewrite verdicts)"
+    },
+    {
+      "file": "scripts/deep-audit-subagent-transport-patch.mjs",
+      "sha256": "3dfaee733f5eec1ab1dec3210e81043c42c1c7f0f9bdb2adf7b7278198318b8f",
+      "role": "standalone maintenance patch implementing the classifier fix outside the frozen installer; provable prior and patched hashes; fail-closed on drift, identity and version"
+    },
+    {
+      "file": "scripts/deep-audit-white-column-scan.mjs",
+      "sha256": "1e8584b3c1314eb97fa36976c3d70ccd7caaedaec8b5700e69d845db9bc48cfa",
+      "role": "read-only pixel-layer white-column scanner using the repository existing sharp dependency"
+    },
+    {
+      "file": "tests/deep-audit-round4-subagent-transport-install.test.cjs",
+      "sha256": "c123106293604fa42be30b1ef61bc4b56e09c5177b7ffb71f4fd45a529203d48",
+      "role": "7/7 pass on throwaway copies: apply, idempotence, pinned product hash, patched-artifact behaviour, frozen-installer-untouched assertion, drift and identity refusals"
+    },
+    {
+      "file": "tests/deep-audit-round4-classifier-proposal.test.cjs",
+      "sha256": "7530787594a8eeb7c5d124dac8b80d19e3e7666b8d4b0f1c005a952a4f4dbb26",
+      "role": "6/6 pass: offline positive plus 12-branch negative regression against the real shipped classifier text"
+    },
+    {
+      "file": ".artifacts/deep-audit-round4-white-column-scan-2026-09-19.txt",
+      "sha256": "809d1bb8ccae7cd90c85f382720c01ea24d6398a241489bd3652c498e04d4110",
+      "role": "pixel scan of 69 real Electron captures; candidate signature is a 113px uniform near-white band at x=166 present in every accepted 1460x930 capture and invariant across four view states"
+    },
+    {
+      "file": "docs/deep-audit/round4-coverage-matrix.md",
+      "sha256": "c46477d4955e15183330e34a526fd6ac9fac8fe16a0a18d5edf55d9320995277",
+      "role": "consolidated coverage matrix: per-area evidence and verdicts, all five reds classified, explicit environment-uncovered list, status of the three authorized items"
+    },
+    {
+      "file": "docs/deep-audit/round4-handoff.md",
+      "sha256": "1932326592837c03d3f9c42faa8402538988e870edea4582ddeca1d1a09c63f9",
+      "role": "final handoff entry point; now carries the measured upgrade readiness ledger"
+    },
+    {
+      "file": "docs/deep-audit/acceptance-round-mapping-spec.md",
+      "sha256": "ac69886a3c688ec76ec3235bc072c33dedd7ffddf6f298833d1fda0cd63cf359",
+      "role": "decision-ready spec for the acceptance round: the single remap entry, the count bump, and the full 7-manifest re-freeze impact"
+    }
+  ],
+  "notIncludedOnPurpose": [
+    "The isolated upstream core fetch (D:\\DeepSeek-Harness-Desktop\\core-compat-upstream) lives outside the checkout and is not part of the repository.",
+    "No production file was modified this round: scripts/patch-official-runtime.mjs remains at 058d138507ccc626d3a30130c2d25dc976cfbbb8a9a44899f1beb26bee3cdd1f, package.json is unchanged, and the running instance was never touched."
+  ]
+}

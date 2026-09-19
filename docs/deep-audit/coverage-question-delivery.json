@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "question-delivery-bounded-integration-sidecar",
+  "reviewerAcceptance": "submitted-for-root-review-not-Host-proof",
+  "globalCoveragePromotion": false,
+  "wholeUserAccepted": false,
+  "masterPreserved": {
+    "sha256": "8d5cad11503953cb9044a96902ab92d718cb21ae17107313549c5e45fb527794",
+    "summary": {"userOperations":115,"independentlyAccepted":104,"domainFindingRows":598}
+  },
+  "counts": {"uiMatrixPerRun":80,"uiRuns":2,"originalChainGeometry":34,"directComponent":46,"beforeCharacterization":7,"legacyLocalOracle":44,"supplementProbes":2,"supplementSubchecks":122,"installTests":43,"installSupplementTests":17},
+  "countUnit": "separate fixture check denominators; not additive USER operations or whole-function coverage",
+  "summaryPath": ".artifacts/deep-audit-question-delivery-acceptance/integration/summary.json",
+  "sourceClosurePath": ".artifacts/deep-audit-question-delivery-acceptance/integration/integrity-before.json",
+  "unverified": ["Android","WAN","fullHost","realSessionProjection","persistentWhiteColumn","allThemesScreenReader","largeSnapshot","tailLatency","deployment","fullCliLifecycle"],
+  "rows": [
+    {
+      "id": "QUESTION-DELIVERY-CANDIDATE",
+      "relatedIds": ["ROUND3-QUESTION-CHAIN","ROUND3-QUESTION-ACK-LIFETIME","ROUND3-QUESTION-RETRY-DRAFT","USER-MOBILE-EXTERNAL-RECOVERY","USER-MOBILE-REALTIME-LATENCY"],
+      "wholeUserAccepted": false,
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": {"status":"bounded-pass","promotesMaster":false,"evidence":"Actual full Question/Gateway/Connection/mux/HTTP parser and controlled business receipt. New UI retained through complete JSON parsing. results=0, not real Host session projection."},
+        "error-recovery": {"status":"bounded-pass","promotesMaster":false,"evidence":"Wrong-rpcId and real 30-second deadline produce read-only unknown, no automatic business resend. Only authentic fresh generation restores exact draft and explicit resubmit. General503 cannot establish pre-dispatch. ACK is not business winner."},
+        "concurrency-switch": {"status":"bounded-pass","promotesMaster":false,"evidence":"Same-tick DOM.click once guard, authentic cancellation/owner/domain cleanup. Two direct-component probes strictly verify same-owner unknown cap and retired-record isolation. Constructed handles/session-key/TTL clock seams not promoted to network E2E."},
+        "isolation": {"status":"bounded-pass","promotesMaster":false,"evidence":"Recorded fresh environment and pre-load Node/Electron/renderer fences, only registered synthetic loopback routes; theme denial retained. Evidence metadata audit did not run runtime. Not OS egress or full production CSP verification."},
+        "a11y": {"status":"bounded-pass","promotesMaster":false,"evidence":"Two recorded 390x844 Chromium runs: dismiss 92x44 CSS px, bottom776 within844; separate trusted keyboard/touch. No Android dp, iOS pt, all-theme/contrast/screen-reader/IME/safe-area acceptance."}
+      }
+    },
+    {
+      "id": "QUESTION-DELIVERY-INSTALL",
+      "relatedIds": ["QUESTION-INSTALL-20260912-1","ROUND3-QUESTION-CHAIN"],
+      "wholeUserAccepted": false,
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": {"status":"bounded-pass","promotesMaster":false,"evidence":"43 actual install API tests, 51 receipts; separate 17 supplement checks, 16 directory receipts plus historical proof. 5137 complete package files only Q/G changed; actual maintenance-chain installation produces exact Q/G/30f413 companion."},
+        "error-recovery": {"status":"bounded-pass","promotesMaster":false,"evidence":"Missing/unknown package/full-hash, 13 original proof gates, retired artifact and injected I/O failures rejected; offline exact rerun can recover known mixed pairs. Not permission to execute a mixed pair."},
+        "concurrency-switch": {"status":"bounded-pass","promotesMaster":false,"evidence":"Prepared source/output, first-write pair check, lock/temp CAS interference and final-pair rejection evidenced. Sequential two-file publication is not a cross-file atomic transaction or malicious-writer proof."},
+        "isolation": {"status":"bounded-pass","promotesMaster":false,"evidence":"Read-only binding of protected server/Connection/UiSession/question-card/CAS helper and original9807-byte native proof. Only two authorized maintenance scripts changed; no CLI/runtime/deployment execution in integration."},
+        "a11y": {"status":"unverified","promotesMaster":false,"evidence":"Installer API stream contains no UI or accessibility proof. Old installer suite is not complete compatibility coverage for the new companion pair."}
+      }
+    },
+    {
+      "id": "QUESTION-DELIVERY-RETAINED-BOUNDARIES",
+      "relatedIds": ["ROUND3-APPFRAME-LAYOUT","USER-MOBILE-REALTIME-LATENCY"],
+      "wholeUserAccepted": false,
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": {"status":"unverified","promotesMaster":false,"evidence":"Actual Host result projection, Android/WAN and user persistent white column remain open; no runtime repeated by integration."},
+        "error-recovery": {"status":"retained-failure","promotesMaster":false,"evidence":"Old UI-before7 characterizes ACK-early removal and draft loss, not old-version correctness. core-after-v2 producer drift remains invalid. Two missing historical producers are exact-SHA reconstructions, not original archives."},
+        "concurrency-switch": {"status":"unverified","promotesMaster":false,"evidence":"No claim for arbitrary snapshot/nonce/network ordering or all external writer timing. n=2 same-renderer controlled delays are not SLA/percentiles."},
+        "isolation": {"status":"bounded-pass","promotesMaster":false,"evidence":"Round1/2/3 freezes and original semantic counters retained. Installer authorized historical change is resolved with explicit before byte mapping, not rebinding old pins."},
+        "a11y": {"status":"unverified","promotesMaster":false,"evidence":"User screenshot white strip causality, all themes and reader testing unchanged. No GUI document preview under task boundary."}
+      }
+    }
+  ]
+}

@@ -6,7 +6,11 @@ const { listenBrowserSafe } = require('./browser-safe-port.cjs')
 
 const MAX_BODY_BYTES = 64 * 1024
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/
-const CONTROL_SCOPES = new Set(['browser', 'computer', 'memory'])
+// desktop_control has a distinct, already implemented WindowsDesktopUi route
+// in desktopModelToolAction. It is not an alias for coordinate-only computer_use.
+const { ACTIONS: DESKTOP_ACTIONS } = require('./windows-desktop-ui.cjs')
+const DESKTOP_ACTION_SET = new Set(DESKTOP_ACTIONS)
+const CONTROL_SCOPES = new Set(['browser', 'computer', 'desktop', 'memory', 'workspace'])
 const MAX_RECENT_REQUESTS = 512
 const PLAYWRIGHT_READ_OPERATIONS = new Set(['domSnapshot', 'count', 'isVisible', 'isEnabled', 'innerText', 'textContent', 'getAttribute'])
 const REPLAY_ACTIONS = Object.freeze({
@@ -295,9 +299,13 @@ class BrowserControlServer {
       catch { return this.#send(response, 400, { ok: false, error: '请求 JSON 无效。' }) }
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw controlError('browser-request-invalid', '浏览器操作请求必须是对象。')
       const scope = body.scope == null || body.scope === '' ? 'browser' : String(body.scope)
-      if (!CONTROL_SCOPES.has(scope)) throw controlError('browser-request-scope-invalid', '桌面模型操作 scope 无效。')
+      if ((body.scope != null && typeof body.scope !== 'string') || !CONTROL_SCOPES.has(scope)) throw controlError('browser-request-scope-invalid', '桌面模型操作 scope 无效。')
       this.activeRequests.set(controller, scope)
       const action = String(body.action || '')
+      if (scope === 'workspace' && body.action !== 'preview') throw controlError('WORKSPACE_PREVIEW_ACTION', '工作区预览只支持固定 preview 动作。')
+      if (scope === 'desktop' && (typeof body.action !== 'string' || !DESKTOP_ACTION_SET.has(action))) {
+        throw controlError('desktop-action-unsupported', '不支持的桌面结构化控制动作。')
+      }
       if (action !== 'status' && action !== 'stop') {
         if (arrivalEpochs.get(scope) !== this.stopEpochs.get(scope)) {
           throw controlError('browser-action-cancelled', '该操作早于最近一次停止或恢复边界，已取消。', 499)
@@ -307,7 +315,19 @@ class BrowserControlServer {
       const suppliedRequestId = body.request_id == null ? '' : String(body.request_id)
       if (suppliedRequestId && !REQUEST_ID_PATTERN.test(suppliedRequestId)) throw controlError('browser-request-id-invalid', '浏览器操作 request_id 无效。')
       const requestId = suppliedRequestId || randomBytes(16).toString('hex')
-      const result = await this.#deduplicatedDispatch(body, { controller, signal: controller.signal, requestId, scope })
+      let previewTimer
+      let result
+      try {
+        const operation = this.#deduplicatedDispatch(body, { controller, signal: controller.signal, requestId, scope })
+        // Includes time in the independent workspace lane. Never cache/replay an
+        // old preview image, and never borrow browser input authorization.
+        result = scope === 'workspace' ? await Promise.race([operation, new Promise((_, reject) => {
+          previewTimer = setTimeout(() => {
+            controller.abort()
+            reject(controlError('WORKSPACE_PREVIEW_TIMEOUT', '本次工作区预览回执等待超时。', 408))
+          }, 30_000)
+        })]) : await operation
+      } finally { clearTimeout(previewTimer) }
       if (generation !== this.generation || !this.server) return
       this.#send(response, 200, { ok: true, requestId, result })
     } catch (error) {

@@ -1,7 +1,8 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 
-async function executeDesktop(action, payload) {
+async function executeDesktop(action, payload, { signal } = {}) {
   const file = process.env.HARNESS_DESKTOP_CAPABILITIES_STATE_FILE
   if (!file) throw new Error('桌面能力不可用。')
   const state = JSON.parse(await readFile(file, 'utf8'))
@@ -10,10 +11,15 @@ async function executeDesktop(action, payload) {
   const response = await fetch(new URL('/action', state.origin), {
     method: 'POST',
     headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ scope: 'desktop', action, payload })
+    body: JSON.stringify({ scope: 'desktop', action, payload, request_id: randomUUID() }),
+    signal
   })
   const body = await response.json()
-  if (!response.ok) throw new Error(body.error || '桌面结构化控制失败。')
+  if (!response.ok) throw Object.assign(new Error(body.error || '桌面结构化控制失败。'), {
+    code: body.code || 'desktop-control-error', statusCode: response.status,
+    retryable: false,
+    ...(body.code === 'browser-request-scope-invalid' ? { guidance: 'Host 控制服务与已安装 desktop_control 插件协议不一致；检查配套版本，不要改成 computer scope 或放宽授权。' } : {})
+  })
   return body
 }
 
@@ -35,14 +41,14 @@ function registerDesktopControl(ctx) {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }]
     },
-    execute: args => executeDesktop(args.action, {
+    execute: (args, exec) => executeDesktop(args.action, {
       ref: args.ref,
       target_id: args.target_id,
       x: args.x,
       y: args.y,
       text: args.text,
       delta_y: args.delta_y
-    })
+    }, { signal: exec?.signal })
   }))
 }
 

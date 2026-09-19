@@ -50,6 +50,10 @@ function planHash(team) {
       dependsOn: task.dependsOn,
       crossTeamDependsOn: task.crossTeamDependsOn ?? [],
       files: task.files ?? [],
+      ...(task.professionalContractVersion === undefined ? {} : { professionalContractVersion: task.professionalContractVersion }),
+      ...(task.requiredSkills === undefined ? {} : { requiredSkills: task.requiredSkills }),
+      ...(task.acceptanceCriteria === undefined ? {} : { acceptanceCriteria: task.acceptanceCriteria }),
+      ...(task.requiresFileArtifact === undefined ? {} : { requiresFileArtifact: task.requiresFileArtifact }),
       capabilities: task.capabilities ?? [],
       externalEffects: (task.externalEffects ?? []).map(effect => ({
         name: effect.name,
@@ -1426,7 +1430,7 @@ test('admitted recommit safety failures still revoke live grants for scope Stop 
     ['capability became unknown', ({ draft }) => { draft.teams[0].tasks[0].capabilities.push({ name: 'extra-workspace', status: 'unknown', source: 'not provided by Host' }) }, 'AGENT_TEAMS_CAPABILITY_UNKNOWN'],
     ['effect requires confirmation', ({ draft }) => { draft.teams[0].tasks[0].externalEffects[0].policy = 'confirm_each' }, 'AGENT_TEAMS_EXTERNAL_EFFECT_CONFIRMATION_REQUIRED']
   ]
-  for (const [name, mutateRisk, expectedCode] of cases) await t.test(name, async () => {
+  for (const [name, mutateRisk, expectedCode] of cases) for (const stalePreview of [false, true]) await t.test(`${name}; stale CAS=${stalePreview}`, async () => {
     const value = fixture({ rootStatus: 'running', budget: 2 })
     const runtime = fakeRuntime(value.root, value.document, value.goal)
     const authority = mod.exactGoalRoundRootAuthority(runtime.ctx, { agent: value.root, turnKey: `risk-${name}` })
@@ -1446,8 +1450,8 @@ test('admitted recommit safety failures still revoke live grants for scope Stop 
     await assert.rejects(
       mod.commitTeamPlan(runtime.ctx, runtime.store, value.root, {
         teamId: team.id,
-        expectedRevision: team.plan.revision,
-        confirmedPlanHash: team.plan.hash,
+        expectedRevision: stalePreview ? 999 : team.plan.revision,
+        confirmedPlanHash: stalePreview ? 'f'.repeat(64) : team.plan.hash,
         automaticContinuation: true,
         automaticGoalRoundAuthority: authority,
         authorizationProvider: runtime.authorizationProvider
@@ -1922,6 +1926,182 @@ test('two-phase direct-human Resume may derive the stopped team only from the cu
   assert.equal(resumed.autopilot.planHashAtGrant, resumed.plan.hash)
   assert.equal(resumed.autopilot.revokeReason, undefined)
   assert.deepEqual(runtime.effects, [], 'team Resume never manufactures a Goal wake')
+})
+
+test('safe automatic recommit CAS mistakes reject without revoking the existing grant and allow a fresh exact retry', async t => {
+  const mod = await loadPlugin('safe-recommit-cas-recovery')
+  for (const [label, invalid, code] of [
+    ['stale revision', { expectedRevision: 2 }, 'AGENT_TEAMS_STALE_PLAN'],
+    ['stale hash', { confirmedPlanHash: 'f'.repeat(64) }, 'AGENT_TEAMS_STALE_PLAN'],
+    ['missing revision', { expectedRevision: undefined }, 'AGENT_TEAMS_PLAN_CAS_REQUIRED'],
+    ['missing hash', { confirmedPlanHash: undefined }, 'AGENT_TEAMS_PLAN_CAS_REQUIRED']
+  ]) await t.test(label, async () => {
+    const value = fixture({ rootStatus: 'running' })
+    const runtime = fakeRuntime(value.root, value.document, value.goal)
+    const before = runtime.store.snapshot()
+    const team = before.teams[0]
+    const authority = mod.exactGoalRoundRootAuthority(runtime.ctx, { agent: value.root, events: value.root.session.events, turnKey: 'safe-cas-retry' })
+    assert.ok(authority)
+    const input = { teamId: team.id, expectedRevision: team.plan.revision, confirmedPlanHash: team.plan.hash,
+      automaticContinuation: true, automaticGoalRoundAuthority: authority, authorizationProvider: runtime.authorizationProvider }
+    await assert.rejects(mod.commitTeamPlan(runtime.ctx, runtime.store, value.root, { ...input, ...invalid }), error => error?.code === code)
+    assert.deepEqual(runtime.store.snapshot(), before, 'a rejected CAS cannot alter the plan, grant, or wake ledger')
+    assert.deepEqual(runtime.effects, [], 'a recoverable preview error cannot disarm the Goal')
+    assert.equal(runtime.attempts.revoke, 0)
+    const result = await mod.commitTeamPlan(runtime.ctx, runtime.store, value.root, input)
+    assert.equal(result.plan.phase, 'active')
+    assert.equal(runtime.store.snapshot().teams[0].autopilot.grantId, team.autopilot.grantId)
+  })
+})
+
+test('team relay steers an admitted running member at capacity without requesting a second slot', async () => {
+  const mod = await loadPlugin('relay-running-at-capacity')
+  const value = fixture({ rootStatus: 'running' })
+  const runtime = fakeRuntime(value.root, value.document, value.goal)
+  const steered = []
+  const child = { id: 'worker-1', status: 'running', session: { header: { parentSession: value.root.id } }, steer(message) { steered.push(message) } }
+  runtime.ctx.agents.get = id => id === child.id ? child : id === value.root.id ? value.root : undefined
+  runtime.ctx.subagents[queueSubagentPrompt] = async () => assert.fail('running relay must not queue a second activation')
+  const admission = mod.createTeamTurnAdmission({ limit: 1 })
+  admission.adopt(value.root, child.id, 'run-1')
+  try {
+    const before = admission.snapshot()
+    const result = await mod.sendTeamMessage(runtime.ctx, runtime.store, admission, value.root, { teamId: 'team-1', recipientSessionId: child.id, message: 'Bounded coordination update' })
+    assert.equal(steered.length, 1)
+    assert.equal(result.message.status, 'queued', 'transport acceptance is never model delivery')
+    assert.deepEqual(admission.snapshot(), before, 'steering consumes neither a slot nor a queued waiter')
+  } finally { admission.close() }
+})
+
+test('ready-member relay revalidates durable Stop after admission and before dispatch', async t => {
+  const mod = await loadPlugin('relay-ready-final-fence')
+  for (const [change, expectedCode] of [['none', undefined], ['paused', 'AGENT_TEAMS_PAUSED'], ['resumed', 'AGENT_TEAMS_STALE_LEASE']]) await t.test(`lifecycle after admission=${change}`, async () => {
+    const value = fixture({ rootStatus: 'running', memberState: 'ready' })
+    const runtime = fakeRuntime(value.root, value.document, value.goal)
+    const child = { id: 'worker-1', status: 'ready', session: { header: { parentSession: value.root.id } } }
+    runtime.ctx.agents.get = id => id === child.id ? child : id === value.root.id ? value.root : undefined
+    let dispatched = 0
+    runtime.ctx.subagents[queueSubagentPrompt] = async () => { dispatched += 1; return 'transport accepted' }
+    const admission = { async run(_lead, _child, _signal, operation) {
+      if (change !== 'none') await runtime.store.mutate(document => { document.teams[0].state = change === 'paused' ? 'paused' : 'active'; document.teams[0].pauseEpoch += 1 })
+      return operation()
+    } }
+    const sending = mod.sendTeamMessage(runtime.ctx, runtime.store, admission, value.root, { teamId: 'team-1', recipientSessionId: child.id, message: 'Ready worker continuation' })
+    if (expectedCode !== undefined) {
+      await assert.rejects(sending, error => error?.code === expectedCode)
+      assert.equal(dispatched, 0, 'a pre-admission active snapshot is not authority after Stop')
+    } else {
+      const result = await sending
+      assert.equal(dispatched, 1)
+      assert.equal(result.message.status, 'queued')
+    }
+  })
+})
+
+test('real Store relay releases the global queue while transport acceptance is pending', { timeout: 15000 }, async () => {
+  const { mkdtemp, writeFile, rm } = require('node:fs/promises')
+  const os = require('node:os')
+  const mod = await loadPlugin('relay-real-store-lock')
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'teams-relay-'))
+  const file = path.join(directory, 'state.json')
+  const value = fixture({ rootStatus: 'running', memberState: 'ready' })
+  await writeFile(file, JSON.stringify(value.document))
+  const store = new mod.AgentTeamsStore(file)
+  let release, entered, sending, timer
+  const gate = new Promise(resolve => { release = resolve })
+  const started = new Promise(resolve => { entered = resolve })
+  try {
+    await store.init()
+    const runtime = fakeRuntime(value.root, value.document, value.goal)
+    const child = { id: 'worker-1', status: 'ready', session: { header: { parentSession: value.root.id } } }
+    runtime.ctx.agents.get = id => id === child.id ? child : id === value.root.id ? value.root : undefined
+    runtime.ctx.subagents[queueSubagentPrompt] = async () => { entered(); await gate; return 'accepted' }
+    const admission = { async run(_lead, _child, _signal, operation) { return operation() } }
+    sending = mod.sendTeamMessage(runtime.ctx, store, admission, value.root, { teamId: 'team-1', recipientSessionId: child.id, message: 'Lock regression' })
+    await started
+    const mutation = store.mutate(document => { document.settings.maxMembers = 5; return true })
+    const progressed = await Promise.race([mutation, new Promise(resolve => { timer = setTimeout(() => resolve(false), 1500) })])
+    release()
+    const result = await sending
+    await mutation
+    assert.equal(progressed, true, 'external dispatch must not hold the global Store mutation queue')
+    assert.equal(result.message.status, 'queued')
+    assert.equal(store.snapshot().settings.maxMembers, 5)
+  } finally {
+    clearTimeout(timer)
+    release()
+    await sending?.catch(() => {})
+    await store.closeAndSettle()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('real Store relay fences late authority changes and propagates immediate transport rejection', async t => {
+  const { mkdtemp, writeFile, rm } = require('node:fs/promises')
+  const os = require('node:os')
+  const mod = await loadPlugin('relay-real-store-fences')
+  for (const [change, code] of [
+    ['paused', 'AGENT_TEAMS_PAUSED'], ['resumed', 'AGENT_TEAMS_STALE_LEASE'],
+    ['retired', 'AGENT_TEAMS_UNAUTHORIZED'], ['unconfirmed', 'AGENT_TEAMS_SHUTDOWN_UNCONFIRMED'],
+    ['disabled', 'AGENT_TEAMS_DISABLED'], ['root-replaced', 'AGENT_TEAMS_LEAD_UNAVAILABLE'],
+    ['aborted', 'ABORT_ERR'], ['transport', 'TEST_TRANSPORT_REJECTED']
+  ]) await t.test(change, { timeout: 10000 }, async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'teams-fence-'))
+    const file = path.join(directory, 'state.json')
+    const value = fixture({ rootStatus: 'running', memberState: 'ready' })
+    await writeFile(file, JSON.stringify(value.document))
+    const store = new mod.AgentTeamsStore(file)
+    try {
+      await store.init()
+      const runtime = fakeRuntime(value.root, value.document, value.goal)
+      const child = { id: 'worker-1', status: 'ready', session: { header: { parentSession: value.root.id } } }
+      let root = value.root, dispatched = 0
+      runtime.ctx.agents.get = id => id === child.id ? child : id === value.root.id ? root : undefined
+      runtime.ctx.subagents[queueSubagentPrompt] = () => { dispatched += 1; return change === 'transport' ? Promise.reject(Object.assign(new Error('fixture rejected'), { code })) : Promise.resolve('accepted') }
+      const controller = new AbortController()
+      const admission = { async run(_lead, _child, _signal, operation) {
+        await store.mutate(document => {
+          const team = document.teams[0], member = team.members.find(item => item.sessionId === child.id)
+          if (change === 'paused') team.state = 'paused'
+          if (change === 'resumed') team.pauseEpoch += 1
+          if (change === 'retired') member.state = 'retired'
+          if (change === 'unconfirmed') member.shutdownUnconfirmed = true
+          if (change === 'disabled') document.settings.enabled = false
+        })
+        if (change === 'root-replaced') root = { ...value.root }
+        if (change === 'aborted') controller.abort(Object.assign(new Error('fixture abort'), { code }))
+        return operation()
+      } }
+      await assert.rejects(mod.sendTeamMessage(runtime.ctx, store, admission, value.root, { teamId: 'team-1', recipientSessionId: child.id, message: 'Fence regression' }, controller.signal), error => error?.code === code)
+      assert.equal(dispatched, change === 'transport' ? 1 : 0)
+      assert.equal(store.snapshot().teams[0].messages.at(-1).status, 'failed')
+      // The failed transport cannot leave a global or per-team lock behind.
+      await store.mutate(document => { document.settings.maxMembers = 5 })
+      assert.equal(store.snapshot().settings.maxMembers, 5)
+    } finally { await store.closeAndSettle(); await rm(directory, { recursive: true, force: true }) }
+  })
+})
+
+test('real Store attention keeps failed-message history local to the selected team', async () => {
+  const { mkdtemp, writeFile, rm } = require('node:fs/promises')
+  const os = require('node:os'), mod = await loadPlugin('attention-real-store-isolation')
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'teams-attention-')), file = path.join(directory, 'state.json')
+  const value = fixture({ teamCount: 2, memberState: 'ready' })
+  value.document.teams[0].messages.push({ id: 'failed-history', fromSessionId: value.root.id, toSessionId: 'worker-1', body: 'old undelivered payload', status: 'failed', createdAt: NOW })
+  await writeFile(file, JSON.stringify(value.document))
+  const store = new mod.AgentTeamsStore(file)
+  try {
+    await store.init()
+    // Establish the fixture's active plan against the normalized professional
+    // metadata before testing attention (legacy pre-normalization hashes stale).
+    await store.mutate(document => { for (const team of document.teams) { team.plan.hash = planHash(team); team.plan.authorization.confirmedPlanHash = team.plan.hash } })
+    const attention = await store.read(document => document.teams.map(team => mod.deriveAttention(team, document.teams)))
+    assert.deepEqual(attention[0].codes, ['failed_delivery'])
+    assert.equal(attention[1].required, false)
+    assert.deepEqual(attention[1].codes, [])
+    assert.deepEqual(attention[1].failedDeliveries, [])
+    assert.equal(store.snapshot().teams[0].messages[0].status, 'failed', 'unrelated healthy team does not erase historical delivery evidence')
+  } finally { await store.closeAndSettle(); await rm(directory, { recursive: true, force: true }) }
 })
 
 test('model contract describes Host-bounded event-driven waiting without asking for continue', async () => {

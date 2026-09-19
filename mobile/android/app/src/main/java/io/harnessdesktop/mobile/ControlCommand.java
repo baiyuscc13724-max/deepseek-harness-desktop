@@ -62,6 +62,10 @@ final class ControlCommand {
         );
     }
 
+    static boolean matchesActive(String currentId, String requestedId, boolean enabled, boolean cancelled) {
+        return enabled && !cancelled && currentId != null && requestedId != null && currentId.equals(requestedId);
+    }
+
     static boolean isSensitive(String action) {
         return SENSITIVE.contains(action);
     }

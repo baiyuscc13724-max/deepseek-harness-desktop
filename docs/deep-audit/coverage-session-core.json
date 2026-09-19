@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "scope": "Isolated production client/core audit supplement; not a full application or platform pass",
+  "testFile": "tests/deep-audit-session-core.test.cjs",
+  "transformFile": "scripts/deep-audit-session-core-patch.mjs",
+  "installedPackagesModified": false,
+  "runtimeInstanceTested": false,
+  "candidateInstalled": false,
+  "fakeBoundaries": ["Remote RPC responses", "Gateway physical-generation carrier", "snapshot-store interface", "Cordis scope/service ports", "React hooks and JSX renderer", "search timer and document event ports"],
+  "realExecutedLogic": ["Session", "SessionManager", "SessionQueueMirror", "ProjectionValueStore", "SessionEventStream", "RemoteJournalStream", "SubmitMachine", "bundled Lexical editor and SessionInputShell", "InputHub", "ConversationController.sendSession", "WorkspaceBrowser title and search handlers"],
+  "runs": {
+    "officialBaseline": {"tests": 28, "pass": 25, "fail": 3, "skip": 0, "cancelled": 0, "durationMs": 191.3485, "distinctRootCauses": 1},
+    "inMemoryCandidate": {"tests": 28, "pass": 28, "fail": 0, "skip": 0, "cancelled": 0, "durationMs": 205.7225},
+    "note": "Overlapping before/after runs, never additive. Baseline uses DSH_AUDIT_SESSION_CORE_BASELINE=1. Both ran with scrubbed temporary HOME/DSH_HOME and no real session/network."
+  },
+  "sources": [
+    {"package":"dsh-api-gateway","version":"0.1.2-alpha.5","file":"node_modules/@deepseek-ai/dsh-api-gateway/lib/client.js","sha256":"55dbd591222b28e557e7d47368f7770114a88d97206e910fae940768c83950cd"},
+    {"package":"dsh-api-session-controller","version":"0.1.2-alpha.5","file":"node_modules/@deepseek-ai/dsh-api-session-controller/lib/client.js","sha256":"f2ec317d1c1f020662b2bd004e6770c721a7bf7bfd90020b3f06bfb2557c70d6"},
+    {"package":"dsh-client-ui-conversation","version":"0.1.2-alpha.5","file":"node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js","sha256":"6f797eb8e87c07e33b9ef35eaacc0eca9bc122e04e14d176ea81354fd53358a2"},
+    {"package":"dsh-client-ui-workspace","version":"0.1.2-alpha.5","file":"node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js","sha256":"53c40660195c42cde709b802e239f473dd721f45bc329684af31c01fdb73282a"}
+  ],
+  "findings": [{
+    "id":"composer-queue-subscription-disposal",
+    "status":"fixed-in-memory-candidate-not-installed",
+    "severity":"medium-resource-lifecycle",
+    "source":"dsh-client-ui-conversation/lib/client.js:11557-11559",
+    "before":{"singleDisposedQueueListeners":1,"after100LifetimesQueueListeners":100},
+    "after":{"singleDisposedQueueListeners":0,"after100LifetimesQueueListeners":0,"latePublications":0},
+    "evidenceTests":[15,27,28],
+    "installationOwner":"foundation integration; not modified by this worker"
+  }],
+  "priorityFlows": [
+    {"id":"create","result":"isolated-pass","tests":[2,4,24],"boundary":"Remote creation, filesystem persistence and workspace attachment are fake ports"},
+    {"id":"switch","result":"isolated-pass","tests":[2,3,6,27],"boundary":"Manager selection and bound InputHub; no full mounted application navigation"},
+    {"id":"search","result":"isolated-pass","tests":[23],"boundary":"Actual debounce/effect/abort handlers; fake search service and timer"},
+    {"id":"title-edit-cancel-failure","result":"isolated-pass","tests":[5,21,22],"boundary":"Actual handler and sequence projection; no native IME or visual modal test"},
+    {"id":"send","result":"isolated-pass","tests":[6,9,10,11,12,27],"boundary":"Client admission choreography only, not LLM execution"},
+    {"id":"queue-remove-steer","result":"isolated-pass","tests":[8,9],"boundary":"Actual queue mirror and exact occurrence RPC payload; authoritative Host scheduler not executed"},
+    {"id":"stop","result":"isolated-pass","tests":[7,13],"boundary":"Stop RPC and draft abort; no claim of cancelling already-executed external effects"},
+    {"id":"draft-isolation","result":"isolated-pass","tests":[3,10,11,12,13,14,27],"boundary":"Actual headless Lexical state; no mounted contenteditable or browser persistence"},
+    {"id":"attachment-isolation","result":"isolated-pass-ids-only","tests":[10,13],"boundary":"Draft image IDs and restoration/release ownership; picker, bytes upload and decoder excluded"},
+    {"id":"history-pagination","result":"isolated-pass","tests":[17,18,20],"boundary":"Real journal/Session state, fake carrier and page RPC"},
+    {"id":"history-order-reconnect","result":"isolated-pass","tests":[19,20,25,26],"boundary":"Actual cursor/generation algorithms; no physical socket reconnect test here"},
+    {"id":"reopen-restore","result":"isolated-pass-restore-inputs","tests":[14,24],"boundary":"Persisted-value adoption and absent-list selection masking; actual browser reload/storage excluded"}
+  ],
+  "originalUnknownClassification": {
+    "source":"docs/deep-audit/coverage-session-files.json",
+    "originalUnknownCount":26,
+    "classCounts":{"isolatable-production":16,"source-review-only":2,"platform-required":8},
+    "note":"Classification is by what evidence could settle the original capability. An isolatable but deferred row is not a pass, and platform-required may still have testable source subparts.",
+    "features":[
+      {"id":"session-create","class":"isolatable-production","result":"isolated-pass","tests":[2,4,24]},
+      {"id":"session-switch","class":"isolatable-production","result":"isolated-pass","tests":[2,3,6,27]},
+      {"id":"session-search","class":"isolatable-production","result":"isolated-pass","tests":[23]},
+      {"id":"session-rename","class":"isolatable-production","result":"isolated-pass","tests":[5,21,22]},
+      {"id":"session-archive","class":"isolatable-production","result":"not-retested","reason":"Archive action is outside this core supplement; do not conflate previously accepted restore/delete evidence with archive admission"},
+      {"id":"copy-session-id","class":"platform-required","result":"unverified","reason":"Actual OS clipboard effect remains untested; fake write-call validation alone cannot settle it"},
+      {"id":"session-send-queue","class":"isolatable-production","result":"isolated-pass","tests":[6,8,9,10,27]},
+      {"id":"session-cancel-turn","class":"isolatable-production","result":"isolated-pass-client-contract","tests":[7,13],"reason":"Host agent interruption/external-effects boundary is not exercised"},
+      {"id":"session-retry-turn","class":"source-review-only","result":"unverified","reason":"No dedicated retry verb found in ISession/current composer; failed-send manual retry is tested, not durable turn retry semantics"},
+      {"id":"session-history-load-older","class":"isolatable-production","result":"isolated-pass","tests":[17,18,19,20,25,26]},
+      {"id":"attachment-picker","class":"platform-required","result":"unverified","reason":"Native picker interaction and selected-file handle behavior require platform evidence"},
+      {"id":"attachment-session-switch","class":"isolatable-production","result":"partial-ids-only","tests":[10,13],"reason":"Official draft image rails are covered; PaperclipButton.enqueueUploads full route is not rerun"},
+      {"id":"files-list-filter-refresh","class":"isolatable-production","result":"deferred-not-GUI-blocked","reason":"Async DOM/source handler is separately isolatable but outside this bounded core test scope"},
+      {"id":"files-tree","class":"source-review-only","result":"not-a-proven-capability","reason":"Prior source identifies a capped upload list rather than recursive file-tree implementation"},
+      {"id":"file-copy-path","class":"platform-required","result":"unverified","reason":"OS clipboard effect not executed"},
+      {"id":"file-open-system","class":"platform-required","result":"unverified","reason":"Actual OS association/application launch not executed"},
+      {"id":"preview-image","class":"platform-required","result":"unverified","reason":"Actual browser image decoder and renderer required beyond MIME checks"},
+      {"id":"preview-audio-video","class":"platform-required","result":"unverified","reason":"Media playback/codec policy and actual player required"},
+      {"id":"preview-pdf","class":"platform-required","result":"unverified","reason":"Real browser PDF viewer/iframe behavior required"},
+      {"id":"preview-html-sandbox","class":"platform-required","result":"unverified","reason":"Real browser script/network isolation required, not just CSP strings"},
+      {"id":"preview-load-switch-close","class":"isolatable-production","result":"deferred-not-GUI-blocked","reason":"Integration revision/DOM race can be separately isolated; not part of core editor task"},
+      {"id":"file-download-export","class":"isolatable-production","result":"deferred","reason":"Controlled HTTP/bytes export path can be checked separately; browser download completion remains platform evidence"},
+      {"id":"project-workspace-authority","class":"isolatable-production","result":"other-owner","reason":"Project collaboration/foundation authority coverage belongs to dedicated owner"},
+      {"id":"project-collaboration-board","class":"isolatable-production","result":"other-owner","reason":"Dedicated collaboration owner; no root-only project tools used"},
+      {"id":"project-changeset-merge-quality","class":"isolatable-production","result":"other-owner","reason":"Dedicated collaboration/foundation owner"},
+      {"id":"services-wss-relay","class":"isolatable-production","result":"separate-report-not-retested","reason":"See mobile-relay-latency.md; independent 38-test submission, not additive to this run"}
+    ]
+  }
+}

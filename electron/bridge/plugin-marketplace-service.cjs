@@ -34,9 +34,17 @@ async function readJson(file) {
 }
 
 function repositoryIdentity(value) {
-  const raw = typeof value === 'string' ? value : value?.url
-  const match = String(raw || '').replace(/\.git$/i, '').match(/github\.com[/:]([^/]+\/[^/]+)$/i)
-  return match ? match[1].toLowerCase() : ''
+  const raw = String((typeof value === 'string' ? value : value?.url) || '').trim()
+  // Match the authority, not an arbitrary URL suffix containing github.com.
+  const scp = raw.match(/^git@github\.com:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/i)
+  if (scp) return scp[1].toLowerCase()
+  try {
+    const url = new URL(raw.replace(/^git\+/, ''))
+    if (!['https:', 'ssh:', 'git:'].includes(url.protocol) || url.hostname.toLowerCase() !== 'github.com' || url.port || url.password || url.search || url.hash) return ''
+    if (url.username && !(url.protocol === 'ssh:' && url.username === 'git')) return ''
+    const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i)
+    return match ? match[1].toLowerCase() : ''
+  } catch { return '' }
 }
 
 function versionParts(value) {

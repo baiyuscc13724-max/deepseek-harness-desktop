@@ -1,0 +1,36 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{createHash}=require('node:crypto');
+const guard=require('./fixtures/deep-audit-preview-lifecycle-fix/deny-network.cjs');
+const repo=path.resolve(__dirname,'..'),fixture=path.join(__dirname,'fixtures/deep-audit-preview-lifecycle-fix');
+const artifact='.artifacts/deep-audit-round2-preview-lifecycle-fix',sha=b=>createHash('sha256').update(b).digest('hex');
+const read=p=>fs.readFileSync(path.join(repo,p),'utf8'),parse=p=>JSON.parse(read(p).replace(/^\uFEFF/,''));
+require('node:test')('actual original 35 preview assertions plus additive lifecycle matrix',{timeout:90000},()=>{
+ const out=process.env.PREVIEW_AUDIT_RUN,mode=process.env.PREVIEW_LIFECYCLE_MODE;assert.ok(['before','after'].includes(mode));assert.equal(path.dirname(out),path.join(repo,artifact));
+ const allowed=new Set(['SYSTEMROOT','WINDIR','PATH','HOME','USERPROFILE','APPDATA','LOCALAPPDATA','TEMP','TMP','DSH_HOME','PREVIEW_AUDIT_RUN','PREVIEW_LIFECYCLE_MODE','NODE_TEST_CONTEXT','NODE_TEST_WORKER_ID']);for(const k of Object.keys(process.env))assert.ok(allowed.has(k.toUpperCase()),'Unexpected env '+k);for(const k of ['HOME','USERPROFILE','APPDATA','LOCALAPPDATA','TEMP','TMP'])assert.equal(process.env[k],path.join(out,'profile'));
+ const freeze=parse(artifact+'/snapshot/frozen.json');const verifyFrozen=()=>{for(const f of freeze.frozen)assert.equal(sha(fs.readFileSync(path.join(repo,f.path))),f.sha256,'Old frozen drift '+f.path)};verifyFrozen();
+ const integration=artifact+'/snapshot/'+mode+'/renderer/right-workspace-integration.js';assert.ok(fs.existsSync(path.join(repo,integration)),'Snapshot must exist before execution');const integrationHash=sha(read(integration));if(mode==='before')assert.equal(integrationHash,freeze.beforeSource);else assert.equal(integrationHash,sha(read('renderer/right-workspace-integration.js')),'after must match real current product');
+ const original=read('tests/deep-audit-preview-components.test.cjs');assert.equal(sha(original),freeze.frozen.find(f=>f.path==='tests/deep-audit-preview-components.test.cjs').sha256);
+ let source=original;const replacements=[];const replace=(a,b)=>{assert.equal(source.split(a).length-1,1,'Unique derivation anchor '+a);source=source.replace(a,b);replacements.push({before:a,after:b})};
+ replace("require('./fixtures/deep-audit-preview-components/deny-network.cjs')",'require('+JSON.stringify(path.join(fixture,'deny-network.cjs'))+')');
+ replace("const repo=path.resolve(__dirname,'..'),fixture=path.join(__dirname,'fixtures/deep-audit-preview-components');",'const repo='+JSON.stringify(repo)+',fixture='+JSON.stringify(fixture)+';');
+ replace("'renderer/right-workspace-integration.js'",JSON.stringify(integration));
+ replace("path.join(repo,'.artifacts/deep-audit-round2-preview')",'path.join(repo,'+JSON.stringify(artifact)+')');
+ replace("fs.copyFileSync(path.join(repo,'renderer',name),path.join(local,name))",'fs.copyFileSync(path.join(repo,name===\'right-workspace-integration.js\'?'+JSON.stringify(integration)+":'renderer/'+name),path.join(local,name))");
+ replace("source:'renderer/'+n",'source:n===\'right-workspace-integration.js\'?'+JSON.stringify(integration)+":'renderer/'+n");
+ replace("const receipt={status:","const receipt={lifecycleMode:"+JSON.stringify(mode)+",executedIntegration:"+JSON.stringify({path:integration,sha256:integrationHash})+",status:");
+ const extension=fs.readFileSync(path.join(fixture,'scenarios.js.txt'),'utf8');
+ const anchor="  await present('interactive.html');await run('delay(250)');\n  await run('window.beforeDestroyBeats=";
+ replace(anchor,extension+'\n'+anchor);
+ const script=path.join(out,'derived-runner.cjs');fs.writeFileSync(script,source);
+ // Every original check call is retained literally; insertion happens before original destroy only.
+ const section=s=>s.slice(s.indexOf("  await check('REAL-01"),s.indexOf("  await check('GUARD renderer"));assert.equal(section(source).replace(extension+'\n',''),section(original));
+ const inputNames=[...source.match(/const inputs=\[([^\n]+)\];/)[1].matchAll(/['"]([^'"]+)['"]/g)].map(m=>m[1]);
+ const frozenNames=[...source.match(/const frozen=\[([^\n]+)\];/)[1].matchAll(/'([^']+)'/g)].map(m=>m[1]);
+ const hashes=names=>Object.fromEntries(names.map(n=>[n,sha(fs.readFileSync(path.join(repo,n)))]));const before={inputs:hashes(inputNames),frozen:hashes(frozenNames),sourceMode:mode,executedIntegration:{path:integration,sha256:integrationHash},originalAssertionSectionSha256:sha(section(original)),extensionSha256:sha(extension)};
+ fs.writeFileSync(path.join(out,'input-manifest.json'),JSON.stringify(before,null,2));fs.writeFileSync(path.join(out,'derivation.json'),JSON.stringify({originalSha256:sha(original),derivedSha256:sha(source),replacements,originalAssertionSectionSha256:sha(section(original)),reversible:true,extensionSha256:sha(extension)},null,2));
+ const env=Object.fromEntries(['SystemRoot','WINDIR','PATH','HOME','USERPROFILE','APPDATA','LOCALAPPDATA','TEMP','TMP','DSH_HOME','PREVIEW_AUDIT_RUN'].map(k=>[k,process.env[k]]).filter(([,v])=>v!==undefined));const log=fs.openSync(path.join(out,'electron.log'),'wx');let result;try{result=require('node:child_process').spawnSync(path.join(repo,'node_modules/electron/dist/electron.exe'),[script],{cwd:repo,env,stdio:['ignore',log,log],timeout:75000})}finally{fs.closeSync(log)};
+ fs.writeFileSync(path.join(out,'process.json'),JSON.stringify({mode,status:result.status,signal:result.signal,error:result.error?.message,environmentKeys:Object.keys(env)},null,2));assert.ifError(result.error);assert.equal(result.status,0,'Inspect failure.json/electron.log');verifyFrozen();assert.deepEqual(hashes(inputNames),before.inputs);
+ const receipt=JSON.parse(fs.readFileSync(path.join(out,'receipt.json')));const oldNames=JSON.parse(read('.artifacts/deep-audit-round2-preview/final-v4/receipt.json')).checks.map(c=>c.name);assert.deepEqual(receipt.checks.filter(c=>oldNames.includes(c.name)).map(c=>c.name),oldNames);assert.equal(oldNames.length,35);assert.ok(receipt.checks.length>=48);assert.deepEqual(receipt.nativeAttempts,[]);assert.deepEqual(receipt.nodeNetworkAttempts,[]);assert.deepEqual(receipt.blockedRequests,[]);assert.deepEqual(guard.attempts,[]);
+ const failed=receipt.checks.filter(c=>!c.pass).map(c=>c.name);fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify({mode,checks:receipt.checks.length,passed:receipt.checks.length-failed.length,failed,originalChecks:35,executedIntegration:before.executedIntegration,originalAssertionSectionSha256:before.originalAssertionSectionSha256,extensionSha256:before.extensionSha256,receiptSha256:sha(fs.readFileSync(path.join(out,'receipt.json'))),frozenDrift:[]},null,2));
+ if(mode==='before'){assert.ok(failed.includes('HTML-LIFECYCLE close stops active HTML execution'),'Original red must reproduce');assert.ok(failed.includes('FIX-01 close removes exact HTML node, not just visibility'),'Node removal red must reproduce')}else assert.deepEqual(failed,[],'All original and additive assertions must pass after repair');
+});

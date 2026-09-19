@@ -184,7 +184,7 @@ test('alpha.5 runtime graph classifier accepts only the installed official core'
   assert.ok(result.selectedPackageCount >= result.directRootCount)
 })
 
-test('official compatibility installer selects alpha.5 while retaining explicit alpha.4, alpha.3, and alpha.2 compatibility dispatch', () => {
+test('official compatibility installer selects alpha.5 while retaining explicit alpha.4, alpha.3, and alpha.2 compatibility dispatch', async t => {
   const source = fs.readFileSync(path.join(ROOT, 'scripts', 'patch-official-runtime.mjs'), 'utf8')
   assert.match(source, /0\.1\.2-alpha\.5/u, 'runtime patcher must identify the current official release')
   assert.match(source, /officialGraph\.mode === 'alpha5'/u, 'alpha.5 requires an explicit official dispatch branch')
@@ -199,5 +199,97 @@ test('official compatibility installer selects alpha.5 while retaining explicit 
   assert.match(source, /officialGraph\.mode === 'alpha3'/u, 'alpha.3 keeps an explicit compatibility dispatch branch')
   assert.match(source, /if \(targetsAlpha3\) await assertInstalledAlpha3NativeCapabilities\(\)/u, 'alpha.3 retains native capability verification')
   assert.match(source, /if \(targetsAlpha2\) await assertOfficialAlpha2RemovedArtifactsAbsent\(\)/u, 'retired private bundle checks must remain confined to the alpha.2 compatibility branch')
-  assert.match(source, /for \(const removed of \[runtimeClient, hostApiProxyRuntime,/u, 'native capability verification must fail closed when retired private artifacts are installed')
+  // The contract is rejection, not the spelling of the old default-root variables.
+  // Exercise the real shared native-capability gate on a complete temporary graph.
+  const fixture = await temporaryNativeGraph(t)
+  const clean = snapshotTree(fixture.modules)
+  assert.equal(await fixture.patch.assertInstalledAlpha5NativeCapabilities(fixture.modules), false)
+  assert.deepEqual(snapshotTree(fixture.modules), clean, 'successful preflight is read-only')
+  for (const [name, relative] of [
+    ['dsh-client-runtime', 'lib/client.js'],
+    ['dsh-host-apiproxy', 'lib/index.js'],
+    ['dsh-session-persistence-sqlite', 'package.json']
+  ]) {
+    const packageRoot = path.join(fixture.modules, '@deepseek-ai', name)
+    const artifact = path.join(packageRoot, relative)
+    fs.mkdirSync(path.dirname(artifact), { recursive: true })
+    fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/' + name, version: LEGACY_ALPHA3_TARGET }))
+    if (relative !== 'package.json') fs.writeFileSync(artifact, '// inert alpha.3 retired residue; must never load or execute\n')
+    const before = snapshotTree(fixture.modules)
+    await assert.rejects(fixture.patch.assertInstalledAlpha5NativeCapabilities(fixture.modules), error => {
+      assert.equal(error.message, `Retired ${TARGET} compatibility artifact is unexpectedly installed: ${artifact}`)
+      return true
+    })
+    assert.deepEqual(snapshotTree(fixture.modules), before, 'refusal must preserve every file, including retired residue')
+    fs.rmSync(packageRoot, { recursive: true, force: true }) // fixture cleanup, never production cleanup
+    assert.deepEqual(snapshotTree(fixture.modules), clean)
+    assert.equal(await fixture.patch.assertInstalledAlpha5NativeCapabilities(fixture.modules), false)
+  }
+})
+
+// Only exact fixture files are copied. No default installed writer, CLI, legacy
+// bundle evaluation, registry lookup or actual cleanup of a user's install runs.
+async function temporaryNativeGraph(t) {
+  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'alpha3 中文 fixture '))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const modules = path.join(directory, 'node_modules')
+  const clients = ['dsh-api-session-controller', 'dsh-client-ui-chat', 'dsh-client-ui-conversation', 'dsh-client-connection', 'dsh-client-ui-schedule', 'dsh-client-ui-attachment']
+  const servers = ['dsh-session-turn-outline', 'dsh-api-gateway', 'dsh-api-remotes', 'dsh-session', 'dsh-session-projection-cache', 'dsh-storage-domain', 'dsh-storage-json']
+  for (const [name, file] of [...clients.map(name => [name, 'client.js']), ...servers.map(name => [name, 'index.js'])]) {
+    const destination = path.join(modules, '@deepseek-ai', name)
+    fs.mkdirSync(path.join(destination, 'lib'), { recursive: true })
+    fs.copyFileSync(path.join(DSH_SCOPE, name, 'package.json'), path.join(destination, 'package.json'))
+    fs.copyFileSync(path.join(DSH_SCOPE, name, 'lib', file), path.join(destination, 'lib', file))
+  }
+  const patch = await import(require('node:url').pathToFileURL(path.join(ROOT, 'scripts/patch-official-runtime.mjs')).href)
+  return { modules, patch, conversation: path.join(modules, '@deepseek-ai/dsh-client-ui-conversation/lib/client.js') }
+}
+
+function snapshotTree(directory) {
+  const entries = []
+  const visit = relative => {
+    for (const entry of fs.readdirSync(path.join(directory, relative), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const name = path.join(relative, entry.name)
+      if (entry.isDirectory()) { entries.push([name, 'directory']); visit(name) }
+      else {
+        assert.equal(entry.isFile(), true, 'fixture contains only regular files and directories')
+        entries.push([name, require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(directory, name))).digest('hex')])
+      }
+    }
+  }
+  visit('')
+  return entries
+}
+
+test('temporary compatibility installer rejects wrong identity and legacy version without changing bytes, then replays valid core safely', async t => {
+  const fixture = await temporaryNativeGraph(t)
+  const manifest = path.join(path.dirname(fixture.conversation), '../package.json')
+  const originalManifest = fs.readFileSync(manifest, 'utf8')
+  const originalSource = fs.readFileSync(fixture.conversation)
+  for (const change of [{ name: '@deepseek-ai/wrong-package' }, { version: LEGACY_ALPHA3_TARGET }]) {
+    fs.writeFileSync(manifest, JSON.stringify({ ...JSON.parse(originalManifest), ...change }))
+    const before = snapshotTree(fixture.modules)
+    await assert.rejects(fixture.patch.patchInstalledSessionCoreClient(fixture.conversation), /Pinned session-core package identity\/version changed/u)
+    await assert.rejects(fixture.patch.assertInstalledAlpha5NativeCapabilities(fixture.modules), /capability package changed: @deepseek-ai\/dsh-client-ui-conversation/u)
+    assert.deepEqual(snapshotTree(fixture.modules), before)
+    assert.deepEqual(fs.readFileSync(fixture.conversation), originalSource)
+  }
+  fs.writeFileSync(manifest, originalManifest)
+  const core = await import(require('node:url').pathToFileURL(path.join(ROOT, 'scripts/deep-audit-session-core-patch.mjs')).href)
+  const input = core.restoreSessionCoreClientSource(fs.readFileSync(fixture.conversation, 'utf8'))
+  fs.writeFileSync(fixture.conversation, input)
+  const digest = value => require('node:crypto').createHash('sha256').update(value).digest('hex').toUpperCase()
+  const proof = core.SESSION_CORE_PROOFS.find(value => value.input === digest(input))
+  assert.ok(proof, 'positive install uses one complete pinned input, not a marker-only fixture')
+  const beforeInstall = snapshotTree(fixture.modules)
+  assert.equal(await fixture.patch.patchInstalledSessionCoreClient(fixture.conversation), true)
+  assert.equal(digest(fs.readFileSync(fixture.conversation)), proof.output)
+  const afterInstall = snapshotTree(fixture.modules)
+  const expectedChangedPath = path.relative(fixture.modules, fixture.conversation)
+  assert.deepEqual(afterInstall.map(entry => entry[0]), beforeInstall.map(entry => entry[0]), 'installer must not add or remove other paths')
+  assert.deepEqual(afterInstall.filter((entry, index) => entry[1] !== beforeInstall[index][1]).map(entry => entry[0]), [expectedChangedPath])
+  assert.equal(await fixture.patch.patchInstalledSessionCoreClient(fixture.conversation), false)
+  assert.equal(await fixture.patch.assertInstalledAlpha5NativeCapabilities(fixture.modules), false)
+  assert.deepEqual(snapshotTree(fixture.modules), afterInstall)
+  assert.equal(fs.readFileSync(manifest, 'utf8'), originalManifest)
 })

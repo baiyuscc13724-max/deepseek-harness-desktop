@@ -89,6 +89,10 @@ final class MobileAssetCache {
     private final Clock clock;
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
     private final Semaphore downloads = new Semaphore(6, true);
+    private final Semaphore preparingSync = new Semaphore(1);
+    private long offlineMutationRevision;
+    interface SnapshotMover { void move(File source, File target) throws IOException; }
+    private final SnapshotMover snapshotMover;
 
     MobileAssetCache(Context context) {
         this(new File(context.getCacheDir(), "harness-static-assets-v1"),
@@ -96,9 +100,14 @@ final class MobileAssetCache {
     }
 
     MobileAssetCache(File assetRoot, File offlineRoot, Clock clock) {
+        this(assetRoot, offlineRoot, clock, (source, target) -> Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING));
+    }
+
+    MobileAssetCache(File assetRoot, File offlineRoot, Clock clock, SnapshotMover snapshotMover) {
         this.root = assetRoot;
         this.offlineRoot = offlineRoot;
         this.clock = clock;
+        this.snapshotMover = snapshotMover;
         if (!root.exists()) root.mkdirs();
         if (!offlineRoot.exists()) offlineRoot.mkdirs();
     }
@@ -223,14 +232,111 @@ final class MobileAssetCache {
         }
     }
 
+    /** Opaque staged file: only this cache can publish it; caller must close even after rejection. */
+    static final class PreparedSync implements AutoCloseable {
+        private final MobileAssetCache owner;
+        private final String identity;
+        private final long mutation;
+        private final File temporary, target;
+        private final long bytes;
+        private final OfflineSnapshot snapshot;
+        private boolean consumed, committed, closed;
+        private PreparedSync(MobileAssetCache owner, String identity, long mutation, File temporary, File target, long bytes, OfflineSnapshot snapshot) {
+            this.owner=owner;this.identity=identity;this.mutation=mutation;this.temporary=temporary;this.target=target;this.bytes=bytes;this.snapshot=snapshot;
+        }
+        @Override public void close() throws IOException {
+            synchronized(owner){if(closed)return;closed=true;}
+            try {
+                if(temporary!=null)Files.deleteIfExists(temporary.toPath());
+                // Intentionally outside the caller's generation gate; no fsync/scan in commitPreparedSync.
+                if(committed)synchronized(owner){owner.offlineMutationRevision++;owner.pruneOfflineCache();}
+            } finally {owner.preparingSync.release();}
+        }
+    }
+
+    private static boolean sameSyncTuple(OfflineSnapshot value, JSONObject response) {
+        return value!=null && value.snapshotEpoch==response.optLong("snapshotEpoch",-1)
+            && value.revision==response.optLong("revision",-1) && value.cursor.equals(response.optString("cursor",""));
+    }
+
+    private OfflineSnapshot mergeSyncStep(OfflineSnapshot previous, JSONObject manifest, boolean incremental) throws JSONException {
+        PreparedManifest incoming=prepareManifest(manifest,!incremental);
+        if(incremental && (previous==null || previous.snapshotEpoch!=incoming.snapshotEpoch))return null;
+        if(previous!=null && (incoming.snapshotEpoch<previous.snapshotEpoch || (incoming.snapshotEpoch==previous.snapshotEpoch && incoming.revision<=previous.revision)))return null;
+        if(previous!=null && incoming.isEmpty() && incoming.tombstones.length()==0)return null;
+        return new OfflineSnapshot(merge(previous,incoming));
+    }
+
+    /** Expensive read/merge/hash/write/fsync occurs without the Activity generation lock or cache monitor. */
+    PreparedSync prepareSyncResponse(String pairingIdentity, JSONObject response) throws IOException {
+        if(!isPairingIdentity(pairingIdentity) || response==null || response.optInt("schemaVersion",-1)!=OFFLINE_SCHEMA_VERSION
+            || !response.optBoolean("ok",true) || response.optBoolean("protected",false) || !response.optBoolean("complete",false)
+            || !preparingSync.tryAcquire())return null;
+        File temporary=null;boolean handedOff=false;
+        try {
+            final long mutation;synchronized(this){mutation=offlineMutationRevision;}
+            OfflineSnapshot snapshot=loadSnapshotView(pairingIdentity,false);
+            synchronized(this){if(mutation!=offlineMutationRevision)return null;}
+            if(sameSyncTuple(snapshot,response)) {
+                PreparedSync result=new PreparedSync(this,pairingIdentity,mutation,null,null,0,snapshot);handedOff=true;return result;
+            }
+            JSONObject full=response.optJSONObject("snapshot");
+            if(full!=null)snapshot=mergeSyncStep(snapshot,flatten(response,full,true),false);
+            else {
+                JSONArray changes=response.optJSONArray("changes");
+                if(changes==null || changes.length()==0 || changes.length()>5000)return null;
+                for(int i=0;i<changes.length();i++) {
+                    JSONObject change=changes.optJSONObject(i);
+                    if(change==null || (snapshot=mergeSyncStep(snapshot,flatten(response,change,false),true))==null)return null;
+                }
+            }
+            if(!sameSyncTuple(snapshot,response))return null;
+            String serialized=snapshot.toJson().toString();
+            if(serialized.getBytes(StandardCharsets.UTF_8).length>MAX_OFFLINE_ENTRY_BYTES)return null;
+            byte[] envelope=new JSONObject().put("payload",serialized).put("sha256",sha256(serialized)).toString().getBytes(StandardCharsets.UTF_8);
+            if(envelope.length>MAX_OFFLINE_ENTRY_BYTES+1024)return null;
+            File staging=new File(offlineRoot,".staging");if(!staging.isDirectory()&&!staging.mkdirs())throw new IOException("Cannot stage mobile snapshot");
+            File[] abandoned=staging.listFiles((dir,name)->name.endsWith(".pending"));
+            if(abandoned!=null)for(File file:abandoned)if(clock.now()-file.lastModified()>10*60*1000L)Files.deleteIfExists(file.toPath());
+            temporary=File.createTempFile("manifest-",".pending",staging);
+            try(FileOutputStream output=new FileOutputStream(temporary)){output.write(envelope);output.getFD().sync();}
+            temporary.setLastModified(clock.now());
+            File directory=new File(offlineRoot,pairingIdentity);
+            if(!directory.isDirectory()&&!directory.mkdirs())throw new IOException("Cannot prepare mobile snapshot directory");
+            synchronized(this){if(mutation!=offlineMutationRevision)return null;}
+            PreparedSync result=new PreparedSync(this,pairingIdentity,mutation,temporary,new File(directory,snapshot.snapshotEpoch+".snapshot"),envelope.length,snapshot);
+            handedOff=true;return result;
+        } catch(JSONException|IllegalArgumentException error){return null;}
+        finally {if(!handedOff)try{if(temporary!=null)Files.deleteIfExists(temporary.toPath());}finally{preparingSync.release();}}
+    }
+
+    /** Caller holds its current-profile generation gate. Only version checks and atomic rename here. */
+    synchronized OfflineSnapshot commitPreparedSync(String pairingIdentity, PreparedSync prepared) throws IOException {
+        if(prepared==null || prepared.owner!=this || !prepared.identity.equals(pairingIdentity) || prepared.closed || prepared.consumed)return null;
+        prepared.consumed=true;
+        if(prepared.mutation!=offlineMutationRevision || prepared.snapshot.storedAt>clock.now() || clock.now()-prepared.snapshot.storedAt>OFFLINE_TTL_MS)return null;
+        if(prepared.temporary!=null) {
+            if(!prepared.temporary.isFile() || prepared.temporary.length()!=prepared.bytes)throw new IOException("Staged snapshot is missing or truncated");
+            snapshotMover.move(prepared.temporary,prepared.target);
+            prepared.target.setLastModified(clock.now());
+            offlineMutationRevision++;
+            prepared.committed=true;
+        }
+        return prepared.snapshot;
+    }
+
     synchronized OfflineSnapshot loadLatestSnapshot(String pairingIdentity) {
+        return loadSnapshotView(pairingIdentity,true);
+    }
+
+    private OfflineSnapshot loadSnapshotView(String pairingIdentity, boolean cleanup) {
         if (!isPairingIdentity(pairingIdentity)) return null;
         File directory = new File(offlineRoot, pairingIdentity);
         File[] files = directory.listFiles((dir, name) -> name.endsWith(".snapshot"));
         if (files == null) return null;
         OfflineSnapshot latest = null;
         for (File file : files) {
-            OfflineSnapshot candidate = readSnapshot(file);
+            OfflineSnapshot candidate = readSnapshot(file, cleanup);
             if (candidate == null) continue;
             if (latest == null || candidate.snapshotEpoch > latest.snapshotEpoch
                 || (candidate.snapshotEpoch == latest.snapshotEpoch && candidate.revision > latest.revision)) latest = candidate;
@@ -240,6 +346,7 @@ final class MobileAssetCache {
 
     synchronized void clearOfflineSnapshots(String pairingIdentity) {
         if (!isPairingIdentity(pairingIdentity)) return;
+        offlineMutationRevision++;
         deleteRecursively(new File(offlineRoot, pairingIdentity));
     }
 
@@ -271,6 +378,7 @@ final class MobileAssetCache {
                 output.getFD().sync();
             }
             Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            offlineMutationRevision++;
             target.setLastModified(clock.now());
             pruneOfflineCache();
             return true;
@@ -347,10 +455,10 @@ final class MobileAssetCache {
             .put("readMessages", new JSONArray(readMessages.values()));
     }
 
-    private OfflineSnapshot readSnapshot(File file) {
+    private OfflineSnapshot readSnapshot(File file, boolean cleanup) {
         try {
             if (!file.isFile() || file.length() <= 0 || file.length() > MAX_OFFLINE_ENTRY_BYTES + 1024) {
-                file.delete();
+                if (cleanup) file.delete();
                 return null;
             }
             byte[] bytes = Files.readAllBytes(file.toPath());
@@ -365,10 +473,10 @@ final class MobileAssetCache {
             // Wall-clock time is the only durable clock available across process and
             // device restarts. Fail closed after a rollback instead of extending a
             // snapshot's authority beyond its intended TTL.
-            if (snapshot.storedAt > now || now - snapshot.storedAt > OFFLINE_TTL_MS) { file.delete(); return null; }
+            if (snapshot.storedAt > now || now - snapshot.storedAt > OFFLINE_TTL_MS) { if (cleanup) file.delete(); return null; }
             return snapshot;
         } catch (IOException | JSONException | RuntimeException error) {
-            file.delete();
+            if (cleanup) file.delete();
             return null;
         }
     }

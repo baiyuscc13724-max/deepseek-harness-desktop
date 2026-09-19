@@ -1,0 +1,9 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{createHash}=require('node:crypto');
+const repo=path.resolve(__dirname,'../../..'),base=path.join(repo,'.artifacts/deep-audit-round2-sidebar-layout-fix');const sha=b=>createHash('sha256').update(b).digest('hex');
+const before=fs.readFileSync(path.join(base,'before-inputs/electron/main.cjs'),'utf8'),after=fs.readFileSync(path.join(repo,'electron/main.cjs'),'utf8');
+function normalize(text){for(const [name,next]of [['effectiveBrowserPanelWidth','liveBrowserContents'],['layoutBrowserView','browserRecoveryState']]){const a=text.indexOf('function '+name+'('),b=text.indexOf('\nfunction '+next+'(',a);assert.ok(a>=0&&b>a);text=text.slice(0,a)+'/* authorized '+name+' and necessary helpers */\n'+text.slice(b);}return text.replace(/panelWidth: effectiveBrowserPanelWidth\([^\n]+\),/,'panelWidth: <CSS_PREFERENCE>,').replace("mainWindow.on('resize', layoutBrowserView)",'<GEOMETRY_EVENT_BINDING>').replace('bindBrowserLayoutEvents(mainWindow)','<GEOMETRY_EVENT_BINDING>');}
+assert.equal(normalize(after),normalize(before),'An unapproved main.cjs span changed');
+const retained=JSON.parse(fs.readFileSync(path.join(base,'before-inputs.json')));for(const [name,hash]of Object.entries(retained.acceptedEvidence))assert.equal(sha(fs.readFileSync(path.join(repo,name))),hash,'Accepted red evidence changed: '+name);
+const pins=require('../deep-audit-sidebar-layout/pins.json');assert.equal(sha(fs.readFileSync(path.join(repo,'renderer/right-workspace.css'))),pins['renderer/right-workspace.css']);
+console.log(JSON.stringify({scope:'Only effectiveBrowserPanelWidth/layoutBrowserView with necessary helpers, CSS preference payload and main resize/zoom binding differ from exact original main',beforeMainSha:sha(before),afterMainSha:sha(after),unapprovedSpanChanges:0,acceptedEvidenceVerified:Object.keys(retained.acceptedEvidence).length,cssUnchanged:true},null,2));

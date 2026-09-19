@@ -19,13 +19,24 @@
   let filesQuery = ''
   let schedulesQuery = ''
   let filesSnapshot = null
+  let filesSnapshotSessionId = ''
+  let filesRequestRevision = 0
   let schedulesSnapshot = null
   let schedulesValidator = null
   let schedulesRequestRevision = 0
   let requestedBrowserContentVisible = null
+  let requestedBrowserVisible = null
+  let browserVisibilityRequest = Promise.resolve()
+  // One revision for close, mode and document intents: an old IPC/resource
+  // completion may finish, but must never mutate the newer workspace state.
+  let workspaceIntentRevision = 0
   let browserRestorePending = true
   let browserIntentLane = Promise.resolve()
   let browserIntentReadyTimer = 0
+  // Only successful HTML presentation metadata survives close, never a pending
+  // request or an executing iframe. Reopening creates a fresh sandbox context.
+  let documentAppSnapshot = null
+  let suspendedDocumentApp = null
   const quickButtonDefaultTitle = quickButton?.getAttribute('title') || '切换右侧工作区'
 
   function setBrowserContentVisible(visible) {
@@ -35,6 +46,19 @@
     api.setBrowserContentVisible(next).catch(() => {
       if (requestedBrowserContentVisible === next) requestedBrowserContentVisible = null
     })
+  }
+
+  function setBrowserVisible(visible) {
+    const next = Boolean(visible)
+    if (requestedBrowserVisible === next) return browserVisibilityRequest
+    requestedBrowserVisible = next
+    // Coalesce only an in-flight duplicate. Later explicit intents still
+    // reconcile native state, which may have changed outside this controller.
+    const request = api.setBrowserVisible(next).catch(() => null).finally(() => {
+      if (browserVisibilityRequest === request) requestedBrowserVisible = null
+    })
+    browserVisibilityRequest = request
+    return request
   }
 
   function element(tag, className, text) {
@@ -144,6 +168,7 @@
     titleEl: title,
     backEl: back,
     closeEl: close,
+    focusReturnEl: quickButton,
     mount: false,
     bindShortcut: true,
     closeOnEscape: true,
@@ -196,8 +221,7 @@
     view.scrollTop = hasList && pending !== null ? Math.min(pending, Math.max(0, view.scrollHeight - view.clientHeight)) : 0
   }
 
-  async function resource(kind, payload = {}) {
-    const sessionId = activeSessionId()
+  async function resource(kind, payload = {}, sessionId = activeSessionId()) {
     if (!sessionId) throw Object.assign(new Error('打开或继续一个会话后即可使用此面板。'), { code: 'RIGHT_WORKSPACE_NO_SESSION' })
     return api.getRightWorkspaceResource(kind, { ...payload, sessionId })
   }
@@ -246,6 +270,9 @@
       applyDataScroll('files', false)
       return
     }
+    // Row actions retain the provenance of the rendered snapshot, not whatever
+    // conversation happens to be active when a delayed click/response runs.
+    const sourceSessionId = filesSnapshotSessionId
     const needle = filesQuery.trim().toLocaleLowerCase()
     const rows = (filesSnapshot.files || []).filter(file => !needle || String(file.path || '').toLocaleLowerCase().includes(needle))
     if (!rows.length) {
@@ -256,12 +283,12 @@
     const list = element('div', 'right-workspace-list')
     for (const file of rows) {
       const row = element('article', 'right-workspace-row')
-      const open = button(file.name || file.path, 'right-workspace-row-main', () => openDocument(file.path))
+      const open = button(file.name || file.path, 'right-workspace-row-main', () => openDocument(file.path, sourceSessionId))
       const meta = element('span', 'right-workspace-row-meta', `${formatSize(file.size)} · ${formatDate(file.modifiedAt)}`)
       open.prepend(element('span', 'right-workspace-file-mark', '▤'))
       const body = element('div', 'right-workspace-row-copy')
       body.append(open, meta)
-      row.append(body, button('预览', 'right-workspace-secondary', () => openDocument(file.path)))
+      row.append(body, button('预览', 'right-workspace-secondary', () => openDocument(file.path, sourceSessionId)))
       list.append(row)
     }
     filesView.append(list)
@@ -269,6 +296,8 @@
   }
 
   async function loadFiles(opts = {}) {
+    const revision = ++filesRequestRevision
+    const sessionId = activeSessionId()
     // On a preserve refresh keep the current list on screen until the request
     // resolves; only a fresh entry (mode switch / hydration) shows the loading
     // state so the final data render can capture the still-visible old scrollTop.
@@ -276,8 +305,12 @@
       filesSnapshot = null
       renderFiles()
     }
-    try { filesSnapshot = await resource('files') }
-    catch (error) { filesSnapshot = { error: error.message || String(error), files: [] } }
+    let snapshot
+    try { snapshot = await resource('files', {}, sessionId) }
+    catch (error) { snapshot = { error: error.message || String(error), files: [] } }
+    if (revision !== filesRequestRevision || sessionId !== activeSessionId()) return
+    filesSnapshot = snapshot
+    filesSnapshotSessionId = sessionId
     renderFiles(opts.preserve ? { preserve: true } : {})
   }
 
@@ -291,9 +324,9 @@
     return ''
   }
 
-  function documentOpenAction(file, fallbackPath) {
+  function documentOpenAction(file, fallbackPath, source) {
     if (!file.openable && !file.contentUrl) return null
-    const local = !file.contentUrl && typeof file.path === 'string' && file.path
+    const local = source.local === true && !file.contentUrl && typeof file.path === 'string' && file.path
     const action = button('使用系统应用打开或显示', 'right-workspace-secondary')
     action.setAttribute('aria-live', 'polite')
     action.addEventListener('click', async () => {
@@ -304,7 +337,9 @@
       try {
         const result = local
           ? await api.openLocal(file.path)
-          : await api.openRightWorkspaceFile({ sessionId: activeSessionId(), path: file.path || fallbackPath, name: file.name || 'workspace-file' })
+          : await api.openRightWorkspaceFile(source.sourceKind === 'workspace-link'
+            ? { target: file.path || fallbackPath, sessionId: source.sessionId, sourceKind: source.sourceKind }
+            : { target: file.path || fallbackPath, sessionId: source.sessionId, path: file.path || fallbackPath, name: file.name || 'workspace-file' })
         action.textContent = String(result?.action || '').startsWith('reveal') ? '已在文件夹中显示' : '已打开'
       } catch (error) {
         action.textContent = error?.message || '打开失败'
@@ -321,14 +356,16 @@
     return action
   }
 
-  function renderDocument(file, fallbackPath) {
+  function renderDocument(file, fallbackPath, provenance) {
+    documentAppSnapshot = null
+    suspendedDocumentApp = null
     documentView.classList.remove('is-interactive')
     documentView.replaceChildren()
     const header = element('header', 'right-workspace-document-header')
     const identity = element('div', 'right-workspace-document-identity')
     identity.append(element('strong', '', file.path || fallbackPath), element('span', '', formatSize(file.size)))
     const actions = element('div', 'right-workspace-document-actions')
-    const openAction = documentOpenAction(file, fallbackPath)
+    const openAction = documentOpenAction(file, fallbackPath, provenance)
     if (openAction) actions.append(openAction)
     header.append(identity, actions)
     documentView.append(header)
@@ -360,6 +397,7 @@
       return
     }
     if (file.previewable && source && previewKind === 'html-app') {
+      documentAppSnapshot = { file: { ...file }, fallbackPath, provenance: { ...provenance } }
       documentView.classList.add('is-interactive')
       const stage = element('div', 'right-workspace-document-app-stage')
       const state = element('div', 'right-workspace-document-app-status', '隔离试玩：脚本可运行；网络、表单和宿主文件访问已禁用。')
@@ -413,33 +451,81 @@
     documentView.append(pre)
   }
 
-  async function openDocument(path) {
-    browserRestorePending = false
-    documentView.replaceChildren(statusPanel('正在打开文档…'))
-    controller.push('document')
-    syncChrome()
-    try {
-      const result = await resource('filePreview', { path })
-      renderDocument(result.file || {}, path)
-    } catch (error) {
-      documentView.replaceChildren(statusPanel(error.message || String(error), true))
-    }
+  function suspendDocumentApp() {
+    if (!documentView.querySelector('iframe.right-workspace-document-app')) return
+    suspendedDocumentApp = documentAppSnapshot
+    // Hiding the host leaves scripts/timers alive. Removing the iframe destroys
+    // its browsing context; no message filtering can substitute for this step.
+    documentView.replaceChildren(statusPanel('试玩已关闭；可重新打开面板，或从来源重新预览。'))
+    documentView.classList.remove('is-interactive')
   }
 
-  async function openLocalDocument(target) {
+  function resumeDocumentApp() {
+    if (!suspendedDocumentApp || !controller.isOpen() || controller.getActiveModeId() !== 'document') return
+    const snapshot = suspendedDocumentApp
+    renderDocument(snapshot.file, snapshot.fallbackPath, snapshot.provenance)
+    close?.focus({ preventScroll: true })
+  }
+
+  function beginDocumentRequest(message) {
+    documentAppSnapshot = null
+    suspendedDocumentApp = null
     browserRestorePending = false
-    documentView.replaceChildren(statusPanel('正在安全读取本机文档…'))
+    documentView.replaceChildren(statusPanel(message))
     controller.push('document')
     controller.open()
     host.classList.remove('hidden')
     syncChrome()
+    setBrowserVisible(false)
+    close?.focus({ preventScroll: true })
+    return ++workspaceIntentRevision
+  }
+
+  function isCurrentDocumentRequest(revision) {
+    return revision === workspaceIntentRevision && controller.isOpen() && controller.getActiveModeId() === 'document'
+  }
+
+  async function openDocument(path, sessionId) {
+    const source = Object.freeze({ sessionId })
+    const revision = beginDocumentRequest('正在打开文档…')
     try {
-      const result = await factory.loadDocumentPreview(target, {
-        workspacePreview: path => resource('filePreview', { path }),
-        localPreview: path => api.previewRightWorkspaceLocal(path)
-      })
-      renderDocument(result.file || {}, target)
-    } catch (error) { documentView.replaceChildren(statusPanel(error.message || String(error), true)) }
+      const result = await resource('filePreview', { path }, source.sessionId)
+      if (!isCurrentDocumentRequest(revision)) return false
+      renderDocument(result.file || {}, path, source)
+      return true
+    } catch (error) {
+      if (isCurrentDocumentRequest(revision)) documentView.replaceChildren(statusPanel(error.message || String(error), true))
+      return false
+    }
+  }
+
+  async function openLocalDocument(target, options = {}) {
+    options = options && typeof options === 'object' ? options : { sourceKind: 'invalid' }
+    // Provenance comes from the clicked link, never the current conversation.
+    // In particular, missing workspace-link provenance cannot fall through to
+    // an absolute local file or another session's project root.
+    const source = Object.freeze(options.sourceKind === 'workspace-link'
+      ? { sourceKind: 'workspace-link', sessionId: typeof options.sessionId === 'string' ? options.sessionId : '' }
+      : { local: true })
+    const revision = beginDocumentRequest('正在安全读取文档…')
+    try {
+      if (source.sourceKind === 'workspace-link') {
+        if (!source.sessionId || source.sessionId.length > 256 || source.sessionId.trim() !== source.sessionId) {
+          throw new Error('无法确定链接所属会话，已停止预览；请从来源会话重新打开。')
+        }
+      } else if (Object.hasOwn(options, 'sourceKind') || Object.hasOwn(options, 'sessionId') || !factory.isExplicitLocalTarget(target)) {
+        throw new Error('缺少文档来源，不能猜测当前项目或本机路径。')
+      }
+      const result = await api.previewRightWorkspaceLocal(source.local
+        ? { target }
+        : { target, sessionId: source.sessionId, sourceKind: source.sourceKind })
+      if (!isCurrentDocumentRequest(revision)) return false
+      renderDocument(result.file || {}, target, source)
+      return true
+    } catch (error) {
+      if (isCurrentDocumentRequest(revision)) documentView.replaceChildren(statusPanel(error.message || String(error), true))
+      return false
+    }
   }
 
   function scheduleDraft(mode, prompt, value) {
@@ -673,15 +759,17 @@
     else controller.replace(id)
     controller.open()
     host.classList.remove('hidden')
+    const revision = ++workspaceIntentRevision
     if (id === 'browser') {
       // During renderer hydration Electron already owns the visible browser;
       // avoid echoing the same visibility command back into the state stream.
-      if (options.nativeAlreadyVisible !== true) await api.setBrowserVisible(true).catch(() => null)
+      if (options.nativeAlreadyVisible !== true) await setBrowserVisible(true)
     } else {
       // A non-browser pane is an explicit user intent. Keep the native state
       // aligned so later title/loading events cannot carry stale visible=true.
-      await api.setBrowserVisible(false).catch(() => null)
+      await setBrowserVisible(false)
     }
+    if (revision !== workspaceIntentRevision || !controller.isOpen() || controller.getActiveModeId() !== id) return false
     if (id === 'devices') deviceWorkspace?.activate()
     else deviceWorkspace?.deactivate()
     syncChrome()
@@ -691,6 +779,8 @@
       const address = document.querySelector('#browserAddress')
       address?.focus()
       address?.select()
+    } else {
+      close?.focus({ preventScroll: true })
     }
     return true
   }
@@ -777,14 +867,20 @@
     controller.setOpen(false, reason)
     deviceWorkspace?.deactivate()
     syncChrome()
-    await api.setBrowserVisible(false).catch(() => null)
-    host.classList.add('hidden')
+    // The close event hides synchronously. Never hide again after its IPC:
+    // a newer open may already own the panel while that reply was pending.
+    await setBrowserVisible(false)
   }
 
   function setContext(value) {
     const sessionId = typeof value?.sessionId === 'string' && value.sessionId.length <= 256 && value.sessionId.trim() === value.sessionId ? value.sessionId : ''
     if (sessionId === context.sessionId) return
     context = { sessionId }
+    documentAppSnapshot = null
+    suspendedDocumentApp = null
+    workspaceIntentRevision += 1
+    filesRequestRevision += 1
+    filesSnapshotSessionId = ''
     filesSnapshot = null
     schedulesSnapshot = null
     schedulesValidator = null
@@ -797,20 +893,32 @@
   modeButtons.forEach(node => node.addEventListener('click', () => openMode(node.dataset.rightWorkspaceMode)))
   window.addEventListener('keydown', onHomeShortcut)
   controller.on('modechange', () => {
+    workspaceIntentRevision += 1
     syncChrome()
     const activeMode = controller.getActiveModeId()
-    if (activeMode !== 'browser') api.setBrowserVisible(false).catch(() => {})
+    if (activeMode !== 'browser') setBrowserVisible(false)
     if (activeMode === 'devices') deviceWorkspace?.activate()
     else deviceWorkspace?.deactivate()
   })
   controller.on('push', syncChrome)
   controller.on('replace', syncChrome)
+  controller.on('statechange', resumeDocumentApp)
+  controller.on('open', () => {
+    if (controller.getActiveModeId() !== 'document') return
+    // The controller shortcut can reopen without passing through openMode.
+    host.classList.remove('hidden')
+    resumeDocumentApp()
+    syncChrome()
+    close?.focus({ preventScroll: true })
+  })
   controller.on('close', () => {
+    workspaceIntentRevision += 1
+    suspendDocumentApp()
     browserRestorePending = false
     deviceWorkspace?.deactivate()
     syncChrome()
     setBrowserContentVisible(false)
-    api.setBrowserVisible(false).catch(() => {})
+    setBrowserVisible(false)
     host.classList.add('hidden')
   })
   controller.on('resize', ({ width }) => {
@@ -824,10 +932,82 @@
     if (event.channel === 'right-workspace:context') setContext(event.args?.[0])
     else if (event.channel === 'right-workspace:intent') handleBrowserOpenIntent(event.args?.[0])
   })
-  api.onPreviewRightWorkspaceLocal?.(target => openLocalDocument(target))
+  api.onPreviewRightWorkspaceLocal?.(value => {
+    if (typeof value === 'string') return openLocalDocument(value)
+    return openLocalDocument(value?.target, { sessionId: value?.sessionId, sourceKind: value?.sourceKind })
+  })
+
+  let modelPreview = null
+  function observeModelPreview(nonce) {
+    const p = modelPreview
+    if (!p || p.nonce !== nonce || !isCurrentDocumentRequest(p.revision)) return { state: 'superseded' }
+    const rect = documentView.getBoundingClientRect()
+    const panel = host.getBoundingClientRect()
+    const left = Math.max(rect.left, panel.left, 0), top = Math.max(rect.top, panel.top, 0)
+    const right = Math.min(rect.right, panel.right, innerWidth), bottom = Math.min(rect.bottom, panel.bottom, innerHeight)
+    const style = getComputedStyle(documentView)
+    const visible = !document.hidden && !host.classList.contains('hidden') && style.visibility === 'visible' && style.display !== 'none' && Number(style.opacity) > 0 && right - left > 2 && bottom - top > 2
+    const base = { nonce, path: p.path, sourceSessionId: p.sourceSessionId, revision: p.revision }
+    if (!visible || !p.loaded) return { ...base, state: 'not-visible' }
+    // Transparent/fading document paint could expose the conversation underneath.
+    // Do not change the theme to obtain a screenshot: refuse unsafe composition.
+    if (!/^(?:rgb|color)\([^/)]+\)$/u.test(style.backgroundColor)) return { ...base, state: 'not-visible' }
+    for (let ancestor = documentView; ancestor; ancestor = ancestor.parentElement) {
+      const paint = getComputedStyle(ancestor)
+      if (Number(paint.opacity) !== 1 || paint.visibility !== 'visible' || paint.display === 'none') return { ...base, state: 'not-visible' }
+    }
+    // Refuse a DOM dialog overlay covering the crop; never include another
+    // pane merely because its geometry intersects this one.
+    for (const [x, y] of [[left + 1, top + 1], [right - 1, top + 1], [left + 1, bottom - 1], [right - 1, bottom - 1], [(left + right) / 2, (top + bottom) / 2]]) {
+      const hit = document.elementFromPoint(x, y)
+      if (!hit || !documentView.contains(hit)) return { ...base, state: 'not-visible' }
+    }
+    const text = documentView.querySelector('.right-workspace-document-text')?.textContent || ''
+    const viewport = window.visualViewport
+    return { ...base, state: 'rendered', contentKind: p.contentKind,
+      rect: { x: left, y: top, width: right - left, height: bottom - top },
+      viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio, scale: viewport?.scale ?? 1, offsetX: viewport?.offsetLeft ?? 0, offsetY: viewport?.offsetTop ?? 0 },
+      textExcerpt: text.slice(0, 12_000), truncated: text.length > 12_000 }
+  }
+  api.onModelWorkspacePreview?.(async value => {
+    if (!value || typeof value.nonce !== 'string' || value.nonce.length > 64 || typeof value.path !== 'string' || typeof value.sourceSessionId !== 'string' || value.file?.sourceSessionId !== value.sourceSessionId) return
+    const revision = beginDocumentRequest('正在观察当前成果…')
+    const p = { nonce: value.nonce, path: value.path, sourceSessionId: value.sourceSessionId, revision, contentKind: value.file.previewKind, loaded: false }
+    modelPreview = p
+    try {
+      renderDocument(value.file, value.path, { sourceKind: 'workspace-link', sessionId: value.sourceSessionId })
+      const media = documentView.querySelector('iframe,img,video,audio')
+      let loadError = false
+      const loaded = () => { p.loaded = true }
+      const failed = () => { loadError = true }
+      const event = media?.tagName === 'VIDEO' || media?.tagName === 'AUDIO' ? 'loadedmetadata' : 'load'
+      p.loaded = !media || (media.tagName === 'IMG' && media.complete && media.naturalWidth > 0) || ((media.tagName === 'VIDEO' || media.tagName === 'AUDIO') && media.readyState >= 1)
+      media?.addEventListener(event, loaded)
+      media?.addEventListener('error', failed)
+      const deadline = Date.now() + 10_000
+      let observed
+      try {
+        await browserVisibilityRequest
+        do {
+          observed = observeModelPreview(p.nonce)
+          if (observed.state === 'rendered' || observed.state === 'superseded' || loadError || document.hidden) break
+          await new Promise(resolve => setTimeout(resolve, 40))
+        } while (Date.now() < deadline)
+      } finally {
+        media?.removeEventListener(event, loaded)
+        media?.removeEventListener('error', failed)
+      }
+      await api.replyModelWorkspacePreview({ ...p, state: loadError ? 'failed' : observed.state })
+    } catch {
+      await api.replyModelWorkspacePreview({ ...p, state: 'failed' }).catch(() => {})
+    }
+  })
+  api.onModelWorkspacePreviewCancel?.(value => { if (modelPreview?.nonce === value?.nonce) modelPreview = null })
+  window.addEventListener('beforeunload', () => { modelPreview = null })
 
   window.harnessDesktopRightWorkspace = Object.freeze({
     controller,
+    observeModelPreview,
     openHome,
     openMode,
     openLocalDocument,

@@ -179,7 +179,8 @@ body.dsh-right-workspace-open .browser-quick-button {
 
 /* ---------- 减少动态效果 ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .dsh-right-workspace {
+  .dsh-right-workspace,
+  #runtimeView {
     transition: none !important; /* 仅保留显隐，不做位移动画 */
   }
 }
@@ -296,7 +297,11 @@ body.dsh-right-workspace-open .browser-quick-button {
 .right-workspace-document-app-status.is-error { color:#d92d20; }
 .right-workspace-document-app { display:block; flex:1; width:100%; min-height:280px; border:0; background:#fff; }
 /* Keep the original overlay behavior as the narrow-window fallback. */
-#runtimeView { transition:width .22s ease,height .16s ease; }
+/* Resize the embedded conversation once at the final dock width. Animating its
+   width forces Chromium to reflow the entire guest document on every frame.
+   The workspace keeps its compositor transform transition; this is not a shorter
+   width animation, and does not virtualize or hide conversation content. */
+#runtimeView { transition:height .16s ease; }
 body.dsh-right-workspace-open #runtimeView { width:100%; }
 body.dsh-right-workspace-open .runtime-status { right:0; }
 

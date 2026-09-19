@@ -272,7 +272,7 @@ function render(next) {
   state = next
   pet.dataset.motion = resolvedMotion(next.preferences?.motion)
   behavior.update(next)
-  feedButton.disabled = !Object.values(next.inventory || {}).some(value => value > 0) || next.fullness >= 100
+  feedButton.disabled = feedInFlight || !Object.values(next.inventory || {}).some(value => value > 0) || next.fullness >= 100
   if (next.lastAward?.at && next.lastAward.at !== lastAwardAt) {
     lastAwardAt = next.lastAward.at
     tokBubble.textContent = `+${next.lastAward.quantity} TOK`
@@ -381,29 +381,42 @@ const interaction = new PetInteractionEngine({
   }
 })
 
+let pendingDragPointer = null
+let dragStartGeneration = 0
 character.addEventListener('contextmenu', showContextMenu)
 character.addEventListener('pointerdown', async event => {
-  if (event.button !== 0) return
+  if (event.button !== 0 || event.isPrimary === false || dragging || pendingDragPointer !== null) return
+  const generation = ++dragStartGeneration
+  pendingDragPointer = event.pointerId
   hideContextMenu()
-  character.setPointerCapture(event.pointerId)
-  const current = environment || await refreshEnvironment()
-  if (!character.hasPointerCapture(event.pointerId)) return
-  dragging = {
-    pointerId: event.pointerId,
-    active: false,
-    offsetX: event.screenX - current.bounds.x,
-    offsetY: event.screenY - current.bounds.y,
-    originX: event.screenX,
-    originY: event.screenY,
-    samples: [],
-    lastPoint: interactionPoint(event)
+  try {
+    character.setPointerCapture(event.pointerId)
+    const current = environment || await refreshEnvironment()
+    if (generation !== dragStartGeneration || !character.hasPointerCapture(event.pointerId) || !current?.bounds) return
+    dragging = {
+      pointerId: event.pointerId,
+      active: false,
+      offsetX: event.screenX - current.bounds.x,
+      offsetY: event.screenY - current.bounds.y,
+      originX: event.screenX,
+      originY: event.screenY,
+      samples: [],
+      lastPoint: interactionPoint(event)
+    }
+    dragSample(event)
+    interaction.begin(dragging.lastPoint)
+    clearTimeout(petHoldTimer)
+    petHoldTimer = setTimeout(() => {
+      if (dragging?.lastPoint) interaction.hold({ ...dragging.lastPoint, at: performance.now() })
+    }, 285)
+  } catch (error) {
+    if (generation === dragStartGeneration) {
+      cancelPetGesture()
+      showSpeech(`暂时无法拖动：${error.message}`)
+    }
+  } finally {
+    if (generation === dragStartGeneration) pendingDragPointer = null
   }
-  dragSample(event)
-  interaction.begin(dragging.lastPoint)
-  clearTimeout(petHoldTimer)
-  petHoldTimer = setTimeout(() => {
-    if (dragging?.lastPoint) interaction.hold({ ...dragging.lastPoint, at: performance.now() })
-  }, 285)
 })
 
 character.addEventListener('pointermove', event => {
@@ -421,6 +434,9 @@ character.addEventListener('pointermove', event => {
 })
 
 character.addEventListener('pointerup', event => {
+  // The pointer may be released before the first environment request settles.
+  // Invalidate it immediately rather than relying on delayed capture-loss.
+  if (pendingDragPointer === event.pointerId) { cancelPetGesture(event); return }
   if (!dragging || event.pointerId !== dragging.pointerId) return
   clearTimeout(petHoldTimer)
   petHoldTimer = null
@@ -429,33 +445,75 @@ character.addEventListener('pointerup', event => {
   if (result?.type !== 'drag-end') dragging = null
 })
 
-character.addEventListener('pointercancel', () => {
+function cancelPetGesture(event) {
+  const pointerId = dragging?.pointerId ?? pendingDragPointer
+  if (event?.pointerId != null && event.pointerId !== pointerId) return
+  dragStartGeneration += 1
+  pendingDragPointer = null
   clearTimeout(petHoldTimer)
   petHoldTimer = null
   const wasActive = Boolean(dragging?.active)
   const wasPetting = Boolean(dragging?.petting)
   interaction.cancel()
   dragging = null
+  try { if (pointerId != null && character.hasPointerCapture(pointerId)) character.releasePointerCapture(pointerId) } catch {}
   if (wasActive) startFall(0, 0)
   else if (wasPetting) behavior.release('petting')
+}
+character.addEventListener('pointercancel', cancelPetGesture)
+character.addEventListener('lostpointercapture', cancelPetGesture)
+window.addEventListener('pagehide', () => cancelPetGesture())
+// Native keyboard/screen-reader activation has detail=0; pointer taps were
+// already handled by the gesture engine and must not reward twice.
+character.addEventListener('click', event => {
+  if (event.detail !== 0 || dragging || pendingDragPointer !== null) return
+  const actionable = ['needs-input', 'blocked'].includes(state?.status) && state?.focusSessionId
+  const request = actionable ? api.focusMain(state.focusSessionId) : api.interact('tap')
+  Promise.resolve(request).catch(error => showSpeech(`互动失败：${error.message}`))
+  behavior.perform('wave', 1800, { force: true, source: 'interaction' })
+})
+character.addEventListener('keydown', event => {
+  if (event.isComposing || event.repeat) return
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    const bounds = character.getBoundingClientRect()
+    showContextMenu({ preventDefault: () => event.preventDefault(), clientX: bounds.left, clientY: bounds.top })
+    focusButton.focus()
+  }
+})
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.isComposing) return
+  if (!contextMenu.hidden) { event.preventDefault(); hideContextMenu(); character.focus() }
+  cancelPetGesture()
 })
 
 character.addEventListener('dblclick', () => behavior.perform('celebrating', 5200, { force: true }))
 
-focusButton.addEventListener('click', () => {
+focusButton.addEventListener('click', async () => {
   hideContextMenu()
-  api.focusMain(state?.focusSessionId || null)
+  try { await api.focusMain(state?.focusSessionId || null) }
+  catch (error) { showSpeech(`无法打开主窗口：${error.message}`) }
 })
+let feedInFlight = false
 feedButton.addEventListener('click', async () => {
+  if (feedInFlight || feedButton.disabled) return
+  feedInFlight = true
+  feedButton.disabled = true
   hideContextMenu()
-  const inventory = state?.inventory || {}
-  const kind = inventory.fragments > 0 ? 'fragments' : inventory.standard > 0 ? 'standard' : 'refined'
-  render(await api.feed(kind))
-  behavior.perform('feeding', 4200, { force: true })
+  try {
+    const inventory = state?.inventory || {}
+    const kind = inventory.fragments > 0 ? 'fragments' : inventory.standard > 0 ? 'standard' : 'refined'
+    render(await api.feed(kind))
+    behavior.perform('feeding', 4200, { force: true })
+  } catch (error) { showSpeech(`喂食失败：${error.message}`) }
+  finally {
+    feedInFlight = false
+    feedButton.disabled = !Object.values(state?.inventory || {}).some(value => value > 0) || state?.fullness >= 100
+  }
 })
-tuckButton.addEventListener('click', () => {
+tuckButton.addEventListener('click', async () => {
   hideContextMenu()
-  api.setAwake(false)
+  try { await api.setAwake(false) }
+  catch (error) { showSpeech(`暂时无法休息：${error.message}`) }
 })
 
 document.addEventListener('mousemove', event => {
@@ -471,7 +529,7 @@ document.addEventListener('mouseleave', () => {
     syncWindowShape()
   }
 })
-window.addEventListener('blur', hideContextMenu)
+window.addEventListener('blur', () => { cancelPetGesture(); hideContextMenu() })
 
 Promise.all([loadRig(), refreshEnvironment(), api.getState()]).then(([, current, initialState]) => {
   environment = current

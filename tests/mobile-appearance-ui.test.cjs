@@ -62,4 +62,6 @@ test('drawer summary keeps details action and recovery counts in normal responsi
   assert.doesNotMatch(android, /padding-top:\s*(?:84|148)px\s*!important/u, 'drawer must not double-reserve summary space')
   assert.match(android, /data-harness-mobile-conversation-search-box\][\s\S]*?top:\s*calc\(var\(--harness-mobile-appbar-height\) \+ 14px\)[\s\S]*?min-height:\s*46px/u)
   assert.match(android, /data-harness-mobile-conversation-list-title\][\s\S]*?margin:\s*calc\(var\(--harness-mobile-appbar-height\) \+ 14px \+ 46px \+ 8px\)/u)
+  assert.match(android, /data-harness-mobile-index-retry\][\s\S]*?position:\s*static\s*!important[\s\S]*?width:\s*fit-content\s*!important/u)
+  assert.match(android, /data-harness-mobile-index-retry\][\s\S]*?max-width:\s*min\(100%, 168px\)\s*!important[\s\S]*?min-height:\s*48px\s*!important/u)
 })

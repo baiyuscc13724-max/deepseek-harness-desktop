@@ -32,6 +32,7 @@ public final class ScreenCaptureActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         commandId = getIntent().getStringExtra("commandId");
+        if (!ControlForegroundService.isCommandActive(commandId)) { finishAndRemoveTask(); return; }
         maxWidth = getIntent().getIntExtra("maxWidth", 720);
         quality = getIntent().getIntExtra("quality", 62);
         MediaProjectionManager manager = getSystemService(MediaProjectionManager.class);
@@ -45,6 +46,7 @@ public final class ScreenCaptureActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQUEST_CAPTURE) return;
+        if (!ControlForegroundService.isCommandActive(commandId)) { finishAndRemoveTask(); return; }
         if (resultCode != RESULT_OK || data == null) {
             fail("CAPTURE_DENIED", "用户未允许屏幕捕获。 ");
             return;
@@ -87,6 +89,11 @@ public final class ScreenCaptureActivity extends Activity {
         reader.setOnImageAvailableListener(source -> {
             if (!settled.compareAndSet(false, true)) return;
             handler.removeCallbacks(timeout);
+            if (!ControlForegroundService.isCommandActive(commandId)) {
+                release(projection, display[0], reader, thread);
+                runOnUiThread(this::finishAndRemoveTask);
+                return;
+            }
             try (Image image = source.acquireLatestImage()) {
                 if (image == null) throw new IllegalStateException("屏幕图像为空");
                 Image.Plane plane = image.getPlanes()[0];

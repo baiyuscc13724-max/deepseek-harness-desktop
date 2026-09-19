@@ -95,6 +95,7 @@ async function fixedRootTaskUpdate(tools, teamId, taskId, action, execution, ext
     request_id: `runtime-${action}-${taskCommandSequence}`,
     expected_task_revision: task.revision,
     expected_pause_epoch: status.team.pauseEpoch,
+    ...(action === 'accept' && task.submission?.delivery ? { review: { submission_id: task.submission.id, summary: 'Inspected the actual fixture submission.', criteria: task.submission.delivery.criteria } } : {}),
     ...extra
   }, execution)
 }
@@ -1210,7 +1211,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
     }
     const workerAgent = {
       id: 'worker-session', status: 'running', options: { provider: 'test-provider', model: 'test-model' },
-      session: { events: [
+      session: { header: { cwd: root }, events: [
         { type: 'turn/start', data: {} },
         { type: 'user/message', data: { source: { kind: 'agent-message', form: 'relay', senderSessionId: rootAgent.id } } }
       ], snapshotEvents() { return this.events.slice() } }
@@ -1367,7 +1368,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
               for (const taskId of args.task_ids) {
                 await fixedRootTaskUpdate(tools, result.teamId, taskId, 'unassign', execution)
                 const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'claim' }, execution)
-                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
+                await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: taskId, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch, delivery: { summary: 'Fixture provisioning checked', content: 'Provisioning behavior exercised.', criteria: [{ criterion: 'Provisioning', evidence: 'Observed the isolated fixture start and claim.' }] } }, execution)
                 await fixedRootTaskUpdate(tools, result.teamId, taskId, 'accept', execution)
               }
             } catch {}
@@ -1382,7 +1383,7 @@ test('model tools create a team, spawn independent members, and relay with non-u
           try {
             await fixedRootTaskUpdate(tools, result.teamId, created.task.id, 'unassign', execution)
             const claim = await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'claim' }, execution)
-            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch }, execution)
+            await tools.get('team_task_update').execute({ team_id: result.teamId, task_id: created.task.id, action: 'complete', claim_id: claim.task.claimId, lease_epoch: claim.task.leaseEpoch, delivery: { summary: 'Fixture provisioning checked', content: 'Provisioning behavior exercised.', criteria: [{ criterion: 'Provisioning', evidence: 'Observed the isolated fixture start and claim.' }] } }, execution)
             await fixedRootTaskUpdate(tools, result.teamId, created.task.id, 'accept', execution)
           } catch {}
           return result
@@ -2087,8 +2088,14 @@ test('model tools create a team, spawn independent members, and relay with non-u
       error => error && error.code === 'AGENT_TEAMS_TASK_BLOCKED'
     )
     const projectedClaim = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'claim' }, { agent: rootAgent, signal: new AbortController().signal })
-    const projectedCompletion = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'complete', claim_id: projectedClaim.task.claimId, lease_epoch: projectedClaim.task.leaseEpoch }, { agent: rootAgent, signal: new AbortController().signal })
-    assert.deepEqual(projectedCompletion.task.submission, {
+    const projectedCompletion = await tools.get('team_task_update').execute({ team_id: started.team.id, task_id: projectedTask.task.id, action: 'complete', claim_id: projectedClaim.task.claimId, lease_epoch: projectedClaim.task.leaseEpoch, delivery: { summary: 'Projection checked', content: 'Dependency stayed blocked until separate acceptance.', criteria: [{ criterion: 'Dependency gate', evidence: 'The preceding public claim rejected with AGENT_TEAMS_TASK_BLOCKED.' }] } }, { agent: rootAgent, signal: new AbortController().signal })
+    const { id: submissionId, delivery: boundDelivery, deliveryMode, inputHash, ...submissionFence } = projectedCompletion.task.submission
+    assert.equal(typeof submissionId, 'string')
+    assert.equal(deliveryMode, 'inline_bound')
+    assert.equal(boundDelivery.content, 'Dependency stayed blocked until separate acceptance.')
+    assert.match(boundDelivery.contentHash, /^[a-f0-9]{64}$/u)
+    assert.match(inputHash, /^[a-f0-9]{64}$/u)
+    assert.deepEqual(submissionFence, {
       taskId: projectedTask.task.id,
       claimId: projectedClaim.task.claimId,
       leaseEpoch: projectedClaim.task.leaseEpoch,

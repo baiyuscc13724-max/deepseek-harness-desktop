@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "status": "submitted-with-unverified-boundaries",
+  "report": "docs/deep-audit/runtime-storage.md",
+  "evidenceSemantics": "pass/fixed apply only to the named fixture or source-contract evidence, never to unperformed live GUI/OS/release behavior",
+  "runs": [
+    {"id":"baseline", "tests":249, "pass":249, "fail":0, "skipped":0},
+    {"id":"combined-before-final-disk-bootstrap-fix", "tests":372, "pass":369, "fail":0, "skipped":3, "explicitlyFilteredRealEntryTests":4},
+    {"id":"final-affected-six-files", "tests":53, "pass":53, "fail":0, "skipped":0, "exclusiveRegressionTests":16}
+  ],
+  "features": [
+    {"id":"RT-01","entry":"distribution and runtime paths","status":"pass","level":"fixture","evidence":["tests/distribution.test.cjs","tests/dsh-home.test.cjs","tests/dsh-resolver.test.cjs"]},
+    {"id":"RT-02","entry":"generated profile recovery","status":"pass","level":"fixture","evidence":["tests/dsh-generated-profile-recovery.test.cjs"]},
+    {"id":"RT-03","entry":"runtime cache publication/version input","status":"fixed","level":"production-with-fake-filesystem-and-temp","evidence":["tests/deep-audit-runtime-storage.test.cjs","tests/runtime-bundle-service.test.cjs"]},
+    {"id":"RT-04","entry":"runtime launch URL/cookie/token scope","status":"pass","level":"fixture","evidence":["tests/runtime-web-url.test.cjs","tests/runtime-session-auth.test.cjs","tests/runtime-proxy.test.cjs"]},
+    {"id":"RT-05","entry":"bootstrap corrupt component fallback","status":"fixed","level":"real-bootstrap-VM-fake-Electron","evidence":["tests/deep-audit-runtime-storage.test.cjs"]},
+    {"id":"RT-06","entry":"live Electron startup/settings/OS crash recovery","status":"unverified","reason":"No live app or real user state touched; VM shell-load is not GUI acceptance"},
+    {"id":"NET-01","entry":"local pipe endpoint/process tree","status":"pass","level":"fixture","evidence":["tests/local-ipc-endpoint.test.cjs","tests/process-tree.test.cjs"]},
+    {"id":"NET-02","entry":"CONNECT validation and tunnel","status":"fixed","level":"fake-net-negative-and-local-loopback-fixture","evidence":["tests/deep-audit-runtime-storage.test.cjs","tests/tcp-connect-bridge.test.cjs"]},
+    {"id":"NET-03","entry":"EasyTier verified archive/cache content","status":"fixed","level":"fake-fetch-temp-archive","evidence":["tests/deep-audit-runtime-storage.test.cjs","tests/network-component-service.test.cjs"]},
+    {"id":"NET-04","entry":"capability broker queue/replay/stop","status":"pass","level":"fixture","evidence":["tests/capability-broker.test.cjs"]},
+    {"id":"NET-05","entry":"real driver/proxy/system process termination","status":"unverified","reason":"Real OS side effects excluded"},
+    {"id":"ST-01","entry":"scan tree/budget/contained paths/protected roots","status":"pass","level":"temp-fixture","evidence":["tests/storage-scan-service.test.cjs"]},
+    {"id":"ST-02","entry":"preview identity/expiry/explicit confirmation/new candidates","status":"pass","level":"temp-fixture","evidence":["tests/storage-cleanup-service.test.cjs","tests/storage-management-service.test.cjs"]},
+    {"id":"ST-03","entry":"actual recursive deletion/free bytes","status":"blocked","reason":"No trusted exact-object recursive delete primitive; implementation intentionally refuses and reports zero freed bytes"},
+    {"id":"ST-04","entry":"storage UI controls","status":"pass","level":"source-contract-only","evidence":["tests/storage-ui.test.cjs"]},
+    {"id":"CMP-01","entry":"signed manifest/index/archive/resolution","status":"pass","level":"fixture","evidence":["tests/component-update-contract.test.cjs","tests/component-update-archive.test.cjs","tests/component-update-config.test.cjs","tests/component-runtime-resolver.test.cjs"]},
+    {"id":"CMP-02","entry":"staging/service download/failure","status":"pass","level":"fake-network-temp","evidence":["tests/component-update-service.test.cjs"]},
+    {"id":"CMP-03","entry":"cross-instance CAS","status":"fixed","level":"deterministic-two-store-barrier","evidence":["tests/deep-audit-runtime-storage.test.cjs"]},
+    {"id":"CMP-04","entry":"applying interruption/health/first bundled rollback","status":"fixed","level":"temp-store-fixture","evidence":["tests/deep-audit-runtime-storage.test.cjs","tests/component-update-helper.test.cjs"]},
+    {"id":"CMP-05","entry":"unreadable/malformed state preservation","status":"fixed","level":"EACCES-and-temp-bad-bytes-fixture","evidence":["tests/deep-audit-runtime-storage.test.cjs"]},
+    {"id":"CMP-06","entry":"stale-lock recovery/physical power loss","status":"unverified","reason":"Stale locks never stolen; no real crash/disk durability simulation"},
+    {"id":"UP-01","entry":"desktop manifest/feed/version/source verification","status":"pass","level":"fixture","evidence":["tests/desktop-release-contract.test.cjs","tests/update-service.test.cjs","tests/update-feed-config.test.cjs"]},
+    {"id":"UP-02","entry":"download hash/length/fallback and launcher arguments","status":"pass","level":"fixture","evidence":["tests/update-download-service.test.cjs","tests/update-launcher.test.cjs","tests/update-install-idempotency.test.cjs"]},
+    {"id":"UP-03","entry":"native installer/relaunch","status":"unverified","reason":"Not performed"},
+    {"id":"PR-01","entry":"default-off discovery/signed queue/accept/defer","status":"pass","level":"fixture","evidence":["tests/pr-preview-update-contract.test.cjs","tests/pr-preview-update-service.test.cjs"]},
+    {"id":"PR-02","entry":"preview activation/forward/rollback","status":"pass","level":"fixture","evidence":["tests/pr-preview-activation-store.test.cjs"]},
+    {"id":"PR-03","entry":"update UI/status/opaque action","status":"pass","level":"source-contract-only","evidence":["tests/pr-preview-update-ui.test.cjs","tests/component-update-ui.test.cjs","tests/update-summary.test.cjs"]},
+    {"id":"AU-01","entry":"authorization receipts/epoch/replay/atomic recovery","status":"pass","level":"fake-dialog-temp-service","evidence":["tests/agent-teams-authorization-service.test.cjs"]},
+    {"id":"AU-02","entry":"authorization close/late approval and half-frame shutdown","status":"fixed","level":"fake-dialog-local-pipe","evidence":["tests/deep-audit-runtime-storage.test.cjs"]},
+    {"id":"AU-03","entry":"secret purpose/protection/replay/half-frame shutdown","status":"fixed","level":"fake-protector-local-pipe","evidence":["tests/agent-teams-secret-service.test.cjs","tests/deep-audit-runtime-storage.test.cjs"]},
+    {"id":"AU-04","entry":"top-level session reserve/launch/reconcile/adopt/cancel","status":"pass","level":"fixture","evidence":["tests/agent-teams-session-launch-service.test.cjs"]},
+    {"id":"AU-05","entry":"live ask-card admission/selected-team attention","status":"unverified","reason":"Plugin belongs to previous team; Desktop bridge tests do not establish live runtime behavior"},
+    {"id":"PATCH-01","entry":"32 runtime writer sites and exact provider v3-v4 installed adapter","status":"fixed","level":"temporary-production-package-fixture","evidence":["tests/deep-audit-runtime-storage.test.cjs","tests/official-runtime-patch.test.cjs","tests/official-runtime-patch-composition.test.cjs"]},
+    {"id":"PATCH-02","entry":"legacy compound writer transactionality/official-v1-v2 fresh migration","status":"unverified","reason":"Some legacy direct writers retained; exact old allowlist preserved, new installer fixture covers v3-v4 only"},
+    {"id":"REL-01","entry":"publisher identity/phase/recovery contracts","status":"pass","level":"source-and-injected-fixture-only","evidence":["tests/release-publisher.test.cjs"]},
+    {"id":"REL-02","entry":"actual build/sign/upload/mirror/release","status":"blocked","reason":"Explicit task boundary forbids real execution"}
+  ],
+  "boundary": "source and isolated temporary fixtures only; no installed runtime, real authorization, release, configuration or cleanup mutation",
+  "baseline": {"snapshot": "TEMP/dsh-base-audit-20260912-194551", "patchSha256": "856D57B3667985ED38B619BD51943A76BB6E4F2699AB2FA57C3F99A85018C3EE", "providerV3InputSha256": "2171F31250C0970D1CC9A9733A241364306D99146E5BAEC8D0775066D7AE3388", "providerV4OutputSha256": "28A7850E44BC24CDD0E5E7222EB0FE655877D1433DB59F8FF435934528BA0207", "providerV4IsNotScriptHash": true, "existingEditsPreserved": true},
+  "domains": [
+    {"id":"startup", "files":["electron/bootstrap.cjs","electron/distribution.cjs","electron/bridge/dsh-home.cjs","electron/bridge/dsh-resolver.cjs","electron/bridge/dsh-generated-profile-recovery.cjs","electron/bridge/runtime-bundle-service.cjs","electron/bridge/runtime-proxy.cjs","electron/bridge/runtime-web-url.cjs","electron/bridge/runtime-session-auth.cjs","electron/bridge/user-data-override.cjs","electron/bridge/self-test-service.cjs"], "entries":["boot/component activation/module resolution/failure report","distributionInfo/store isolation","resolveDesktopRuntimePaths/desktopRuntimeEnvironment","resolveDshBin/resolvePackageBin/parseArgsEnv","resetGeneratedWebProfileRoot/recoverable diagnostic","ensureRuntimeNodeModules/runtimeReady/cache commit","proxy normalization/environment","launch URL normalization/read auth cookie/token exchange/authenticated probe","applyUserDataOverride","self-test report"], "validation":["normal","invalid paths","missing runtime","concurrent cache install","profile failure recovery","cookie scope and expiry"], "unknown":["real Electron boot/OS crash","physical power loss","real browser direct-human provenance"]},
+    {"id":"network", "files":["electron/bridge/local-ipc-endpoint.cjs","electron/bridge/network-component-service.cjs","electron/bridge/process-spawn.cjs","electron/bridge/process-tree.cjs","electron/bridge/tcp-connect-bridge.cjs","electron/bridge/capability-broker.cjs"], "entries":["createLocalIpcEndpoint","EasyTier catalog/extract/install/cache reuse","spawn options/environment","process tree inspect/terminate","CONNECT bridge listen/tunnel/close","broker accept/next/confirm/cancel/stop/token/audit"], "validation":["Windows pipe and long path","archive path traversal","hash mismatch","mock process isolation","loopback source","queue capacity/replay/stop"], "unknown":["real driver installation","live process kill","real proxy authentication"]},
+    {"id":"storage", "files":["electron/bridge/storage-scan-service.cjs","electron/bridge/storage-cleanup-service.cjs","electron/bridge/storage-management-service.cjs","renderer/storage-manager.js"], "entries":["resolveContained/isSymlinkEscaping","scanTree/scanHarnessData/scanCacheOnly","plan/planCacheOnlyLegacy/planCacheOnly/identity capture","management scan/preview/apply/automatic maintenance","renderer preview/apply/cancel/status"], "validation":["read-only normal scan","entry budget","missing/unreadable root","protected-tree pruning","canonical alias drift","reparse root/sibling escape","expired preview/explicit confirmation","late new candidates excluded","apply fail-closed with zero freed bytes","shadow equivalence/rollback/large fixture latency"], "unknown":["safe recursive delete unavailable by design","live disk cleanup not attempted"]},
+    {"id":"components", "files":["electron/bridge/component-runtime-resolver.cjs","electron/bridge/component-update-archive.cjs","electron/bridge/component-update-builder.cjs","electron/bridge/component-update-config.cjs","electron/bridge/component-update-contract.cjs","electron/bridge/component-update-health.cjs","electron/bridge/component-update-helper.cjs","electron/bridge/component-update-launcher.cjs","electron/bridge/component-update-service.cjs","electron/bridge/component-update-store.cjs"], "entries":["resolveComponentLayout/installComponentModulePaths","path/index/ZIP/extracted hashes verification","deterministic index/archive/sign fixture","resolve config/verify signed manifest/create plan","store staging/ready/applying/activate/health/rollback/baseline/CAS","prepareComponentActivation/confirmComponentActivation","wait parent/restart helper","check/stage/immutable commit"], "validation":["signed fixture trust/schema/version gates","archive traversal/collision/size","staging failure","immutable desired pointer","health crash rollback","first-install baseline rollback","publication interruption","concurrent store CAS"], "unknown":["real install/relaunch/signing/publish forbidden","multi-file power-loss durability"]},
+    {"id":"updates", "files":["electron/bridge/desktop-release-contract.cjs","electron/bridge/update-download-service.cjs","electron/bridge/update-feed-config.cjs","electron/bridge/update-launcher.cjs","electron/bridge/update-service.cjs","electron/bridge/update-summary.cjs"], "entries":["verify desktop manifest","download/fallback/hash/length/temp commit","resolve feeds","installer launch/platform args","version/assets/checksum selection","summary rendering"], "validation":["HTTPS source policy","hash/length mismatch","fallback","idempotent install entry contract","Windows argument boundaries"], "unknown":["real installer/UI launch not attempted"]},
+    {"id":"preview", "files":["electron/bridge/pr-preview-activation-store.cjs","electron/bridge/pr-preview-update-config.cjs","electron/bridge/pr-preview-update-contract.cjs","electron/bridge/pr-preview-update-service.cjs","renderer/pr-preview-update-integration.js","renderer/pr-preview-update.css"], "entries":["default-off discovery/config","signed index/manifest/candidate verify","bounded persisted queue/discover/accept/defer","monotonic state/provider redirect","activation stage/read/reconcile","renderer explicit restart"], "validation":["disabled performs no network","newest 128 unique candidates","expired/tampered non-actionable","mirror fallback/conflict","accept only verified candidate"], "unknown":["real preview deployment unavailable"]},
+    {"id":"authorization", "files":["electron/bridge/agent-teams-authorization-service.cjs","electron/bridge/agent-teams-session-launch-service.cjs","electron/bridge/agent-teams-secret-service.cjs","electron/bridge/agent-teams-plugin-service.cjs"], "entries":["start/runtimeEnvironment/close","exact one-time receipt/native dialog/token/schema/TTL","autopilot issue/claim/consume/read/revoke/epoch/proof","state lock/head/transaction recovery","project resolve/reserve/launch/reconcile/retry/cancel/adoption lifecycle","secret protect/unprotect/purpose/binding/redaction","bundled plugin validate/copy/dependencies/patch entry"], "validation":["forged token/scope/replay denial","two-instance serialization","malformed/rollback/atomic-write recovery","session launch fair lanes/unknown dispatch/OCC/half-frame close","secret encryption unavailable fail-soft","shutdown late-dialog fence"], "unknown":["live ask-card direct-human admission not reproduced; plugin belongs to previous team","selected-team wait attention mismatch not a Desktop bridge implementation","OS safeStorage real keys not accessed"]}
+  ],
+  "currentScriptInventory": {
+    "root": "scripts/",
+    "historicalInventoryPointer": "/scriptInventory",
+    "historicalInventorySha256": "787B735932F1C0511B309D287DC216E256A3EF9EB83B733251F50B398FC8AA63",
+    "historicalBaselineSha256": "F5E1E62A30C7FB2BA05C3F42EEACFA2074101F4DA0568E7D46EC63CBCE38C54C",
+    "historical102Pointer": "/scriptInventory102",
+    "historical102Sha256": "81B601B4983DB7975C534F56A6F41E34487DEC2C590197ACAFC2E34932074347",
+    "totalFiles": 103,
+    "qualification": "Exact historical100 groups plus preserved historical102 additions plus one new question-card helper; not a claim that all scripts were executed.",
+    "additionalGroups": [
+      {"scope":"runtime-transform", "status":"temporary-installed-artifact-and-isolated-Chromium-behavior", "files":["deep-audit-question-card-patch.mjs"]}
+    ],
+    "evidence": ["docs/deep-audit/question-card-install.md","tests/deep-audit-question-card-install.test.cjs"],
+    "runtimePatch": {
+      "priorAcceptedSha256": "034CFD41CC9E78C46ED6ABA1D1971236F496EDF3D587F2342FF039450BB239DF",
+      "currentSha256": "CECD16CC8DDD9627BE92170C038A7A0C6AD4B904C30A9B71CC5A86CBBF5034B4",
+      "verification": "fixture-verified-pending-independent-acceptance",
+      "verificationRun": ".artifacts/deep-audit-20260912/acceptance-question-install-v2/result.json",
+      "verificationCounts": {"tests":122,"pass":119,"fail":0,"skipped":3,"installedQuestionBrowserChecks":44,"eventParseErrors":0,"sourceDrift":0,"testDrift":0,"auditDrift":0}
+    }
+  },
+  "scriptInventory102": {
+    "root": "scripts/",
+    "historicalInventoryPointer": "/scriptInventory",
+    "historicalInventorySha256": "787B735932F1C0511B309D287DC216E256A3EF9EB83B733251F50B398FC8AA63",
+    "historicalBaselineSha256": "F5E1E62A30C7FB2BA05C3F42EEACFA2074101F4DA0568E7D46EC63CBCE38C54C",
+    "totalFiles": 102,
+    "qualification": "Current exact enumeration is the immutable historical 100 groups plus these two classified additions; counts do not imply live execution or full behavior coverage.",
+    "additionalGroups": [
+      {"scope":"runtime-transform", "status":"temporary-production-installer-and-composition-fixture", "files":["deep-audit-marketplace-patch.mjs","deep-audit-session-core-patch.mjs"]}
+    ],
+    "evidence": ["docs/deep-audit/marketplace-patch.md","docs/deep-audit/session-core-install.md","tests/deep-audit-marketplace-install.test.cjs","tests/deep-audit-session-core-install.test.cjs"],
+    "runtimePatch": {
+      "priorAcceptedSha256": "710E8BCD47A604F481121EA8D336A815527A3373BD2374CAF8E2E585DDDDAEB8",
+      "currentSha256": "034CFD41CC9E78C46ED6ABA1D1971236F496EDF3D587F2342FF039450BB239DF",
+      "verification": "fixture-verified-pending-independent-acceptance",
+      "verificationRun": ".artifacts/deep-audit-20260912/acceptance-session-core-install-v2/result.json",
+      "verificationCounts": {"tests":91,"pass":88,"fail":0,"skipped":3,"eventParseErrors":0,"sourceDrift":0,"testDrift":0,"auditDrift":0}
+    }
+  },
+  "scriptInventory": {
+    "root": "scripts/",
+    "totalFiles": 100,
+    "qualification": "Exhaustive entry classification, NOT a claim of line-by-line/dynamic coverage of every script. Release/external/OS commands were not executed. Concrete contract checks are separately identified.",
+    "groups": [
+      {"scope":"release-package-sign-mirror", "status":"read-only-entry-and-contract-audit-no-execution", "files":["afterAllArtifactBuild.cjs","bootstrap-github.ps1","bootstrap-github.sh","build-component-update.mjs","build-mirror-manifest.mjs","build-store-msix.mjs","component-update-helper.cjs","configure-component-signing-backup.ps1","create-android-release-keystore.ps1","create-component-signing-key.mjs","electron-builder-traversal.cjs","extract-release-notes.mjs","mirror-manifest-lib.mjs","prepare-bundled-git.mjs","prepare-production-components.mjs","publish-cnb-cloud-mirror.ps1","refresh-release-manifest.mjs","store-msix-lib.mjs","store-readiness.mjs","verify-component-signing-key.mjs","verify-production-component-staging.mjs","mobile-release-version.cjs","publish-cnb-mobile-cloud-mirror.ps1","release-orchestrator.mjs","artifact-audit.mjs","hermetic-tree-digest.mjs","local-component-update-test.mjs","packaged-selftest-contract.mjs","release-audit.mjs","release-local-formal-windows-validation.cjs","release-oneoff-v1.0.58-windows-ui-validation.cjs","release-publish-selection.cjs","release-publish.mjs","release-publish-android.mjs","verify-formal-windows-release-identity.mjs","artifact-size-budget.mjs","build-release.mjs"]},
+      {"scope":"preview-release", "status":"source-contract-fixture-covered-not-published", "files":["pr-preview-build.mjs","pr-preview-cnb-request.mjs","pr-preview-local-gate.mjs","pr-preview-promote-verify.mjs","pr-preview-verify-feed.mjs","pr-preview-sign.mjs"]},
+      {"scope":"runtime-transform", "status":"fixture-and-composition-coverage-see-report", "files":["chat-stop-follow.mjs","reasoning-effort-slider-patch.mjs","codex-parity-runtime-patch.mjs","assistant-copy-patch.mjs","attachment-input-patch.mjs","conversation-work-tree-patch.mjs","deepseek-model-discovery-patch.mjs","goal-tool-recovery-patch.mjs","model-settings-credential-validation-patch.mjs","session-list-metadata-performance-patch.mjs","session-persistence-performance-patch.mjs","timeline-reference-patch.mjs","tool-recoverable-error-patch.mjs","tool-result-image-patch.mjs","workspace-session-menu-patch.mjs","composer-queue-performance-patch.mjs","image-preview-performance-patch.mjs","model-settings-key-override-patch.mjs","provider-auth-isolation-patch.mjs","patch-official-runtime.mjs","deep-audit-runtime-patch.mjs"]},
+      {"scope":"diagnostic-live-fixture-launchers", "status":"inventory-only-not-executed-requires-separate-environment-review", "files":["benchmark-agent-teams.mjs","diagnose-text-selection-runtime.mjs","http-connect-bridge-host.cjs","inspect-pet-cdp.cjs","inspect-pet-sprite-cdp.cjs","mobile-sync-e2e-host.cjs","pair-android-remote-test.cjs","verify-browser-sidebar-runtime.mjs","verify-computer-use-runtime.mjs","verify-memory-tools-runtime.mjs","verify-mobile-sync-remote-cdp.cjs","verify-mobile-sync-ui-cdp.cjs","verify-pet-user-flow-cdp.cjs","verify-workspace-picker-runtime.mjs","session-switch-performance-benchmark.mjs","test-agent-teams-host-electron.cjs","test-browser-codex-api-electron.cjs","test-right-workspace-electron.cjs","test-runtime-session-auth-electron.cjs","test-session-timeline-electron.cjs","upstream-status.mjs","verify-agent-teams-installed-smoke.mjs","verify-browser-tools-runtime.mjs","run-smoke-tests.mjs","verify-static.mjs"]},
+      {"scope":"pet-assets-other-member-domain", "status":"inventory-only-no-professional-asset-audit", "files":["analyze-reference-pet-gifs.py","build-maid-whale-atlases.mjs","build-maid-whale-blender-rig.py","build-maid-whale-hunyuan-rig.py","build-pet-frame-timelines.cjs","build-pet-rig-assets.mjs","extract-complete-frame-characters.py","extract-pet-background.mjs","remove-checkerboard-background.py","render-maid-whale-preview.py","split-complete-frame-sheet.py"]}
+    ]
+  }
+}

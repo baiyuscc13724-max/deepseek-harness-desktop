@@ -30,10 +30,14 @@ async function desktopControlConfig() {
   }
 }
 
-async function request(requestPath, init = {}) {
-  const config = await desktopControlConfig()
+async function request(requestPath, init = {}, pinnedConfig) {
+  const config = pinnedConfig || await desktopControlConfig()
+  if (init.signal?.aborted) throw init.signal.reason || new Error('已取消')
+  const timeout = AbortSignal.timeout(8_000)
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout
   const response = await fetch(`${config.origin}${requestPath}`, {
     ...init,
+    signal,
     headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers || {}), ...config.headers }
   })
   const text = await response.text()
@@ -59,11 +63,15 @@ function chooseDevice(state, requested) {
 function delay(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason || new Error('已取消'))
-    const timer = setTimeout(resolve, ms)
-    signal?.addEventListener('abort', () => {
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    const onAbort = () => {
       clearTimeout(timer)
+      cleanup()
       reject(signal.reason || new Error('已取消'))
-    }, { once: true })
+    }
+    const timer = setTimeout(() => { cleanup(); resolve() }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
   })
 }
 
@@ -93,14 +101,22 @@ function apply(ctx) {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }]
     },
     async execute(args, exec) {
-      const state = await request('/desktop-state')
+      const throwIfAborted = () => { if (exec.signal?.aborted) throw exec.signal.reason || new Error('手机控制已取消。') }
+      throwIfAborted()
+      // One command belongs to one service generation. Never follow a rotated
+      // state file to a different authority while waiting or cancelling.
+      const config = await desktopControlConfig()
+      throwIfAborted()
+      const call = (route, init = {}) => request(route, init, config)
+      const state = await call('/desktop-state', { signal: exec.signal })
+      throwIfAborted()
       if (args.action === 'status') return state
       if (args.action === 'stop') {
         const device = args.device_id ? chooseDevice(state, args.device_id) : null
-        return request('/desktop-stop', { method: 'POST', body: JSON.stringify({ deviceId: device?.id || null }) })
+        return call('/desktop-stop', { method: 'POST', body: JSON.stringify({ deviceId: device?.id || null }) })
       }
       const device = chooseDevice(state, args.device_id)
-      const submitted = await request('/desktop-command', {
+      const submitted = await call('/desktop-command', {
         method: 'POST',
         body: JSON.stringify({
           deviceId: device.id,
@@ -114,22 +130,21 @@ function apply(ctx) {
       })
       const command = submitted.command
       const deadline = Date.now() + Math.min(70_000, Number(command.timeoutMs || 15_000) * (Number(command.retryLimit || 0) + 1) + 8_000)
-      while (Date.now() < deadline) {
-        if (exec.signal?.aborted) {
-          await request('/desktop-cancel', { method: 'POST', body: JSON.stringify({ commandId: command.id }) }).catch(() => {})
-          throw exec.signal.reason || new Error('手机控制已取消。')
-        }
-        const result = await request(`/desktop-result?id=${encodeURIComponent(command.id)}`)
-        if (!result.pending && result.result) return { ok: result.result.ok, deviceId: device.id, command: { id: command.id, action: command.action }, result: result.result }
-        try {
+      try {
+        while (Date.now() < deadline) {
+          throwIfAborted()
+          const result = await call(`/desktop-result?id=${encodeURIComponent(command.id)}`, { signal: exec.signal })
+          throwIfAborted()
+          if (!result.pending && result.result) return { ok: result.result.ok, deviceId: device.id, command: { id: command.id, action: command.action }, result: result.result }
           await delay(350, exec.signal)
-        } catch (error) {
-          await request('/desktop-cancel', { method: 'POST', body: JSON.stringify({ commandId: command.id }) }).catch(() => {})
-          throw error
         }
+        throw new Error('手机未在超时前返回操作回执；执行结果未知，请勿自动重试。')
+      } catch (error) {
+        // Cleanup intentionally has an independent bounded signal so caller
+        // cancellation does not prevent delivering the cancellation directive.
+        await call('/desktop-cancel', { method: 'POST', body: JSON.stringify({ commandId: command.id }) }).catch(() => {})
+        throw error
       }
-      await request('/desktop-cancel', { method: 'POST', body: JSON.stringify({ commandId: command.id }) }).catch(() => {})
-      throw new Error('手机未在超时前返回操作回执，已发送取消指令。')
     }
   }))
 }

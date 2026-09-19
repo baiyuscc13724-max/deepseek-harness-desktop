@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><title>Synthetic isolated preview</title><h1 id="title">离线 HTML 中文🙂</h1><button id="counter">0</button><script>
+const post=(type,value)=>parent.postMessage({audit:'preview-fixture',type,value},'*');
+let counter=0;document.querySelector('#counter').onclick=()=>{document.querySelector('#counter').textContent=String(++counter);post('counter',counter)};
+let beat=0;setInterval(()=>post('heartbeat',++beat),60);
+post('boot',{title:document.querySelector('h1').textContent,script:true});
+try {parent.document.body.dataset.compromised='true';post('parent','accessed')} catch(e){post('parent',e.name)}
+try {localStorage.setItem('synthetic','1');post('storage','accessed')}catch(e){post('storage',e.name)}
+addEventListener('securitypolicyviolation',e=>post('csp',{directive:e.effectiveDirective,blocked:e.blockedURI}));
+fetch('https://fetch.invalid/probe').then(()=>post('fetch','allowed'),()=>post('fetch','rejected'));
+const image=new Image();image.src='https://image.invalid/probe';document.body.append(image);
+const external=document.createElement('script');external.src='https://script.invalid/probe';document.body.append(external);
+const nested=document.createElement('iframe');nested.src='https://frame.invalid/probe';document.body.append(nested);
+const form=document.createElement('form');form.action='https://form.invalid/probe';form.method='POST';document.body.append(form);form.submit();
+try{top.location.href='https://top.invalid/probe';post('top','assigned')}catch(e){post('top',e.name)}
+try{const p=window.open('https://popup.invalid/probe');post('popup',p===null?'null':'opened')}catch(e){post('popup',e.name)}
+addEventListener('message',e=>{if(e.source!==parent||e.data?.audit!=='fixture-command')return;if(e.data.type==='click')document.querySelector('#counter').click();if(e.data.type==='selfNavigate'){post('selfNavigateAttempt',true);location.href='https://self-navigation.invalid/probe';}});
+</script>

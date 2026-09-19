@@ -1,0 +1,8 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{createHash}=require('node:crypto');
+const repo=path.resolve(__dirname,'../../..'),root=path.join(repo,'.artifacts/deep-audit-round2-sidebar-layout'),run=path.join(root,'author-final-v5'),sha=b=>createHash('sha256').update(b).digest('hex');
+const inputs=require('./pins.json');for(const [name,hash]of Object.entries(inputs))assert.equal(sha(fs.readFileSync(path.join(repo,name))),hash,'Pinned input drift '+name);
+const paths=['tests/deep-audit-sidebar-layout.test.cjs','docs/deep-audit/round2-sidebar-layout.md',...['run.ps1','deny-network.cjs','ports.js','pins.json','inspect.cjs','freeze.cjs'].map(n=>'tests/fixtures/deep-audit-sidebar-layout/'+n),...['inputs.json','receipt.json','summary.json','node.tap','electron.log','synthetic-shell-home.png'].map(n=>'.artifacts/deep-audit-round2-sidebar-layout/author-final-v5/'+n)];
+const receipt=JSON.parse(fs.readFileSync(path.join(run,'receipt.json')));assert.equal(receipt.checks.length,23);assert.equal(receipt.failures.length,5);assert.equal(receipt.sourceDrift,0);
+const target=path.join(root,'delivery-freeze.json');assert.ok(!fs.existsSync(target),'Freeze already exists');
+fs.writeFileSync(target,JSON.stringify({inputs,outputs:Object.fromEntries(paths.map(n=>[n,{bytes:fs.statSync(path.join(repo,n)).size,sha256:sha(fs.readFileSync(path.join(repo,n)))}])),finalRun:'author-final-v5',assertions:{total:23,passed:18,failed:5},screenshotPersistentRootCause:'not-established',allJobsCollected:['pwsh-155','pwsh-156','pwsh-157','pwsh-158','pwsh-159'],productionEdits:[]},null,2));console.log(target);

@@ -1,0 +1,471 @@
+{
+  "schemaVersion": 1,
+  "kind": "round2-independent-incremental-sidecar",
+  "basis": {
+    "master": "docs/deep-audit/coverage-master.json",
+    "sha256": "8d5cad11503953cb9044a96902ab92d718cb21ae17107313549c5e45fb527794",
+    "unchanged": true,
+    "domainRows": 598,
+    "userClusters": 115,
+    "limitedAccepted": 104,
+    "historicalTests": {
+      "total": 2929,
+      "pass": 2889,
+      "fail": 7,
+      "skip": 33
+    },
+    "newRunsNotAddedToHistoricalTotals": true
+  },
+  "scope": "Only preview and settings; sidebar screenshot task excluded",
+  "sourceBinding": "maintained candidate package 1.0.60 working-tree bytes; not running Desktop 1.0.62 or installed artifact proof",
+  "evidence": {
+    "preview": {
+      "path": ".artifacts/deep-audit-round2-acceptance/preview-independent-v1/receipt.json",
+      "sha256": "359e27ac60bb90877eb10ac91d5e5556bf649aa6a612c0dcac1e3a02cad9b88d"
+    },
+    "previewBinding": {
+      "path": ".artifacts/deep-audit-round2-acceptance/preview-independent-v1/binding.json",
+      "sha256": "d5f409339928b3889a4ebc0425a8c4a3717f671c3c8bccec0d4dacd4aee600fc"
+    },
+    "previewInputs": {
+      "path": ".artifacts/deep-audit-round2-acceptance/preview-independent-v1/input-manifest.json",
+      "sha256": "1fb26d5baa8ec76e8ea047015a67ee83baadd86348cf7a797b3cb0e02bd78fb3"
+    },
+    "settings": {
+      "path": ".artifacts/deep-audit-round2-acceptance/settings-independent-v1/receipt.json",
+      "sha256": "10186f59bd7392028a173a0365e59194300fdcfb16d3a274d3d350bd241e4a47"
+    },
+    "settingsInputs": {
+      "path": ".artifacts/deep-audit-round2-acceptance/settings-independent-v1/inputs.json",
+      "sha256": "ccacaf444790824691d0f7ac210b8aa2fa5bc067ce3178fd82ed585dc61388ec"
+    },
+    "supplement": {
+      "path": ".artifacts/deep-audit-round2-acceptance/settings-independent-v1/independent-observations.json",
+      "sha256": "12f246def98cfbe6fd413e4687c07bb46b2b4755bec1daeac902605cc41cb9d9"
+    },
+    "derivation": {
+      "path": ".artifacts/deep-audit-round2-acceptance/derivation.json",
+      "sha256": "cf7b3142c8f5c2d4b8c96ac3bc4377b41f3f55450cef6ca6c1c0f003e9a0787e"
+    },
+    "baseline": {
+      "path": ".artifacts/deep-audit-round2-acceptance/baseline.json",
+      "sha256": "f4175c03077dee99d522923f76ac34c90831d2941999d4399e2ace60805d8334"
+    },
+    "after": {
+      "path": ".artifacts/deep-audit-round2-acceptance/after.json",
+      "sha256": "8d6c9eec6e861250eb56d7d88042ee5faefa29fd380cf4bca3daa7076c3108a6"
+    }
+  },
+  "componentResults": {
+    "preview": {
+      "checks": 35,
+      "pass": 34,
+      "fail": 1
+    },
+    "settings": {
+      "checks": 47,
+      "pass": 39,
+      "fail": 8
+    }
+  },
+  "countsAreNotUserRequirements": true,
+  "productPass": false,
+  "reviewClassification": {
+    "confirmedComponentObservations": [
+      "HTML hidden iframe continues heartbeat after close",
+      "custom pending button lacks disabled/busy feedback and duplicate request issued",
+      "custom/theme rejected save lacks visible error",
+      "actual renderer accepts delayed old snapshots even with synthetic store fixed latest"
+    ],
+    "conditionalRisks": [
+      "native completion/order not exercised; renderer stale response behavior only"
+    ],
+    "contractReview": [
+      "input-only range preview close rollback",
+      "whether close cancels an already submitted save"
+    ]
+  },
+  "rows": [
+    {
+      "id": "USER-01a3c4e3ad85",
+      "relatedIds": [
+        "PLUGIN-TOOL-OR-CONFIG-dfd6f84f79e2",
+        "DOMAIN-session-files-preview-fetch-source-snapshot",
+        "DOMAIN-session-files-preview-model-receipt",
+        "DOMAIN-session-files-preview-load-switch-close"
+      ],
+      "status": "limited-evidence-with-findings-or-unverified",
+      "masterStatusUnchanged": true,
+      "wholeUserAccepted": false,
+      "evidenceLevel": "actual-maintained-product-component-with-synthetic-ports",
+      "actualSourceHashes": [
+        {
+          "path": "renderer/index.html",
+          "sha256": "1a338ec3017db59fe7f8ae6dc468cc87f77592bb1d61d390309dacad161fafe9",
+          "bytes": 48100
+        },
+        {
+          "path": "renderer/styles.css",
+          "sha256": "091929333dedea6eb0892cc32d24be327b476b1738e40490cfe778dda2fe64c8",
+          "bytes": 72504
+        },
+        {
+          "path": "renderer/right-workspace.css",
+          "sha256": "ca9cf7220f161672dd894a1bbd46eedf588ae499f9b8cb615948195720a1d60b",
+          "bytes": 24027
+        },
+        {
+          "path": "renderer/right-workspace.js",
+          "sha256": "0ad6dac836c1bb169c4a778246c3d748894a50fae46320518ec77f8eb9796a40",
+          "bytes": 28636
+        },
+        {
+          "path": "renderer/right-workspace-integration.js",
+          "sha256": "e0f8c6cf400335cf29a0a99e8172a0abf9a05e566afa1435c18d1195cc7c6919",
+          "bytes": 49106
+        },
+        {
+          "path": "plugins/dsh-desktop-files/lib/index.js",
+          "sha256": "b9bb0fdff9f057436ba411f769e2728c7517b1e5635aa1b4bcacf8373c5eb65b",
+          "bytes": 36131
+        }
+      ],
+      "receipt": {
+        "path": ".artifacts/deep-audit-round2-acceptance/preview-independent-v1/receipt.json",
+        "sha256": "359e27ac60bb90877eb10ac91d5e5556bf649aa6a612c0dcac1e3a02cad9b88d"
+      },
+      "scenarios": {
+        "normal": "来源绑定、detached旧列表行仍携带A、nonce与mismatch局部通过。",
+        "error-recovery": "合成拒绝后真实alert与显式重开恢复通过；真实RPC故障未验。",
+        "concurrency-switch": "旧成功/失败和context-only失效通过；关闭后主动HTML仍执行为红。",
+        "a11y": "合成Escape与关闭按钮焦点恢复局部通过。",
+        "isolation": "真实Chromium组件；fresh白名单环境；native/Node/renderer拒绝端口零调用。不是OS网络抓包、当前安装GUI或真实Host鉴权证明。"
+      },
+      "unverified": [
+        "actual Host/session authorization",
+        "native input",
+        "model image capture/crop",
+        "installed GUI"
+      ]
+    },
+    {
+      "id": "USER-394498c58518",
+      "relatedIds": [
+        "SOURCE-MODULE-5eda90fb9479",
+        "DOMAIN-session-files-preview-text-short-read",
+        "DOMAIN-session-files-preview-too-large-binary",
+        "DOMAIN-session-files-preview-load-switch-close"
+      ],
+      "status": "limited-evidence-with-findings-or-unverified",
+      "masterStatusUnchanged": true,
+      "wholeUserAccepted": false,
+      "evidenceLevel": "actual-maintained-product-component-with-synthetic-ports",
+      "actualSourceHashes": [
+        {
+          "path": "renderer/index.html",
+          "sha256": "1a338ec3017db59fe7f8ae6dc468cc87f77592bb1d61d390309dacad161fafe9",
+          "bytes": 48100
+        },
+        {
+          "path": "renderer/styles.css",
+          "sha256": "091929333dedea6eb0892cc32d24be327b476b1738e40490cfe778dda2fe64c8",
+          "bytes": 72504
+        },
+        {
+          "path": "renderer/right-workspace.css",
+          "sha256": "ca9cf7220f161672dd894a1bbd46eedf588ae499f9b8cb615948195720a1d60b",
+          "bytes": 24027
+        },
+        {
+          "path": "renderer/right-workspace.js",
+          "sha256": "0ad6dac836c1bb169c4a778246c3d748894a50fae46320518ec77f8eb9796a40",
+          "bytes": 28636
+        },
+        {
+          "path": "renderer/right-workspace-integration.js",
+          "sha256": "e0f8c6cf400335cf29a0a99e8172a0abf9a05e566afa1435c18d1195cc7c6919",
+          "bytes": 49106
+        },
+        {
+          "path": "plugins/dsh-desktop-files/lib/index.js",
+          "sha256": "b9bb0fdff9f057436ba411f769e2728c7517b1e5635aa1b4bcacf8373c5eb65b",
+          "bytes": 36131
+        }
+      ],
+      "receipt": {
+        "path": ".artifacts/deep-audit-round2-acceptance/preview-independent-v1/receipt.json",
+        "sha256": "359e27ac60bb90877eb10ac91d5e5556bf649aa6a612c0dcac1e3a02cad9b88d"
+      },
+      "scenarios": {
+        "normal": "真实previewFile读取fresh文本/Markdown/空文件到pre；Markdown是源码非富文本。",
+        "error-recovery": "二进制/超限/不支持提示、显式重开恢复有限通过。",
+        "concurrency-switch": "A/B旧成功/失败不污染新预览有限通过。",
+        "a11y": "pre可聚焦、标记与Escape有限通过；布局/读屏未验。",
+        "isolation": "真实Chromium组件；fresh白名单环境；native/Node/renderer拒绝端口零调用。不是OS网络抓包、当前安装GUI或真实Host鉴权证明。"
+      },
+      "unverified": [
+        "image/audio/video/PDF",
+        "actual installed package",
+        "screen reader",
+        "full Markdown rendering"
+      ]
+    },
+    {
+      "id": "USER-815f7e7b046f",
+      "relatedIds": [
+        "SOURCE-MODULE-5eda90fb9479",
+        "DOMAIN-session-files-preview-html-sandbox",
+        "DOMAIN-session-files-preview-load-switch-close"
+      ],
+      "status": "limited-evidence-with-findings-or-unverified",
+      "masterStatusUnchanged": true,
+      "wholeUserAccepted": false,
+      "evidenceLevel": "actual-maintained-product-component-with-synthetic-ports",
+      "actualSourceHashes": [
+        {
+          "path": "renderer/index.html",
+          "sha256": "1a338ec3017db59fe7f8ae6dc468cc87f77592bb1d61d390309dacad161fafe9",
+          "bytes": 48100
+        },
+        {
+          "path": "renderer/styles.css",
+          "sha256": "091929333dedea6eb0892cc32d24be327b476b1738e40490cfe778dda2fe64c8",
+          "bytes": 72504
+        },
+        {
+          "path": "renderer/right-workspace.css",
+          "sha256": "ca9cf7220f161672dd894a1bbd46eedf588ae499f9b8cb615948195720a1d60b",
+          "bytes": 24027
+        },
+        {
+          "path": "renderer/right-workspace.js",
+          "sha256": "0ad6dac836c1bb169c4a778246c3d748894a50fae46320518ec77f8eb9796a40",
+          "bytes": 28636
+        },
+        {
+          "path": "renderer/right-workspace-integration.js",
+          "sha256": "e0f8c6cf400335cf29a0a99e8172a0abf9a05e566afa1435c18d1195cc7c6919",
+          "bytes": 49106
+        },
+        {
+          "path": "plugins/dsh-desktop-files/lib/index.js",
+          "sha256": "b9bb0fdff9f057436ba411f769e2728c7517b1e5635aa1b4bcacf8373c5eb65b",
+          "bytes": 36131
+        }
+      ],
+      "receipt": {
+        "path": ".artifacts/deep-audit-round2-acceptance/preview-independent-v1/receipt.json",
+        "sha256": "359e27ac60bb90877eb10ac91d5e5556bf649aa6a612c0dcac1e3a02cad9b88d"
+      },
+      "scenarios": {
+        "normal": "真实脚本/计数器/reload与opaque iframe有限通过。",
+        "error-recovery": "replace/destroy移除执行环境通过；close仅隐藏不停止心跳，独立复现红。",
+        "concurrency-switch": "关闭代次阻止迟到绘制，但HTML活动生命周期红。",
+        "a11y": "iframe标题、reload焦点为有限证据；硬件输入/读屏未验。",
+        "isolation": "真实Chromium组件；fresh白名单环境；native/Node/renderer拒绝端口零调用。不是OS网络抓包、当前安装GUI或真实Host鉴权证明。"
+      },
+      "unverified": [
+        "OS syscall sandbox",
+        "workers/wasm/fullscreen complete matrix",
+        "running GUI",
+        "visual quality"
+      ]
+    },
+    {
+      "id": "USER-36be79d18ec4",
+      "relatedIds": [
+        "DOMAIN-interaction-skin-picker-race",
+        "DOMAIN-interaction-theme-visual-all"
+      ],
+      "status": "limited-evidence-with-findings-or-unverified",
+      "masterStatusUnchanged": true,
+      "wholeUserAccepted": false,
+      "evidenceLevel": "actual-maintained-product-component-with-synthetic-ports",
+      "actualSourceHashes": [
+        {
+          "path": "renderer/app.js",
+          "sha256": "3086aae0818e127ee12ac4db989ab9ed0760c68efbcb67eb3943de069e2064fa",
+          "bytes": 210715
+        },
+        {
+          "path": "renderer/index.html",
+          "sha256": "1a338ec3017db59fe7f8ae6dc468cc87f77592bb1d61d390309dacad161fafe9",
+          "bytes": 48100
+        },
+        {
+          "path": "renderer/styles.css",
+          "sha256": "091929333dedea6eb0892cc32d24be327b476b1738e40490cfe778dda2fe64c8",
+          "bytes": 72504
+        },
+        {
+          "path": "renderer/right-workspace.css",
+          "sha256": "ca9cf7220f161672dd894a1bbd46eedf588ae499f9b8cb615948195720a1d60b",
+          "bytes": 24027
+        },
+        {
+          "path": "renderer/modal-focus.js",
+          "sha256": "1d85ed57f85d9d508af10edef70a5cb5ee6dfb4d92ff2413cb064e30a9f481cd",
+          "bytes": 11043
+        },
+        {
+          "path": "renderer/theme-catalog.js",
+          "sha256": "23f1ad41624790be5d4425e97923dfdff8f8454c1eef6d2d57ad0692827670ff",
+          "bytes": 18769
+        },
+        {
+          "path": "renderer/theme-integration.js",
+          "sha256": "002e541379cb6d4d0d2eec5cbde03123e860f832c5222aff5e85b830a3cad340",
+          "bytes": 81105
+        }
+      ],
+      "receipt": {
+        "path": ".artifacts/deep-audit-round2-acceptance/settings-independent-v1/receipt.json",
+        "sha256": "10186f59bd7392028a173a0365e59194300fdcfb16d3a274d3d350bd241e4a47"
+      },
+      "scenarios": {
+        "normal": "12主题/4模式和custom payload/CSS状态有限通过，非全部视觉验收。",
+        "error-recovery": "custom/主题失败无可见提示；custom pending无busy且重复提交；range提示/重试通过。",
+        "concurrency-switch": "旧回执不抢焦点通过；合成逆序回执使主题B→A/字段8→2，补充固定最新存储仍复现；native提交顺序未知。",
+        "a11y": "标题/IME/repeat、synthetic focus局部通过；真实IME/对比度未验。",
+        "isolation": "真实Chromium组件；fresh白名单环境；native/Node/renderer拒绝端口零调用。不是OS网络抓包、当前安装GUI或真实Host鉴权证明。"
+      },
+      "unverified": [
+        "input-only close transaction contract",
+        "close cancels already submitted save contract",
+        "native IPC/disk order",
+        "full theme visual/font persistence"
+      ]
+    },
+    {
+      "id": "USER-dabcc40bc9f5",
+      "relatedIds": [
+        "DOMAIN-interaction-focus-candidates",
+        "DOMAIN-interaction-focus-boundary",
+        "DOMAIN-interaction-focus-hidden",
+        "DOMAIN-interaction-escape-modal"
+      ],
+      "status": "limited-evidence-with-findings-or-unverified",
+      "masterStatusUnchanged": true,
+      "wholeUserAccepted": false,
+      "evidenceLevel": "actual-maintained-product-component-with-synthetic-ports",
+      "actualSourceHashes": [
+        {
+          "path": "renderer/app.js",
+          "sha256": "3086aae0818e127ee12ac4db989ab9ed0760c68efbcb67eb3943de069e2064fa",
+          "bytes": 210715
+        },
+        {
+          "path": "renderer/index.html",
+          "sha256": "1a338ec3017db59fe7f8ae6dc468cc87f77592bb1d61d390309dacad161fafe9",
+          "bytes": 48100
+        },
+        {
+          "path": "renderer/styles.css",
+          "sha256": "091929333dedea6eb0892cc32d24be327b476b1738e40490cfe778dda2fe64c8",
+          "bytes": 72504
+        },
+        {
+          "path": "renderer/right-workspace.css",
+          "sha256": "ca9cf7220f161672dd894a1bbd46eedf588ae499f9b8cb615948195720a1d60b",
+          "bytes": 24027
+        },
+        {
+          "path": "renderer/modal-focus.js",
+          "sha256": "1d85ed57f85d9d508af10edef70a5cb5ee6dfb4d92ff2413cb064e30a9f481cd",
+          "bytes": 11043
+        },
+        {
+          "path": "renderer/theme-catalog.js",
+          "sha256": "23f1ad41624790be5d4425e97923dfdff8f8454c1eef6d2d57ad0692827670ff",
+          "bytes": 18769
+        },
+        {
+          "path": "renderer/theme-integration.js",
+          "sha256": "002e541379cb6d4d0d2eec5cbde03123e860f832c5222aff5e85b830a3cad340",
+          "bytes": 81105
+        }
+      ],
+      "receipt": {
+        "path": ".artifacts/deep-audit-round2-acceptance/settings-independent-v1/receipt.json",
+        "sha256": "10186f59bd7392028a173a0365e59194300fdcfb16d3a274d3d350bd241e4a47"
+      },
+      "scenarios": {
+        "normal": "实际模态打开关闭/ARIA/tabs有限通过。",
+        "error-recovery": "disabled/visibility/inert焦点修复有限通过。",
+        "concurrency-switch": "十次重开、旧回执不关闭或抢焦点通过；官方父设置guest链未验。",
+        "a11y": "Tab首尾双向/Escape/200% bounds有限通过；未覆盖完整可见滚动或真实Tab顺序。",
+        "isolation": "真实Chromium组件；fresh白名单环境；native/Node/renderer拒绝端口零调用。不是OS网络抓包、当前安装GUI或真实Host鉴权证明。"
+      },
+      "unverified": [
+        "official guest parent close chain",
+        "hardware keyboard/IME",
+        "screen reader",
+        "all controls visible at 200%"
+      ]
+    },
+    {
+      "id": "USER-9db0f88b0fdc",
+      "relatedIds": [
+        "DOMAIN-interaction-wallpaper-dialog-all"
+      ],
+      "status": "limited-evidence-with-findings-or-unverified",
+      "masterStatusUnchanged": true,
+      "wholeUserAccepted": false,
+      "evidenceLevel": "actual-maintained-product-component-with-synthetic-ports",
+      "actualSourceHashes": [
+        {
+          "path": "renderer/app.js",
+          "sha256": "3086aae0818e127ee12ac4db989ab9ed0760c68efbcb67eb3943de069e2064fa",
+          "bytes": 210715
+        },
+        {
+          "path": "renderer/index.html",
+          "sha256": "1a338ec3017db59fe7f8ae6dc468cc87f77592bb1d61d390309dacad161fafe9",
+          "bytes": 48100
+        },
+        {
+          "path": "renderer/styles.css",
+          "sha256": "091929333dedea6eb0892cc32d24be327b476b1738e40490cfe778dda2fe64c8",
+          "bytes": 72504
+        },
+        {
+          "path": "renderer/right-workspace.css",
+          "sha256": "ca9cf7220f161672dd894a1bbd46eedf588ae499f9b8cb615948195720a1d60b",
+          "bytes": 24027
+        },
+        {
+          "path": "renderer/modal-focus.js",
+          "sha256": "1d85ed57f85d9d508af10edef70a5cb5ee6dfb4d92ff2413cb064e30a9f481cd",
+          "bytes": 11043
+        },
+        {
+          "path": "renderer/theme-catalog.js",
+          "sha256": "23f1ad41624790be5d4425e97923dfdff8f8454c1eef6d2d57ad0692827670ff",
+          "bytes": 18769
+        },
+        {
+          "path": "renderer/theme-integration.js",
+          "sha256": "002e541379cb6d4d0d2eec5cbde03123e860f832c5222aff5e85b830a3cad340",
+          "bytes": 81105
+        }
+      ],
+      "receipt": {
+        "path": ".artifacts/deep-audit-round2-acceptance/settings-independent-v1/receipt.json",
+        "sha256": "10186f59bd7392028a173a0365e59194300fdcfb16d3a274d3d350bd241e4a47"
+      },
+      "scenarios": {
+        "normal": "仅空库、合成chooser取消提示、range输出；非壁纸导入验收。",
+        "error-recovery": "合成chooser拒绝/range失败可见提示与重试通过。",
+        "concurrency-switch": "两个range完整payload逆序回执可回退字段，native存储顺序未验。",
+        "a11y": "禁用按钮/role=status局部证据，原生dialog未验。",
+        "isolation": "真实Chromium组件；fresh白名单环境；native/Node/renderer拒绝端口零调用。不是OS网络抓包、当前安装GUI或真实Host鉴权证明。"
+      },
+      "unverified": [
+        "native chooser",
+        "wallpaper import/delete/switch",
+        "video/codec/GPU",
+        "real filesystem persistence"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "kind": "independent-incremental-sidecar",
+  "basis": {
+    "master": "docs/deep-audit/coverage-master.json",
+    "sha256": "8d5cad11503953cb9044a96902ab92d718cb21ae17107313549c5e45fb527794",
+    "unchanged": true,
+    "domainRows": 598,
+    "userClusters": 115,
+    "limitedAccepted": 104,
+    "historicalTests": {"total": 2929, "pass": 2889, "fail": 7, "skip": 33},
+    "newRunsNotAddedToHistoricalTotals": true
+  },
+  "evidence": {
+    "clipboard": ".artifacts/deep-audit-round1-clipboard/independent-review-v1",
+    "clipboardNodeTests": {"total": 2, "pass": 2, "fail": 0, "skip": 0},
+    "clipboardInternalChecksPerInput": 32,
+    "installedConversationSha256": "30f413cc27be08f0b57a472440495b033ea8b708e281d465cd5bbe3e45cd0066",
+    "review": ".artifacts/deep-audit-round1-acceptance/independent-review-v1",
+    "reviewNodeTests": {"total": 5, "pass": 5, "fail": 0, "skip": 0},
+    "mobile": ".artifacts/deep-audit-round1-acceptance/transport-independent-review-v1",
+    "mobileInternalJavaChecks": 17,
+    "mobileCounts": {"commands": 2, "acks": 1, "expectedLoss": 1, "duplicateCoreExecution": 0, "mobileHellos": 1},
+    "historicalOwner": ".artifacts/deep-audit-round1-reconnect-controller/before/MainActivity.java",
+    "historicalOwnerSha256": "c465f787e0c812de1ec379b88d2b0d4c840807cc39980ce3f284204fae667ffb",
+    "currentActivityExcluded": true,
+    "automaticRecoveryExecuted": false
+  },
+  "rows": [
+    {
+      "id": "USER-c890c86ded0b",
+      "relatedIds": ["DOMAIN-interaction-command-copy", "DOMAIN-interaction-native-rich-copy"],
+      "scope": "actual shipped and actual-temp-installed InputBar/Lexical selected copy with synthetic ClipboardEvent/DataTransfer",
+      "evidenceLevel": "real-product-component-with-synthetic-ports",
+      "status": "limited-subscenario-accepted",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "有限通过：选区plain/HTML、空选区、HTML转义；不等于native跨应用复制",
+        "error-recovery": "有限通过：setData抛错穿过真实handler且draft保留；产品提示/native错误恢复未验",
+        "concurrency-switch": "有限通过：真实resident挂载/卸载和旧editor不污染新会话；菜单焦点全链未验",
+        "isolation": "有限通过：假事件端口，native/fallback/network调用0，无系统剪贴板",
+        "a11y": "有限通过：textbox/readonly copy及focus；真实拖选/读屏/快捷键未验"
+      },
+      "unverified": ["OS clipboard", "cross-application", "RTF", "native menu/keyboard", "screen reader"]
+    },
+    {
+      "id": "USER-aff2717caf0c",
+      "relatedIds": ["DOMAIN-interaction-command-paste", "DOMAIN-interaction-native-paste-image"],
+      "scope": "composer plain-text model consumes rich/plain synthetic clipboard; no rich style preservation",
+      "evidenceLevel": "real-product-component-with-synthetic-ports",
+      "status": "limited-subscenario-accepted",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "有限通过：双格式取plain、替换选区、中文/emoji/换行、HTML-only/empty保留内容；图片/native/富样式保留未验",
+        "error-recovery": "有限通过：getData故障保留、后续恢复、undo/redo和disabled/removed/blocked/busy锁态",
+        "concurrency-switch": "有限通过：20真实shell切换每次单root/单次插入、旧命令/卸载/外部目标隔离",
+        "isolation": "有限通过：恶意HTML无活跃DOM，native/network调用0",
+        "a11y": "有限通过：role/aria-disabled/focus、合成composition分支；真实IME候选窗/读屏未验"
+      },
+      "unverified": ["native image paste", "OS clipboard", "rich formatting preservation", "real IME", "other OS"]
+    },
+    {
+      "id": "USER-b6a989460a46",
+      "relatedIds": ["DOMAIN-interaction-command-pasteAndMatchStyle", "DOMAIN-interaction-native-plain-paste"],
+      "scope": "actual composer plain insertion only, not native pasteAndMatchStyle entrypoint",
+      "evidenceLevel": "real-product-component-with-synthetic-ports",
+      "status": "limited-subscenario-accepted",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "有限通过：composer实际纯文本插入；原生pasteAndMatchStyle入口仍未验",
+        "error-recovery": "有限通过：空/缺Data/故障保留与undo/redo；原生入口失败未验",
+        "concurrency-switch": "有限通过：同composer生命周期与外部目标隔离",
+        "isolation": "有限通过：native调用0，未读系统clipboard",
+        "a11y": "有限通过：编辑面focus/aria和合成composition；Ctrl/Cmd+Shift+V未验"
+      },
+      "unverified": ["webContents.pasteAndMatchStyle", "OS clipboard", "native shortcuts", "screen reader"]
+    },
+    {
+      "id": "DOMAIN-mobile-network-debounce",
+      "relatedIds": ["network-debounce"],
+      "scope": "unchanged production NetworkReconnectPolicy, twelve assertions including 100 manually committed synthetic switches",
+      "evidenceLevel": "real-production-java-with-manual-events",
+      "status": "limited-subscenario-accepted",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "有限通过：候选/commit/generation实际生产逻辑",
+        "error-recovery": "有限通过：loss/recovery holdoff返回值；不是Android实际timer",
+        "concurrency-switch": "有限通过：100合成周期与旧network loss隔离；非物理并发切网",
+        "isolation": "有限通过：fresh JVM home和registered loopback fence",
+        "a11y": "不适用纯policy；Android UI无障碍未验"
+      },
+      "unverified": ["Android default network callbacks", "Handler timing", "Doze", "real network switching"]
+    },
+    {
+      "id": "DOMAIN-mobile-ws-android-legacy",
+      "relatedIds": ["ws-android-legacy"],
+      "scope": "real WssRelayClient encrypted loopback chain, historical owner source reference only",
+      "evidenceLevel": "real-production-transport-with-synthetic-identity-and-core",
+      "status": "limited-negative-boundary-accepted",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "有限通过：仅一次显式初始start/hello/ready",
+        "error-recovery": "有限通过：实际断线与迟到ACK；3350.4064ms transport无自重建，非App恢复失败",
+        "concurrency-switch": "有限通过：160旧generation callback及failure后Stop；当前Activity排队profile闭包未验",
+        "isolation": "有限通过：streams/openingSockets/adapterStreams清零、无业务重放",
+        "a11y": "不适用传输层；实际用户Stop按钮未验"
+      },
+      "unverified": ["current Activity/controller", "automatic retry", "second handshake", "post-recovery ACK", "Android lifecycle"]
+    },
+    {
+      "id": "DOMAIN-mobile-rpc-duplicate",
+      "relatedIds": ["rpc-duplicate"],
+      "scope": "two literal fake core commands with real transport; late ACK occurs after lost client response",
+      "evidenceLevel": "real-production-transport-with-fake-core",
+      "status": "limited-subscenario-accepted",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "有限通过：normal-0对应ID及body SHA ACK",
+        "error-recovery": "有限通过：late-0已执行且迟到ACK真实产生；客户端丢ACK不表示核心撤销",
+        "concurrency-switch": "有限通过：每ID核心计数1，重复执行0；未重发业务",
+        "isolation": "有限通过：网关只允许两条明确synthetic ACK路径，其他拒绝",
+        "a11y": "不适用纯RPC传输；真实UI未验"
+      },
+      "unverified": ["official composer RPC", "real model/business execution", "general exactly-once", "safe application retry"]
+    },
+    {
+      "id": "DOMAIN-mobile-wan-end-to-end",
+      "relatedIds": ["wan-end-to-end", "USER-MOBILE-REALTIME-LATENCY"],
+      "scope": "local encrypted legacy chain only; no WAN latency acceptance",
+      "evidenceLevel": "registered-loopback-chain",
+      "status": "limited-local-evidence-only",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "有限通过：一条合成ACK和一条预期loss",
+        "error-recovery": "未验：自动恢复、新连接后请求",
+        "concurrency-switch": "未验：WAN/4G/5G/外部WiFi物理切换",
+        "isolation": "有限通过：synthetic身份、fresh HOME和精确端口",
+        "a11y": "未验：真实手机UI呈现/输入"
+      },
+      "unverified": ["WAN", "TLS certificate path", "4G/5G", "external WiFi", "real Host queue/UI", "P95/P99/SLA"]
+    },
+    {
+      "id": "USER-MOBILE-EXTERNAL-RECOVERY",
+      "relatedIds": ["DOMAIN-mobile-ws-android-legacy", "DOMAIN-mobile-network-debounce"],
+      "scope": "historical-owner reproduction and precise execution gap, not automatic recovery",
+      "evidenceLevel": "historical-source-plus-real-transport-negative-boundary",
+      "status": "unverified-primary-goal",
+      "masterStatusUnchanged": true,
+      "scenarios": {
+        "normal": "仅有初始连接局部证据；用户需求整体未验",
+        "error-recovery": "未验：actual owner retry→handshake→new ACK；SDK Looper Stub实证非App缺陷",
+        "concurrency-switch": "未验：当前Activity/profile/UI排队生命周期；旧transport callback局部证据不可代替",
+        "isolation": "本次隔离通过不表示真实配对/设备/WAN通过",
+        "a11y": "未验：实际Android UI及操作"
+      },
+      "unverified": ["automatic App recovery", "current RemoteReconnectController integration", "Android Handler/lifecycle", "real devices/networks"]
+    }
+  ],
+  "newConfirmedProductDefects": [],
+  "staleEvidence": [{"subject": "old mobile source-static owner contract", "currentObservationSha256": "a544e739c9b5fdf9d27cf87aafa27f8f0f507fe8b1218f541604a80338fcd05e", "oldRulesMatch": [false, false, false], "classification": "concurrent authorized refactor; old owner source contract stale for current App, not product failure", "historicalReproduction": true}],
+  "limitations": ["No original master row or count changed", "Native-named clipboard domain associations are not whole-row passes", "No current App/reconnect-controller acceptance; reserved for the later dedicated task", "No production or producer file modification; no actual clipboard, current GUI, account, device, public network, real installation or release operation; only explicit fresh temporary package installation", "Safety evidence is controlled API/port execution, not OS-wide syscall or packet capture"]
+}

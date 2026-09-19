@@ -237,8 +237,22 @@ export class GitWorkspaceAdapter {
     } catch (cause) { if (cause?.code === "GIT_WORKSPACE_ADAPTER_CLOSED") throw cause; const error = new Error("fixed source is not an exact supported Git worktree root"); error.code = "GIT_SOURCE_INVALID"; throw error; }
   }
 
+  async #assertGitDirectorySupported(gitDirectory) {
+    if (process.platform !== "win32") return;
+    // Ask the actual trusted Git before writing, rather than guessing a maximum
+    // path length (different Git builds may support different path budgets).
+    // setup_explicit_git_dir diagnoses $GIT_DIR length before directory lookup.
+    const probe = await this.#git(["--git-dir", gitDirectory, "rev-parse", "--is-bare-repository"], { allowFailure: true, cwd: this.sourceWorkspaceRoot });
+    if (!probe.ok && /fatal: '\$GIT_DIR' too big/u.test(probe.stderr.toString("utf8"))) {
+      const error = new Error("The configured canonical Git storage path exceeds this bundled Git build's administrative path limit. No repository/worktree write was started. Choose a shorter canonical storage location in project setup (not an alias), or update the bundled Git support; core.longpaths alone does not fix this limit.");
+      error.code = "GIT_ADMIN_PATH_TOO_LONG";
+      throw error;
+    }
+  }
+
   async #initialize({ expectedInitialHead } = {}) {
     const probed = await this.#probeSource(), { sourceHead, objectFormat } = probed;
+    await this.#assertGitDirectorySupported(this.repositoryPath);
     await mkdir(this.authorityRoot, { recursive: true, mode: 0o700 }); await mkdir(this.workspaceRoot, { recursive: true, mode: 0o700 });
     this.authorityRoot = await realpath(this.authorityRoot); this.workspaceRoot = await realpath(this.workspaceRoot);
     ensureDisjoint(this.authorityRoot, this.sourceWorkspaceRoot, "authorityRoot", "sourceWorkspaceRoot"); ensureDisjoint(this.authorityRoot, this.workspaceRoot, "authorityRoot", "workspaceRoot"); ensureDisjoint(this.sourceWorkspaceRoot, this.workspaceRoot, "sourceWorkspaceRoot", "workspaceRoot");
@@ -275,8 +289,10 @@ export class GitWorkspaceAdapter {
     const ref = safeRef(workspaceRef, "workspaceRef"), base = commitRef(baseCommit, "baseCommit");
     this.#requireReady();
     return this.#withRepositoryMutation(async () => {
+      const workspacePath = this.#workspacePath(ref);
+      await this.#assertGitDirectorySupported(resolve(workspacePath, ".git"));
       await this.#git(["--git-dir", this.repositoryPath, "cat-file", "-e", `${base}^{commit}`]);
-      const workspacePath = this.#workspacePath(ref); await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true });
+      await this.#git(["--git-dir", this.repositoryPath, "worktree", "prune", "--expire", "now"], { allowFailure: true });
       if (await pathExists(workspacePath)) { await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
       const added = await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", workspacePath, base], { allowFailure: true });
       if (!added.ok) { if (!(await pathExists(workspacePath))) throw new Error("isolated task workspace could not be created"); await this.#verifyTaskWorkspace(workspacePath, base); return immutable({ repositoryRef: this.repositoryRef, workspaceRef: ref, baseCommit: base, created: false }); }
@@ -409,6 +425,7 @@ export class GitWorkspaceAdapter {
       // refs/harness/merge-groups/<groupRef>, so a short random basename keeps the
       // Windows MAX_PATH budget for the shared repository refs and worktree paths.
       const mergePath = resolve(this.mergeWorkspaceRoot, `m-${randomUUID().replaceAll("-", "").slice(0, 12)}`);
+      await this.#assertGitDirectorySupported(resolve(mergePath, ".git"));
       let primaryError;
       try {
         await this.#git(["--git-dir", this.repositoryPath, "worktree", "add", "--detach", mergePath, base]);

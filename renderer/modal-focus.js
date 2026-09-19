@@ -27,9 +27,15 @@
     if (!root || typeof root.querySelectorAll !== 'function') return []
     const nodes = []
     root.querySelectorAll(FOCUSABLE_SELECTOR).forEach(node => {
-      if (!node.disabled && isRenderedVisible(node)) nodes.push(node)
+      // Native controls can still match their tag selector with tabindex=-1;
+      // disabled fieldsets, inert ancestors and CSS visibility also exclude Tab.
+      if (node.disabled || node.tabIndex < 0 || node.matches?.(':disabled') || node.closest?.('[inert], [aria-hidden="true"]')) return
+      const style = node.ownerDocument?.defaultView?.getComputedStyle?.(node)
+      if (style?.visibility === 'hidden' || style?.visibility === 'collapse') return
+      if (isRenderedVisible(node)) nodes.push(node)
     })
-    return nodes
+    // Positive tabindex precedes the ordinary DOM-order tab stops.
+    return nodes.sort((a, b) => (a.tabIndex > 0 ? a.tabIndex : Infinity) - (b.tabIndex > 0 ? b.tabIndex : Infinity))
   }
 
   function shouldTrapTab(currentIndex, length, shiftKey) {
@@ -85,7 +91,10 @@
     }
 
     function isSafeRestoreTarget(element) {
-      return Boolean(element && element.nodeType === 1 && element.isConnected && !element.disabled)
+      const style = element?.ownerDocument?.defaultView?.getComputedStyle?.(element)
+      return Boolean(element && element.nodeType === 1 && element.isConnected && !element.disabled
+        && style?.visibility !== 'hidden' && style?.visibility !== 'collapse'
+        && !element.matches?.(':disabled') && !element.closest?.('[inert], [aria-hidden="true"]') && isRenderedVisible(element))
     }
 
     function onFocusIn(event) {
@@ -116,6 +125,8 @@
 
     function onKeyDown(event) {
       if (event.key !== 'Tab') return
+      // An opener can dispatch Tab before MutationObserver delivery.
+      if (resolveTopModal() !== steward) sync()
       const top = steward
       if (!top || !isModalActive(top)) return
       focusables = collectFocusable(top)
@@ -171,7 +182,7 @@
     function focusInto(modal) {
       focusables = collectFocusable(modal)
       const active = doc.activeElement?.nodeType === 1 ? doc.activeElement : null
-      if (active && modal.contains?.(active)) return
+      if (active && modal.contains?.(active) && isSafeRestoreTarget(active)) return
       if (focusables.length) focusables[0].focus?.({ preventScroll: true })
       else ensureContainerFocusTarget(modal)
     }
@@ -200,6 +211,7 @@
       }
       focusables = collectFocusable(top)
       if (!focusables.length && doc.activeElement !== top) ensureContainerFocusTarget(top)
+      else if (focusables.length && (!top.contains?.(doc.activeElement) || !isSafeRestoreTarget(doc.activeElement))) focusInto(top)
     }
 
     function install() {
@@ -215,7 +227,7 @@
           childList: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ['class', 'aria-hidden', 'hidden', 'disabled']
+          attributeFilter: ['class', 'aria-hidden', 'aria-modal', 'hidden', 'disabled', 'inert', 'style', 'tabindex']
         })
         sync()
         return api

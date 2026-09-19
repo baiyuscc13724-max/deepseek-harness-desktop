@@ -7,12 +7,14 @@ window.__ModuleLoader__.load({
     var h = React.createElement;
     var useState = React.useState;
     var useEffect = React.useEffect;
+    var useLayoutEffect = React.useLayoutEffect;
     var useRef = React.useRef;
     var NS = "session-experience";
 
     var zh = {
       archiveView: "归档历史", archiveIntro: "已归档会话不会出现在侧栏列表或搜索中；可在这里复制原会话 ID、恢复为新会话，或永久删除历史。",
       openArchive: "归档历史", closeArchive: "关闭归档历史", noArchives: "暂无归档会话", noArchivesHint: "在会话列表中归档会话后，会显示在这里。",
+      openingSession: "正在打开会话…", openFailed: "打开失败，请重试：{error}",
       openSession: "打开会话", restoreSession: "恢复为新会话", restored: "已从归档会话恢复副本", copyId: "复制会话 ID", copied: "已复制", copyFailed: "复制失败，请手动选择", locate: "按会话 ID 定位", locatePlaceholder: "粘贴会话 ID 后回车",
       deleteHistory: "删除历史", deleteTitle: "永久删除整个会话？", deleteWarning: "会话“{title}”的消息与本地日志将被永久删除，且无法恢复。", deleteId: "会话 ID：{id}", cancelDelete: "取消", confirmDelete: "永久删除", deletingHistory: "正在删除…", deletedHistory: "已永久删除会话历史", deleteFailed: "删除失败：{error}",
       locateMiss: "没有找到该会话 ID", sessionIdLabel: "会话 ID", attachment: "附加文件", attachTitle: "从电脑选择文件并附加到当前输入框",
@@ -23,6 +25,7 @@ window.__ModuleLoader__.load({
     var en = {
       archiveView: "Archive history", archiveIntro: "Archived sessions stay out of the sidebar list and search. Copy the original ID, restore a new session, or permanently delete its history here.",
       openArchive: "Archive history", closeArchive: "Close archive history", noArchives: "No archived sessions", noArchivesHint: "Sessions you archive from the session list appear here.",
+      openingSession: "Opening session…", openFailed: "Failed to open; try again: {error}",
       openSession: "Open session", restoreSession: "Restore as new session", restored: "Restored a copy of the archived session", copyId: "Copy session ID", copied: "Copied", copyFailed: "Copy failed, please select manually", locate: "Locate by session ID", locatePlaceholder: "Paste a session ID and press Enter",
       deleteHistory: "Delete history", deleteTitle: "Permanently delete this session?", deleteWarning: "Messages and local logs for “{title}” will be permanently deleted and cannot be recovered.", deleteId: "Session ID: {id}", cancelDelete: "Cancel", confirmDelete: "Delete permanently", deletingHistory: "Deleting…", deletedHistory: "Session history permanently deleted", deleteFailed: "Delete failed: {error}",
       locateMiss: "No session with that ID", sessionIdLabel: "Session ID", attachment: "Attach file", attachTitle: "Choose a file from this computer and attach it to the current composer",
@@ -302,6 +305,27 @@ window.__ModuleLoader__.load({
       useEffect(function () {
         var bridge = window.harnessDesktopGuest;
         if (sessionId && bridge && typeof bridge.publishRightWorkspaceContext === "function") bridge.publishRightWorkspaceContext({ sessionId: sessionId });
+      }, [sessionId]);
+      // Rebind before paint when React reuses the conversation DOM for a new
+      // session; passive effects leave a small old-source/new-content window.
+      useLayoutEffect(function () {
+        var cleanup;
+        function bindWorkspaceLinkSource() {
+          if (typeof cleanup === "function") cleanup();
+          cleanup = undefined;
+          var sources = window.HarnessDesktopWorkspaceLinkSources;
+          var anchor = browserIntentAnchorRef.current;
+          var root = anchor && typeof anchor.closest === "function" ? anchor.closest('[data-conversation-scroll]') : null;
+          if (root && sessionId && sources && typeof sources.bind === "function") cleanup = sources.bind(root, sessionId);
+        }
+        // sessionId comes from the scoped conversation slot, not a DOM attribute
+        // or the selected workspace. The event only handles installation order.
+        bindWorkspaceLinkSource();
+        window.addEventListener("harness-workspace-link-sources-ready", bindWorkspaceLinkSource);
+        return function () {
+          window.removeEventListener("harness-workspace-link-sources-ready", bindWorkspaceLinkSource);
+          if (typeof cleanup === "function") cleanup();
+        };
       }, [sessionId]);
       useEffect(function () {
         var bridge = window.harnessDesktopGuest;
@@ -1286,6 +1310,9 @@ window.__ModuleLoader__.load({
       var deleteBusyPair = useState(false), deleteBusy = deleteBusyPair[0], setDeleteBusy = deleteBusyPair[1];
       var removedPair = useState([]), removedIds = removedPair[0], setRemovedIds = removedPair[1];
       var deleteConfirmRef = useRef(null);
+      var deleteBusyRef = useRef(false);
+      var openBusyRef = useRef(false);
+      var openBusyPair = useState(false), openBusy = openBusyPair[0], setOpenBusy = openBusyPair[1];
       useEffect(function () {
         var list = sessions.list, ws = workspaces.list;
         var alive = true;
@@ -1318,25 +1345,22 @@ window.__ModuleLoader__.load({
         var state = (workspaces.list && typeof workspaces.list.getSnapshot === "function") ? workspaces.list.getSnapshot() : {};
         return Array.isArray(state.archivedSessionIds) ? state.archivedSessionIds : [];
       }
-      function failOpen() { setNotice(t("locateMiss")); setNoticeError(true); }
+      function failOpen(error) { setNotice(error ? t("openFailed", { error: error.message || String(error) }) : t("locateMiss")); setNoticeError(true); }
       function openSession(id) {
+        if (openBusyRef.current || deleteBusyRef.current) return;
         var archived = archivedIds().indexOf(id) >= 0;
-        if (archived && sessions && typeof sessions.fork === "function" && typeof sessions.open === "function") {
-          try {
-            Promise.resolve(sessions.fork({ sessionId: id, increaseTitle: true })).then(function (childId) {
-              sessions.open(childId); setNotice(t("restored")); setNoticeError(false);
-            }).catch(failOpen);
-          } catch (_) { failOpen(); }
-          return;
-        }
-        if (sessions && typeof sessions.open === "function") {
-          try {
-            var opened = sessions.open(id);
-            if (opened && typeof opened.catch === "function") opened.catch(failOpen);
-          } catch (_) { failOpen(); }
-          return;
-        }
-        failOpen();
+        if (!sessions || typeof sessions.open !== "function" || (archived && typeof sessions.fork !== "function")) { failOpen(); return; }
+        openBusyRef.current = true;
+        setOpenBusy(true); setNotice(t("openingSession")); setNoticeError(false);
+        var opened;
+        try {
+          opened = archived
+            ? Promise.resolve(sessions.fork({ sessionId: id, increaseTitle: true })).then(function (childId) { return sessions.open(childId); })
+            : sessions.open(id);
+        } catch (error) { openBusyRef.current = false; setOpenBusy(false); failOpen(error); return; }
+        Promise.resolve(opened).then(function () {
+          setNotice(archived ? t("restored") : ""); setNoticeError(false);
+        }).catch(failOpen).finally(function () { openBusyRef.current = false; setOpenBusy(false); });
       }
       function locate() {
         var id = String(locateInput || "").trim();
@@ -1355,7 +1379,8 @@ window.__ModuleLoader__.load({
       }
       function closeDelete() { if (!deleteBusy) setDeleteTarget(null); }
       function permanentlyDelete(item) {
-        if (!item || !item.id || deleteBusy) return;
+        if (!item || !item.id || deleteBusyRef.current || openBusyRef.current) return;
+        deleteBusyRef.current = true;
         setDeleteBusy(true); setNotice(t("deletingHistory")); setNoticeError(false);
         window.fetch("/api/session-experience/archive-history?sessionId=" + encodeURIComponent(item.id), {
           method: "DELETE", headers: { "x-dsh-delete-confirmation": "permanent" }
@@ -1372,7 +1397,7 @@ window.__ModuleLoader__.load({
           }
         }).catch(function (error) {
           setDeleteTarget(null); setNotice(t("deleteFailed", { error: error && error.message ? error.message : String(error) })); setNoticeError(true);
-        }).finally(function () { setDeleteBusy(false); });
+        }).finally(function () { deleteBusyRef.current = false; setDeleteBusy(false); });
       }
       return h("main", { className: "dse-archive", "aria-labelledby": "dse-archive-title" },
         h("div", { className: "dse-archive-shell" },
@@ -1380,7 +1405,7 @@ window.__ModuleLoader__.load({
           h("p", { className: "dse-archive-sub" }, t("archiveIntro")),
           h("div", { className: "dse-locate" },
             h("input", { type: "text", value: locateInput, onChange: function (event) { setLocateInput(event.target.value); }, onKeyDown: function (event) { if (event.key === "Enter") locate(); }, placeholder: t("locatePlaceholder"), "aria-label": t("locate") }),
-            h("button", { className: "dse-btn", type: "button", onClick: locate }, t("locate"))
+            h("button", { className: "dse-btn", type: "button", disabled: openBusy || deleteBusy, onClick: locate }, t("locate"))
           ),
           notice ? h("p", { className: "dse-status", "data-error": noticeError ? "true" : "false", role: noticeError ? "alert" : "status" }, notice) : null,
           items.length === 0 ? h("div", { className: "dse-empty" }, h("strong", null, t("noArchives")), h("p", null, t("noArchivesHint"))) : null,
@@ -1395,9 +1420,9 @@ window.__ModuleLoader__.load({
                 )
               ),
               h("div", { className: "dse-actions" },
-                h("button", { className: "dse-btn", type: "button", onClick: function () { openSession(item.id); } }, t("restoreSession")),
+                h("button", { className: "dse-btn", type: "button", disabled: openBusy || deleteBusy, onClick: function () { openSession(item.id); } }, t("restoreSession")),
                 h("button", { className: "dse-btn", type: "button", onClick: function () { copySessionId(item.id); } }, t("copyId")),
-                h("button", { className: "dse-btn dse-btn-danger", type: "button", onClick: function () { requestDelete(item); } }, t("deleteHistory"))
+                h("button", { className: "dse-btn dse-btn-danger", type: "button", disabled: openBusy || deleteBusy, onClick: function () { requestDelete(item); } }, t("deleteHistory"))
               )
             );
           })) : null,

@@ -198,6 +198,7 @@ async function installManagedWallpaperCopy(options = {}, injected = {}) {
     throw error
   })
   if (existingFinal) throw new Error('Managed wallpaper destination already exists.')
+  let renameIdentity = null
   try {
     await operations.mkdir(directory, { recursive: true })
     await operations.copyFile(source, temporaryFile, constants.COPYFILE_EXCL)
@@ -208,11 +209,21 @@ async function installManagedWallpaperCopy(options = {}, injected = {}) {
     const copyContext = { temporaryFile, finalFile }
     if (typeof options.afterCopyValidate === 'function') await options.afterCopyValidate(copiedInfo, copyContext)
     if (typeof options.beforeFinalize === 'function') await options.beforeFinalize(copiedInfo, copyContext)
+    // NTFS file identifiers can exceed Number.MAX_SAFE_INTEGER.
+    renameIdentity = await operations.lstat(temporaryFile, { bigint: true })
     await operations.rename(temporaryFile, finalFile)
     return { fileName, file: finalFile, info: copiedInfo }
   } catch (error) {
     await operations.unlink(temporaryFile).catch(() => {})
-    await operations.unlink(finalFile).catch(() => {})
+    // A failed copy/validation never owns finalFile. If rename reports failure
+    // after actually moving it, clean up only a provably identical file, not a
+    // concurrent writer's destination. Unknown/zero file identities fail safe.
+    if (renameIdentity && typeof renameIdentity.ino === 'bigint' && renameIdentity.ino > 0n && typeof renameIdentity.dev === 'bigint') {
+      const finalInfo = await operations.lstat(finalFile, { bigint: true }).catch(() => null)
+      if (finalInfo?.isFile() && finalInfo.ino === renameIdentity.ino && finalInfo.dev === renameIdentity.dev) {
+        await operations.unlink(finalFile).catch(() => {})
+      }
+    }
     throw error
   }
 }

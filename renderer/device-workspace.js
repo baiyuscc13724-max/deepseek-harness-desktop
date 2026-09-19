@@ -198,6 +198,13 @@
     let androidLegacyFallbackUntil = 0
     let androidStreamFailures = 0
     let androidPointerStart = null
+    let androidGeneration = 0
+    let androidRequestSerial = 0
+    const currentAndroid = generation => !disposed && active && activeSource === 'android' && generation === androidGeneration
+    function invalidateAndroid() {
+      androidGeneration++
+      androidPointerStart = null
+    }
 
     function showError(reason) {
       error.textContent = reason ? (reason.message || String(reason)) : ''
@@ -342,10 +349,12 @@
     }
 
     async function invokeAndroid(name, payload = {}, { quiet = false } = {}) {
+      const generation = androidGeneration
+      const request = quiet ? androidRequestSerial : ++androidRequestSerial
       if (!quiet) { androidBusy = true; showError(null); render() }
       try { return await androidAction(name, payload) }
-      catch (reason) { if (!quiet) showError(reason); return null }
-      finally { if (!quiet) { androidBusy = false; render() } }
+      catch (reason) { if (!quiet && currentAndroid(generation)) showError(reason); return null }
+      finally { if (!quiet && request === androidRequestSerial) { androidBusy = false; if (!disposed) render() } }
     }
 
     async function refreshDesktop({ force = false, quiet = false } = {}) {
@@ -381,19 +390,25 @@
     }
 
     async function captureAndroid({ quiet = true } = {}) {
-      if (!androidSerial) return false
-      const captured = await invokeAndroid('capture', { device: androidSerial, preview: true }, { quiet })
-      if (!captured?.data) return false
+      const generation = androidGeneration
+      const serial = androidSerial
+      if (!serial || !currentAndroid(generation)) return false
+      const captured = await invokeAndroid('capture', { device: serial, preview: true }, { quiet })
+      if (!captured?.data || !currentAndroid(generation) || serial !== androidSerial) return false
       setAndroidPreview(captured.data, 'legacy')
       render()
       return true
     }
 
     async function connectAndroid(serial, { quiet = false } = {}) {
-      if (!serial) return false
+      if (!serial || disposed || !active || activeSource !== 'android') return false
+      invalidateAndroid()
+      const generation = androidGeneration
+      androidSerial = serial
+      clearAndroidPreview()
       const switched = await invokeAndroid('switchDevice', { device: serial }, { quiet })
-      if (!switched?.device) return false
-      androidSerial = switched.device || serial
+      if (!currentAndroid(generation) || switched?.device !== serial) return false
+      androidSerial = serial
       androidLegacyForced = switched.previewTransport === 'legacy-capture-poll'
       if (androidLegacyActive()) return captureAndroid({ quiet })
       if (!switched.streamUrl) return false
@@ -403,8 +418,10 @@
     }
 
     async function refreshAndroid({ selectFirst = false, forceStream = false, quiet = false } = {}) {
+      const generation = androidGeneration
+      if (!currentAndroid(generation)) return false
       const listing = await invokeAndroid('devices', {}, { quiet })
-      if (!listing || disposed) return false
+      if (!listing || !currentAndroid(generation)) return false
       androidLegacyForced = listing.previewTransport === 'legacy-capture-poll'
       androidDevices = Array.isArray(listing.devices) ? listing.devices : []
       androidAvds = Array.isArray(listing.avds) ? listing.avds : []
@@ -461,6 +478,7 @@
     async function setSource(source) {
       setControlsOpen(false)
       if (source === activeSource) return
+      invalidateAndroid()
       activeSource = source
       window.clearTimeout(timer)
       window.clearTimeout(androidReconnectTimer)
@@ -504,7 +522,7 @@
     }
 
     async function sendAndroidControl(control, { quiet = false } = {}) {
-      if (!androidSerial) return null
+      if (!androidSerial || !androidStreamUrl || androidBusy || !currentAndroid(androidGeneration)) return null
       return invokeAndroid('control', { device: androidSerial, control }, { quiet })
     }
 
@@ -569,21 +587,26 @@
       render()
     })
     androidImage.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || !androidSerial) return
-      androidPointerStart = { point: mapNormalizedPoint(event, androidImage), at: Date.now() }
+      if (event.button !== 0 || event.isPrimary === false || androidPointerStart || !androidSerial || !androidStreamUrl || androidBusy || !currentAndroid(androidGeneration)) return
+      androidPointerStart = { point: mapNormalizedPoint(event, androidImage), at: Date.now(), pointerId: event.pointerId, serial: androidSerial, generation: androidGeneration }
       androidImage.setPointerCapture?.(event.pointerId)
     })
     androidImage.addEventListener('pointerup', async event => {
-      if (!androidPointerStart || event.button !== 0) return
+      if (!androidPointerStart || event.button !== 0 || event.pointerId !== androidPointerStart.pointerId) return
       const start = androidPointerStart
       androidPointerStart = null
+      if (!currentAndroid(start.generation) || start.serial !== androidSerial || androidBusy || !androidStreamUrl) return
       const end = mapNormalizedPoint(event, androidImage)
       if (!start.point || !end) return
       const distance = Math.abs(end.x - start.point.x) + Math.abs(end.y - start.point.y)
       if (distance < 0.015) await sendAndroidControl({ kind: 'tap', x: end.x, y: end.y })
       else await sendAndroidControl({ kind: 'drag', fromX: start.point.x, fromY: start.point.y, toX: end.x, toY: end.y, durationMs: clamp(Date.now() - start.at, 100, 2_000) })
     })
-    androidImage.addEventListener('pointercancel', () => { androidPointerStart = null })
+    const cancelAndroidPointer = event => {
+      if (androidPointerStart?.pointerId === event.pointerId) androidPointerStart = null
+    }
+    androidImage.addEventListener('pointercancel', cancelAndroidPointer)
+    androidImage.addEventListener('lostpointercapture', cancelAndroidPointer)
 
     render()
     return {
@@ -594,6 +617,7 @@
         scheduleTick(0)
       },
       deactivate() {
+        invalidateAndroid()
         active = false
         window.clearTimeout(timer)
         window.clearTimeout(androidReconnectTimer)
@@ -601,6 +625,7 @@
         clearAndroidPreview()
       },
       dispose() {
+        invalidateAndroid()
         active = false
         disposed = true
         window.clearTimeout(timer)

@@ -15,6 +15,7 @@ const createLightbox = close => {
   const dialog = {
     dataset: { harnessMobileSheet: 'true' },
     getAttribute: name => name === 'aria-modal' ? 'true' : null,
+    hasAttribute: () => false,
     matches: selector => selector === '[role="dialog"][aria-modal="true"]',
     querySelector: selector => selector === ':scope > div[aria-hidden="true"]'
       ? mask
@@ -60,18 +61,31 @@ test('system back dismisses a visible image lightbox without depending on transl
   const close = { dataset: {}, getAttribute: () => '任意语言', textContent: '', click: () => { clicks += 1 } }
   const { dialog } = createLightbox(close)
   const shell = { querySelector: () => null }
+  let sheetRemovals = 0
+  const listeners = {}
   const document = {
     getElementById: id => id === 'harness-mobile-app-shell' ? shell : null,
-    querySelectorAll: selector => selector === '[role="dialog"][aria-modal="true"]' ? [dialog] : [],
-    querySelector: () => null
+    querySelectorAll: selector => selector.includes('[role="dialog"][aria-modal="true"]') ? [dialog] : [],
+    querySelector: selector => selector === '[data-harness-mobile-project-sheet]' ? { remove() { sheetRemovals++ } } : null,
+    addEventListener: (type, callback) => { listeners[type] = callback }
   }
   const window = {}
-  const install = new Function('window', 'document', 'visible', `${source}\nreturn installMobileBackHandler`) // eslint-disable-line no-new-func
-    (window, document, () => true)
+  const install = new Function('window', 'document', 'visible', 'getComputedStyle', `${source}\nreturn installMobileBackHandler`) // eslint-disable-line no-new-func
+    (window, document, () => true, () => ({ display: 'block', visibility: 'visible', zIndex: 'auto' }))
   install()
   assert.equal(window.__harnessMobileHandleBack(), true)
   assert.equal(clicks, 1)
-  assert.ok(source.indexOf('const imageLightbox') < source.indexOf('const projectSheet'), 'image preview must dismiss before lower navigation layers')
+  assert.equal(sheetRemovals, 0, 'image preview must dismiss before lower navigation layers')
+  let prevented = 0, stopped = 0
+  listeners.keydown({ key: 'Escape', preventDefault() { prevented++ }, stopImmediatePropagation() { stopped++ } })
+  assert.equal(clicks, 2, 'Escape invokes exactly one structural close action')
+  assert.equal(prevented, 1)
+  assert.equal(stopped, 1)
+  assert.equal(sheetRemovals, 0)
+  dialog.hidden = true
+  assert.equal(window.__harnessMobileHandleBack(), true)
+  assert.equal(clicks, 2, 'hidden lightbox must not consume another close')
+  assert.equal(sheetRemovals, 1)
 })
 
 test('mobile lightbox CSS preserves viewport geometry and a touch-safe close control', () => {

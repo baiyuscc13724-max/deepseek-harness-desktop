@@ -37,8 +37,13 @@ test('受限 Playwright API 从参数结构上拒绝任意脚本与敏感 select
   for (const selector of ['input[value^="a"]', 'input[name=csrf]', 'div:has(input)', 'button, a', '#login-token']) {
     assert.throws(() => normalizePlaywrightParameters({ operation: 'count', selector }), error => ['browser-playwright-selector-unsafe', 'browser-playwright-sensitive-locator'].includes(error.code), selector)
   }
-  for (const attribute of ['value', 'href', 'data-auth-token', 'srcdoc', 'onclick', 'aria-label', 'aria-valuetext', 'aria-description']) {
+  for (const attribute of ['value', 'data-auth-token', 'srcdoc', 'onclick', 'style', 'formaction', 'nonce']) {
     assert.throws(() => normalizePlaywrightParameters({ operation: 'getAttribute', selector: '#safe', attribute }), error => error.code === 'browser-playwright-attribute-forbidden', attribute)
+  }
+  // This only proves the parameter whitelist. Actual page reads must still
+  // reject hidden/sensitive nodes and redact URL/text values (Electron fixture).
+  for (const attribute of ['href', 'src', 'poster', 'srclang', 'label', 'kind', 'aria-label', 'aria-valuetext', 'aria-description']) {
+    assert.equal(normalizePlaywrightParameters({ operation: 'getAttribute', selector: '#safe', attribute }).attribute, attribute)
   }
   assert.equal(normalizePlaywrightParameters({ operation: 'domSnapshot' }).selector, '')
   assert.equal(normalizePlaywrightParameters({ operation: 'getAttribute', selector: '#safe', attribute: 'title' }).attribute, 'title')
@@ -149,10 +154,12 @@ test('Playwright 只读操作不进入 mutation fence、markAction 或可信输�
 test('dblclick、partial fill 与 selectOption 在可信输入开始后的任意错误都统一为 unknown outcome', async () => {
   const { runBrowserPlaywrightOperation } = require(path.join(root, 'electron/bridge/browser-codex-api.cjs'))
 
-  async function runFaultCase({ parameters, field, plan, shouldFail, originalCode }) {
+  async function runFaultCase({ parameters, field, plan, shouldFail, originalCode, focused = true }) {
     let bindingId = ''
     const phases = []
+    const trusted = []
     const webContents = {
+      selectAll() { trusted.push('selectAll') },
       executeJavaScriptInIsolatedWorld: async (_worldId, scripts) => {
         const code = scripts[0].code
         const phase = /"phase":"([^"]+)"/u.exec(code)?.[1]
@@ -160,7 +167,7 @@ test('dblclick、partial fill 与 selectOption 在可信输入开始后的任意
         phases.push(phase)
         if (phase === 'preflight') return fixedEnvelope({ field: { ...field, selector: parameters.selector, baseUrl: 'https://example.test' }, text: '' })
         if (phase === 'bind' || phase === 'prepare') return fixedEnvelope({ field, ...plan, actionPoint: null, bindingVerified: true })
-        if (phase === 'verify') return fixedEnvelope({ field, ...plan, actionPoint: { x: 10, y: 10 }, bindingVerified: true })
+        if (phase === 'verify') return fixedEnvelope({ field, ...plan, focused, actionPoint: { x: 10, y: 10 }, bindingVerified: true })
         if (phase === 'unmark') return fixedEnvelope({ unmarked: true })
         if (phase === 'cleanup') return fixedEnvelope({ cleaned: true })
         throw new Error(`unexpected phase ${phase}`)
@@ -168,6 +175,7 @@ test('dblclick、partial fill 与 selectOption 在可信输入开始后的任意
       debugger: {
         isAttached: () => true,
         sendCommand: async (method, payload = {}) => {
+          trusted.push(method)
           if (method === 'DOM.performSearch') return { searchId: `search-${bindingId}`, resultCount: 1 }
           if (method === 'DOM.getSearchResults') return { nodeIds: [6] }
           if (method === 'DOM.describeNode') return { node: { backendNodeId: 9 } }
@@ -188,8 +196,22 @@ test('dblclick、partial fill 与 selectOption 在可信输入开始后的任意
       error => error.code === 'browser-outcome-unknown' && error.originalCode === originalCode
     )
     assert.ok(phases.includes('cleanup'))
+    if (parameters.operation === 'fill' && focused) {
+      assert.ok(trusted.indexOf('DOM.focus') < trusted.indexOf('selectAll'))
+      assert.ok(trusted.indexOf('selectAll') < trusted.indexOf('Input.insertText'))
+    }
+    if (!focused) {
+      assert.ok(trusted.includes('DOM.focus'))
+      assert.equal(trusted.includes('selectAll'), false)
+      assert.equal(trusted.includes('Input.insertText'), false, 'unverified focus cannot type into an unknown control')
+    }
   }
 
+  await runFaultCase({
+    parameters: { operation: 'fill', selector: '#note', text: 'synthetic' },
+    field: { tag: 'input', type: 'text', id: 'note', role: 'textbox', label: 'Note', text: '', submit: false, readOnly: false },
+    plan: {}, focused: false, shouldFail: () => false, originalCode: 'browser-playwright-binding-changed'
+  })
   let mousePresses = 0
   await runFaultCase({
     parameters: { operation: 'dblclick', selector: '#double' },

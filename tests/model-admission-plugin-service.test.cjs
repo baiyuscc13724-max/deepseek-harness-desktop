@@ -43,7 +43,8 @@ test('Host-only model admission plugin installs atomically and patches the Web p
     const second = await ensureModelAdmissionPlugin({ dshHome: root, bundledRoot })
     assert.equal(first.patchChanged, true)
     assert.equal(second.patchChanged, false)
-    assert.equal(first.version, '1.0.59')
+    const sourceManifest = JSON.parse(await readFile(path.join(bundledRoot, 'package.json'), 'utf8'))
+    assert.equal(first.version, sourceManifest.version)
 
     const patch = await readFile(path.join(root, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
     assert.equal((patch.match(/dsh-model-admission/g) || []).length, 1)
@@ -52,6 +53,7 @@ test('Host-only model admission plugin installs atomically and patches the Web p
 
     const installedManifest = JSON.parse(await readFile(path.join(first.destination, 'package.json'), 'utf8'))
     const installedCore = await readFile(path.join(first.destination, 'lib', 'index.js'), 'utf8')
+    assert.equal(installedManifest.version, sourceManifest.version)
     assert.equal(installedManifest.name, 'dsh-model-admission')
     assert.equal(installedManifest.dsh?.client, undefined)
     assert.match(installedCore, /ctx\.on\("llm\/stream"/u)

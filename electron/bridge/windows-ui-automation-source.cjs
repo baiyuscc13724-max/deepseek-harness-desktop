@@ -10,6 +10,8 @@ function encodedCommand(script) {
 }
 
 function runWindowsPowerShell(script, input, options = {}) {
+  const cancelled = () => Object.assign(new Error('Windows UI Automation 操作已取消；已开始的原生动作结果可能未知，请重新观察，不能自动重试。'), { code: 'browser-action-cancelled' })
+  if (options.signal?.aborted) return Promise.reject(cancelled())
   if (process.platform !== 'win32') return Promise.reject(Object.assign(new Error('Windows UI Automation 只在 Windows 主机可用。'), { code: 'uia-platform-unsupported' }))
   const timeoutMs = Math.max(1_000, Math.min(20_000, Number(options.timeoutMs) || DEFAULT_TIMEOUT_MS))
   const maxBytes = Math.max(64 * 1024, Math.min(8 * 1024 * 1024, Number(options.maxBytes) || DEFAULT_MAX_OUTPUT_BYTES))
@@ -27,13 +29,17 @@ function runWindowsPowerShell(script, input, options = {}) {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      options.signal?.removeEventListener('abort', onAbort)
       if (error) reject(error)
       else resolve(value)
     }
+    const onAbort = () => { child.kill(); finish(cancelled()) }
     const timer = setTimeout(() => {
       child.kill()
       finish(Object.assign(new Error('Windows UI Automation 操作超时。'), { code: 'uia-timeout' }))
     }, timeoutMs)
+    options.signal?.addEventListener('abort', onAbort, { once: true })
+    if (options.signal?.aborted) onAbort()
     child.stdout.on('data', chunk => {
       bytes += chunk.length
       if (bytes > maxBytes) {
@@ -121,7 +127,10 @@ while ($queue.Count -gt 0 -and $seen -lt 500 -and $null -eq $found) {
   } catch {}
 }
 if ($null -eq $found) { @{ handled=$false; reason='stale' } | ConvertTo-Json -Compress; exit 0 }
-try { $found.SetFocus() } catch {}
+if (-not $found.Current.IsEnabled) { @{ handled=$false; reason='disabled' } | ConvertTo-Json -Compress; exit 0 }
+if ($found.Current.IsPassword) { @{ handled=$false; reason='sensitive' } | ConvertTo-Json -Compress; exit 0 }
+$focused = $false
+try { $found.SetFocus(); $focused = [bool]$found.Current.HasKeyboardFocus } catch {}
 $handled = $false; $via = 'focus'
 if ([string]$input.action -eq 'click') {
   $pattern = $null
@@ -129,7 +138,7 @@ if ([string]$input.action -eq 'click') {
   elseif ($found.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$pattern)) { $pattern.Select(); $handled=$true; $via='SelectionItemPattern' }
   elseif ($found.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) { $pattern.Toggle(); $handled=$true; $via='TogglePattern' }
 }
-@{ handled=$handled; completed=$handled; via=$via } | ConvertTo-Json -Compress
+@{ handled=$handled; completed=$handled; via=$via; focused=$focused } | ConvertTo-Json -Compress
 `
 
 function rowsToTree(rows, target) {
@@ -141,6 +150,7 @@ function rowsToTree(rows, target) {
     runtimeId: String(row.runtimeId || ''),
     className: String(row.className || ''),
     bounds: row.bounds || null,
+    boundsCoordinateSpace: 'global-screen-pixels',
     enabled: row.enabled !== false,
     focused: row.focused === true,
     sensitive: row.isPassword === true,
@@ -166,11 +176,14 @@ class WindowsUiAutomationSource {
 
   async observe(target, options = {}) {
     if (!this.available) return null
-    const result = await this.run(OBSERVE_SCRIPT, { hwnd: target.kind === 'window' ? target.hwnd : 0, maxNodes: Math.max(1, Math.min(500, Number(options.maxNodes) || 500)) })
+    const hwnd = target.kind === 'window' ? Number(target.hwnd ?? (/^window:\d+$/.test(String(target.id)) ? String(target.id).slice(7) : NaN)) : 0
+    if (target.kind === 'window' && (!Number.isSafeInteger(hwnd) || hwnd <= 0)) throw Object.assign(new Error('窗口目标缺少有效句柄，请重新选择目标。'), { code: 'desktop-ui-ref-stale' })
+    const result = await this.run(OBSERVE_SCRIPT, { hwnd, maxNodes: Math.max(1, Math.min(500, Number(options.maxNodes) || 500)) })
     return rowsToTree(result?.rows, target)
   }
 
-  async perform(action, raw) {
+  async perform(action, raw, _entry = null, options = {}) {
+    if (options.signal?.aborted) throw Object.assign(new Error('Windows UI Automation 操作已取消。'), { code: 'browser-action-cancelled' })
     if (!this.available || raw?.sensitive === true) return { handled: false, sensitive: raw?.sensitive === true }
     return this.run(PERFORM_SCRIPT, {
       action,
@@ -178,7 +191,7 @@ class WindowsUiAutomationSource {
       runtimeId: String(raw?.runtimeId || ''),
       automationId: String(raw?.automationId || ''),
       name: String(raw?.name || '')
-    })
+    }, { signal: options.signal })
   }
 }
 

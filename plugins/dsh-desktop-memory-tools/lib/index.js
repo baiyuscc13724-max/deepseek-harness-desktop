@@ -81,7 +81,9 @@ function apply(ctx) {
       if ((args.action === 'remember' || args.action === 'suggest') && !currentDirectHumanRoot(ctx, exec)) throw new Error('本地记忆写入只允许直接用户驱动的根会话。')
       const scopes = rootScopes(exec)
       const desiredScope = args.scope || (args.kind === 'project' ? 'project' : 'personal')
-      const writeScope = scopes.find(scope => scope.type === desiredScope) || scopes[0]
+      const selectedScope = scopes.find(scope => scope.type === desiredScope)
+      if ((args.action === 'remember' || args.action === 'suggest') && !selectedScope) throw new Error('项目记忆写入需要当前绝对工作区；不会回退到个人记忆。')
+      const writeScope = selectedScope || scopes[0]
       return applyAction(args.action, {
         query: args.query,
         max_results: args.max_results,

@@ -72,12 +72,14 @@ const { loadRightWorkspaceResource, materializeRightWorkspaceFile, previewLocalD
 const { MemoryService, createMemoryPack } = require('./bridge/memory-service.cjs')
 const { redact: redactSensitiveText } = require('./bridge/memory-censor.cjs')
 const { BrowserSecurityPolicy, isModelBootstrapSourceUrl } = require('./bridge/browser-security-policy.cjs')
+const { checkModelNavigation } = require('./bridge/browser-url-policy.cjs')
 const { DECISIONS: BROWSER_LINK_DECISIONS, routeBrowserLink } = require('./bridge/browser-link-router.cjs')
 const { MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, isSensitiveText } = require('./bridge/browser-action-gate.cjs')
 const { runBrowserPlaywrightOperation } = require('./bridge/browser-codex-api.cjs')
 const { BrowserOperationCoordinator, runBrowserOperation } = require('./bridge/browser-operation-coordinator.cjs')
 const { BrowserNavigationLane, attachBrowserNavigationGuard } = require('./bridge/browser-navigation-guard.cjs')
 const { BrowserControlServer } = require('./bridge/browser-control-server.cjs')
+const { WorkspacePreviewBridge } = require('./bridge/workspace-preview-bridge.cjs')
 const { BrowserDiagnostics, safeUrl: safeBrowserDiagnosticUrl } = require('./bridge/browser-diagnostics.cjs')
 const { BrowserHistoryStore } = require('./bridge/browser-history-store.cjs')
 const { MobileSyncService } = require('./bridge/mobile-sync-service.cjs')
@@ -462,9 +464,19 @@ function ensureBrowserHistoryStore() {
 }
 
 function effectiveBrowserPanelWidth(windowWidth) {
-  const width = Math.max(1, Number(windowWidth) || 1)
-  if (browserWideMode) return Math.min(width, Math.max(BROWSER_PANEL_DEFAULT_WIDTH, Math.floor(width * 0.72)))
-  return Math.min(width, Math.max(BROWSER_PANEL_MIN_WIDTH, Math.min(BROWSER_PANEL_MAX_WIDTH, browserPanelWidth)))
+  // This value is also sent to the renderer as a CSS-pixel preference. Do not
+  // persist the responsive cap (or a DIP width), otherwise a narrow window
+  // permanently narrows the panel after it is enlarged again.
+  const width = Number.isFinite(Number(windowWidth)) ? Math.max(0, Number(windowWidth)) : 0
+  if (browserWideMode) return Math.max(BROWSER_PANEL_DEFAULT_WIDTH, Math.floor(width * 0.72))
+  const preferred = Number.isFinite(Number(browserPanelWidth)) ? Number(browserPanelWidth) : BROWSER_PANEL_DEFAULT_WIDTH
+  return Math.max(BROWSER_PANEL_MIN_WIDTH, Math.min(BROWSER_PANEL_MAX_WIDTH, preferred))
+}
+
+function browserLayoutZoomFactor() {
+  const contents = mainWindow?.webContents
+  const zoom = contents && !contents.isDestroyed() ? contents.getZoomFactor() : 1
+  return Number.isFinite(zoom) && zoom > 0 ? zoom : 1
 }
 
 function liveBrowserContents() {
@@ -494,19 +506,161 @@ function browserNavigationHistory() {
 
 function layoutBrowserView() {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const [width, height] = mainWindow.getContentSize()
-  const panelWidth = effectiveBrowserPanelWidth(width)
-  const bounds = {
-    x: Math.max(0, width - panelWidth),
-    y: BROWSER_VIEW_TOP,
-    width: panelWidth,
-    height: Math.max(1, height - BROWSER_VIEW_TOP - BROWSER_VIEW_FOOTER)
-  }
+  const dimension = value => Number.isFinite(Number(value)) ? Math.max(0, Math.floor(Number(value))) : 0
+  const [width, height] = mainWindow.getContentSize().map(dimension)
+  let zoom = browserLayoutZoomFactor()
+  if (!Number.isFinite(width / zoom)) zoom = 1
+  const viewport = width / zoom
+  // Match right-workspace.css: full-width mobile, 48px overlay inset, then
+  // desktop docking with at least 560 CSS px left for the conversation.
+  const panelCssWidth = viewport <= 620 ? viewport : viewport <= 900
+    ? Math.max(0, viewport - 48)
+    : Math.min(effectiveBrowserPanelWidth(viewport), Math.max(0, viewport - 560))
+  const left = Math.max(0, Math.min(width, Math.round(width - panelCssWidth * zoom)))
+  const top = Math.min(height, Math.max(0, Math.round(BROWSER_VIEW_TOP * zoom)))
+  const bottom = Math.max(top, Math.min(height, Math.round(height - BROWSER_VIEW_FOOTER * zoom)))
+  const bounds = { x: left, y: top, width: width - left, height: bottom - top }
   for (const [tabId, tab] of browserTabs) {
     if (!tab.view?.webContents || tab.view.webContents.isDestroyed()) continue
     tab.view.setBounds(bounds)
-    tab.view.setVisible(tabId === activeBrowserTabId && browserSidebarVisible && browserContentVisible)
+    tab.view.setVisible(bounds.width > 0 && bounds.height > 0 && tabId === activeBrowserTabId && browserSidebarVisible && browserContentVisible)
   }
+}
+
+const browserLayoutBindings = new WeakMap()
+let browserLayoutBindingSequence = 0
+
+function bindBrowserLayoutEvents(ownerWindow) {
+  if (browserLayoutBindings.has(ownerWindow)) return browserLayoutBindings.get(ownerWindow)
+  const contents = ownerWindow.webContents
+  const binding = ++browserLayoutBindingSequence
+  let stopped = false
+  let generation = 0
+  let watchingGeneration = -1
+  const current = () => !stopped && mainWindow === ownerWindow && !ownerWindow.isDestroyed() && !contents.isDestroyed() &&
+    isOwnedPageSender({ sender: contents, senderFrame: contents.mainFrame }, ownerWindow, ['index.html'])
+  const relayout = () => {
+    if (!current()) return
+    layoutBrowserView()
+    // Preserve the existing renderer field's CSS-pixel preference semantics.
+    if (browserWideMode) contents.send('browser:state', {
+      panelWidth: effectiveBrowserPanelWidth(ownerWindow.getContentSize()[0] / browserLayoutZoomFactor()),
+      wideMode: true
+    })
+  }
+  const watch = async () => {
+    if (!current() || watchingGeneration === generation) return
+    const ticket = generation
+    const frame = contents.mainFrame
+    watchingGeneration = ticket
+    let previous = null
+    try {
+      while (current() && generation === ticket && contents.mainFrame === frame) {
+        // Fixed shell-only observation, not an IPC/eval API. The previous tuple
+        // closes the re-arm gap: if the viewport changed while the last result
+        // crossed processes, resolve once with the latest complete tuple.
+        const value = await contents.executeJavaScript(`(() => {
+          const key = '__dshBrowserLayoutResizeWaiter';
+          const binding = ${binding}, generation = ${ticket};
+          const prior = window[key];
+          if (typeof prior === 'function') {
+            if (prior.binding > binding || (prior.binding === binding && prior.generation > generation)) return null;
+            prior();
+          }
+          const previous = ${JSON.stringify(previous)};
+          const read = () => [innerWidth, innerHeight, devicePixelRatio];
+          const now = read();
+          if (!previous || now.some((v, i) => v !== previous[i])) return now;
+          return new Promise(resolve => {
+            const finish = value => {
+              window.removeEventListener('resize', resized);
+              window.removeEventListener('pagehide', cancel);
+              if (window[key] === cancel) delete window[key];
+              resolve(value);
+            };
+            const resized = () => finish(read());
+            const cancel = () => finish(null);
+            cancel.binding = binding;
+            cancel.generation = generation;
+            window[key] = cancel;
+            window.addEventListener('resize', resized, { once: true });
+            window.addEventListener('pagehide', cancel, { once: true });
+          });
+        })()`)
+        if (!current() || generation !== ticket || contents.mainFrame !== frame) return
+        if (!Array.isArray(value) || value.length !== 3 || !value.every(Number.isFinite) ||
+            value[0] < 0 || value[1] < 0 || value[2] <= 0) return
+        previous = value
+        relayout()
+      }
+    } catch {
+      // Navigation/destruction or an execution failure ends this generation.
+      // A subsequent real document load may arm again; never retry in a loop.
+    }
+  }
+  const navigated = (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) generation += 1
+  }
+  const zoomChanged = () => setImmediate(relayout)
+  const stop = () => {
+    if (stopped) return
+    const canCancel = current()
+    stopped = true
+    generation += 1
+    ownerWindow.removeListener('resize', relayout)
+    ownerWindow.removeListener('closed', stop)
+    contents.removeListener('zoom-changed', zoomChanged)
+    contents.removeListener('did-start-navigation', navigated)
+    contents.removeListener('did-finish-load', watch)
+    contents.removeListener('did-stop-loading', watch)
+    contents.removeListener('destroyed', stop)
+    browserLayoutBindings.delete(ownerWindow)
+    if (canCancel) contents.executeJavaScript(`if (typeof window.__dshBrowserLayoutResizeWaiter === 'function' && window.__dshBrowserLayoutResizeWaiter.binding === ${binding}) window.__dshBrowserLayoutResizeWaiter(); void 0;`).catch(() => {})
+  }
+  browserLayoutBindings.set(ownerWindow, stop)
+  ownerWindow.on('resize', relayout)
+  ownerWindow.once('closed', stop)
+  contents.on('zoom-changed', zoomChanged)
+  contents.on('did-start-navigation', navigated)
+  contents.on('did-finish-load', watch)
+  contents.on('did-stop-loading', watch)
+  contents.once('destroyed', stop)
+  void watch()
+  return stop
+}
+
+function browserRecoveryState() {
+  const control = sharedComputerUseControlState()
+  const contents = liveBrowserContents()
+  const tab = browserTabs.get(activeBrowserTabId)
+  let state
+  if (!mainWindow || mainWindow.isDestroyed()) state = 'unavailable'
+  else if (!control.granted) state = 'authorization-required'
+  else if (!control.active || browserSecurityPolicy?.isModelStopped === true) state = 'stopped'
+  else if (tab?.available === false || (activeBrowserTabId && (!contents || !tab))) state = 'tab-unavailable'
+  else if (!contents) state = 'not-started'
+  else if (isModelBootstrapSourceUrl(contents.getURL())) state = 'blank'
+  else state = /^https?:/i.test(contents.getURL()) ? 'ready' : 'tab-unavailable'
+  const canBootstrap = state === 'not-started' || state === 'blank'
+  const messages = {
+    unavailable: '浏览器服务不可用，请检查桌面主窗口。',
+    'authorization-required': '需要用户通过共享控制授权卡授权。',
+    stopped: '共享控制已停止，需要用户恢复，不能自动重启。',
+    'not-started': '浏览器尚未启动；已授权，可用 navigate 或 tabOpen 在后台打开 HTTP(S) 地址。',
+    blank: '当前为空白标签；可用 navigate 或 tabOpen 建立 HTTP(S) 页面。',
+    'tab-unavailable': '活动标签已失效；可列出标签并切换到已有可用页，或请用户刷新。',
+    ready: '结构化浏览器页面可用；优先 observe 获取新的 ref。'
+  }
+  return { state, canBootstrap, actions: canBootstrap ? ['navigate', 'tabOpen'] : state === 'ready' ? ['observe'] : state === 'tab-unavailable' ? ['tabList', 'tabSwitch'] : [], requiresUser: !canBootstrap && state !== 'ready', message: messages[state] }
+}
+
+function browserTabSnapshots({ model = false } = {}) {
+  return [...browserTabs.entries()].map(([id, tab]) => {
+    const contents = tab.view?.webContents
+    const alive = Boolean(contents && !contents.isDestroyed())
+    const url = alive ? contents.getURL() || '' : ''
+    return { id, title: alive ? safeBrowserText(contents.getTitle(), 160) : '', url: model ? safeBrowserDiagnosticUrl(url) : url, loading: alive && contents.isLoading(), active: id === activeBrowserTabId, available: alive && tab.available !== false }
+  })
 }
 
 async function browserStatePayload(patch = {}) {
@@ -514,8 +668,9 @@ async function browserStatePayload(patch = {}) {
   const contents = liveBrowserContents()
   const history = browserNavigationHistory()
   if (contents) {
-    browserState.url = contents.getURL() || browserState.url
-    browserState.title = contents.getTitle() || browserState.title
+    browserState.url = contents.getURL() || ''
+    browserState.title = contents.getTitle() || ''
+    browserState.loading = contents.isLoading()
     browserState.canGoBack = Boolean(history?.canGoBack())
     browserState.canGoForward = Boolean(history?.canGoForward())
   }
@@ -527,7 +682,8 @@ async function browserStatePayload(patch = {}) {
   }
   const audit = browserSecurityPolicy?.auditSnapshot() || { count: 0, total: 0, dropped: 0 }
   const activeTab = browserTabs.get(activeBrowserTabId)
-  const sessionReady = Boolean(contents && activeTab?.available !== false)
+  const sessionReady = Boolean(contents && activeTab?.available !== false && /^https?:/i.test(contents.getURL()))
+  const recovery = browserRecoveryState()
   const pendingConfirmations = browserSecurityPolicy?.pendingConfirmations() || []
   return {
     ...browserState,
@@ -537,11 +693,13 @@ async function browserStatePayload(patch = {}) {
       isolatedFromHarness: true
     },
     control: sharedComputerUseControlState(),
+    recovery,
     session: {
       ready: sessionReady,
-      surface: sessionReady
+      recovery,
+      surface: contents && activeTab?.available !== false
         ? browserSidebarVisible && browserContentVisible ? 'visible' : 'background'
-        : contents ? 'unavailable' : 'not-started',
+        : activeBrowserTabId ? 'unavailable' : 'not-started',
       backgroundEnabled: true,
       dataPlane: { primary: 'cdp-dom', structuredRefs: true, loopbackApi: true, screenshotRequired: false, screenshotFallback: true, transport: 'authenticated-loopback-json' }
     },
@@ -551,13 +709,7 @@ async function browserStatePayload(patch = {}) {
     attentionRequired: pendingConfirmations.length > 0,
     pendingConfirmations,
     activeTabId: activeBrowserTabId,
-    tabs: [...browserTabs.entries()].map(([id, tab]) => ({
-      id,
-      title: safeBrowserText(tab.view.webContents.getTitle() || '新标签页', 160),
-      url: tab.view.webContents.getURL() || '',
-      loading: tab.view.webContents.isLoading(),
-      available: tab.available !== false && !tab.view.webContents.isDestroyed()
-    })),
+    tabs: browserTabSnapshots(),
     downloads: browserDownloads.map(item => ({ ...item })),
     dialog: {
       available: browserTabs.get(activeBrowserTabId)?.dialogControl === true,
@@ -565,7 +717,7 @@ async function browserStatePayload(patch = {}) {
       type: browserDialogs.get(activeBrowserTabId)?.type || null
     },
     history: await ensureBrowserHistoryStore().search('', { limit: 50 }),
-    panelWidth: effectiveBrowserPanelWidth(mainWindow?.getContentSize?.()[0] || browserPanelWidth),
+    panelWidth: effectiveBrowserPanelWidth((mainWindow?.getContentSize?.()[0] || browserPanelWidth) / browserLayoutZoomFactor()),
     wideMode: browserWideMode,
     viewport: liveBrowserContents()
       ? { width: browserView.getBounds().width, height: browserView.getBounds().height }
@@ -581,7 +733,10 @@ async function publishBrowserState(patch = {}) {
 
 function updateBrowserActiveTab(url) {
   if (browserOperations.snapshot().resetting) return
-  if (!browserSecurityPolicy || !url) return
+  if (!browserSecurityPolicy || !url) {
+    browserState.origin = ''
+    return
+  }
   try {
     const nav = browserSecurityPolicy.userNavigate(url)
     const activeTab = browserTabs.get(activeBrowserTabId)
@@ -756,6 +911,11 @@ function ensureBrowserSession() {
   browserView.setBackgroundColor('#ffffff')
   mainWindow.contentView.addChildView(browserView)
   const contents = browserView.webContents
+  const browserOwnerWindow = mainWindow
+  contents.on('context-menu', (_event, params) => {
+    // Public pages never resolve privileged local-workspace metadata.
+    showGuestContextMenu(contents, params, { allowLocal: false, ownerWindow: browserOwnerWindow }).catch(() => {})
+  })
   const tabId = `browser-tab-${nextBrowserTabSequence++}`
   activeBrowserTabId = tabId
   const browserTab = { id: tabId, view: browserView, createdAt: Date.now(), available: true, dialogControl: false, fileChooserControl: false, fileChooserGeneration: 0, navigationGeneration: 0, navigationLane: new BrowserNavigationLane() }
@@ -825,11 +985,12 @@ function ensureBrowserSession() {
     isResetting: () => browserOperations.snapshot().resetting,
     onDenied: () => {}
   })
-  contents.on('did-start-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: true }).catch(() => {}) })
+  contents.on('did-start-loading', () => { browserTab.modelObservation = null; if (tabId === activeBrowserTabId) publishBrowserState({ loading: true }).catch(() => {}) })
   contents.on('did-stop-loading', () => { if (tabId === activeBrowserTabId) publishBrowserState({ loading: false }).catch(() => {}) })
   const navigated = (_event, url) => {
     browserTab.available = true
     browserTab.navigationGeneration += 1
+    browserTab.modelObservation = null
     ensureBrowserHistoryStore().add(url, contents.getTitle()).catch(() => {})
     if (tabId !== activeBrowserTabId) return
     updateBrowserActiveTab(url)
@@ -850,6 +1011,8 @@ function ensureBrowserSession() {
 
 async function createBrowserTab(value = '', { modelNavigation = null } = {}) {
   browserOperations.ticket()
+  const previous = browserTabs.get(activeBrowserTabId)
+  if (previous) previous.modelObservation = null
   browserView = null
   const view = ensureBrowserSession()
   const tabId = activeBrowserTabId
@@ -874,6 +1037,9 @@ async function switchBrowserTab(tabId) {
   browserOperations.ticket()
   const tab = browserTabs.get(String(tabId || ''))
   if (!tab || tab.view.webContents.isDestroyed()) throw new Error('浏览器标签页不存在。')
+  const previous = browserTabs.get(activeBrowserTabId)
+  if (previous) previous.modelObservation = null
+  tab.modelObservation = null
   activeBrowserTabId = tab.id
   browserView = tab.view
   const url = tab.view.webContents.getURL()
@@ -901,9 +1067,7 @@ async function closeBrowserTab(tabId) {
   if (!browserTabs.size) return createBrowserTab()
   if (id === activeBrowserTabId) {
     const next = [...browserTabs.values()].at(-1)
-    activeBrowserTabId = next.id
-    browserView = next.view
-    updateBrowserActiveTab(next.view.webContents.getURL())
+    return switchBrowserTab(next.id)
   }
   layoutBrowserView()
   return publishBrowserState()
@@ -1043,13 +1207,19 @@ async function clearAllBrowserData(confirmed) {
 }
 
 function requireBrowserForModel(signal = null, { allowBlankNavigation = false } = {}) {
+  requireSharedComputerUseForBrowser({ requestAuthorization: false })
   const ticket = browserOperations.modelTicket(signal)
-  const view = ensureBrowserSession()
+  if (browserSecurityPolicy?.isModelStopped) throw Object.assign(new Error('浏览器模型控制已停止；需要用户重新启用共享控制。'), { code: 'stopped' })
+  const contents = liveBrowserContents()
+  const activeTab = browserTabs.get(activeBrowserTabId)
+  if (activeTab?.available === false || (activeBrowserTabId && (!contents || !activeTab))) throw Object.assign(new Error('活动标签已失效；请检查 status 并选择已有可用标签或由用户刷新。'), { code: 'tab-unavailable' })
+  if (!contents && !allowBlankNavigation) throw Object.assign(new Error('浏览器尚未启动；请先 navigate 或 tabOpen 打开 HTTP(S) 地址。'), { code: 'browser-not-started' })
+  const view = contents ? browserView : ensureBrowserSession()
   if (!browserSecurityPolicy || browserSecurityPolicy.isModelStopped) throw Object.assign(new Error('浏览器模型控制已停止；需要用户重新启用共享控制。'), { code: 'stopped' })
   const url = view.webContents.getURL()
   updateBrowserActiveTab(url)
   const origin = browserState.origin || null
-  if (!origin && !(allowBlankNavigation && isModelBootstrapSourceUrl(url))) throw new Error('当前浏览器页面没有可操作的 HTTP(S) 来源。')
+  if (!origin && !(allowBlankNavigation && isModelBootstrapSourceUrl(url))) throw Object.assign(new Error('当前标签没有可操作的 HTTP(S) 页面；请先 navigate。'), { code: isModelBootstrapSourceUrl(url) ? 'browser-blank-page' : 'tab-unavailable' })
   return { view, url, origin, tabId: activeBrowserTabId || 'side-browser-main', ticket }
 }
 
@@ -1075,13 +1245,25 @@ function waitForModelBrowserDelay(timeoutMs, ticket) {
   })
 }
 
+function runBrowserRefScript(view, code) {
+  // The page can read DOM attributes, but cannot replace the isolated-world
+  // Element bindings. Never resolve an old ref to a replacement DOM node.
+  return view.webContents.executeJavaScriptInIsolatedWorld(1005, [{ code }])
+}
+
 async function observeBrowserForModel(signal = null) {
   const { view, origin, tabId, ticket } = requireBrowserForModel(signal)
   markBrowserModelNavigation(tabId, 'observe')
   browserSecurityPolicy.modelAction({ action: 'read', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag: 'document' }, payload: {} })
-  const raw = await view.webContents.executeJavaScript(`(() => {
+  const tab = browserTabs.get(tabId)
+  const binding = { prefix: `b${randomUUID().replace(/-/g, '')}_`, navigationGeneration: tab.navigationGeneration, ticket, refs: new Set() }
+  tab.modelObservation = binding
+  const raw = await runBrowserOperation(() => runBrowserRefScript(view, `(() => {
     const sensitive = /(?:password|passwd|pwd|口令|密码|card|卡号|cvv|cvc|security\\s*code|安全码|otp|验证码|动态码|verif|token|api[_-]?key|secret|密钥|私钥|cookie|authorization|bearer|银行|bank|payment|payee|支付|付款|account|acct|user(?:name|[_-]?id)|login|e-?mail|账号|帐号|账户|用户名|邮箱)/i;
     const referenceAttribute='data-hd-model-ref';
+    if (!globalThis.__HARNESS_BROWSER_REFS__) Object.defineProperty(globalThis, '__HARNESS_BROWSER_REFS__', { value: new Map() });
+    const bindings=globalThis.__HARNESS_BROWSER_REFS__;
+    bindings.clear();
     const visible = element => { const r=element.getBoundingClientRect(); const s=getComputedStyle(element); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
     const accessibleName = element => {
       const labelledBy=String(element.getAttribute('aria-labelledby')||'').split(/\\s+/).filter(Boolean).map(id=>document.getElementById(id)?.innerText||'').join(' ');
@@ -1106,14 +1288,17 @@ async function observeBrowserForModel(signal = null) {
       const label=accessibleName(element);
       const metadata=[element.type,element.name,element.id,element.autocomplete,element.getAttribute('aria-label'),label,element.placeholder].filter(Boolean).join(' ');
       if (sensitive.test(metadata)) continue;
-      const ref='b'+(++sequence);
+      const ref=${JSON.stringify(binding.prefix)}+(++sequence);
       element.setAttribute(referenceAttribute,ref);
+      bindings.set(ref,element);
       interactive.push({ ref, tag:element.tagName.toLowerCase(), type:String(element.type||''), role:implicitRole(element), label, disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true') });
       if (interactive.length>=120) break;
     }
     return { title:document.title, text:String(document.body?.innerText||'').slice(0,12000), interactive };
-  })()`, false)
+  })()`, false), { signal })
   browserOperations.assert(ticket)
+  if (activeBrowserTabId !== tabId || tab.modelObservation !== binding || tab.navigationGeneration !== binding.navigationGeneration) throw Object.assign(new Error('页面在观察期间已变化；请重新 observe。'), { code: 'browser-reference-stale' })
+  binding.refs = new Set((raw.interactive || []).map(item => item.ref).filter(ref => typeof ref === 'string' && ref.startsWith(binding.prefix)))
   const result = {
     dataPlane: 'cdp-dom',
     transport: 'authenticated-loopback-json',
@@ -1127,11 +1312,20 @@ async function observeBrowserForModel(signal = null) {
   return result
 }
 
+function assertBrowserReference(view, ref) {
+  const tab = browserTabs.get(activeBrowserTabId)
+  const binding = tab?.modelObservation
+  const stale = () => Object.assign(new Error('浏览器元素引用已失效，请重新 observe。'), { code: 'browser-reference-stale' })
+  if (!/^b[a-f0-9]{32}_\d{1,4}$/.test(String(ref || '')) || !tab || tab.view !== view || tab.available === false || !binding?.refs.has(ref) || tab.navigationGeneration !== binding.navigationGeneration) throw stale()
+  try { browserOperations.assert(binding.ticket) } catch { throw stale() }
+  return binding
+}
+
 async function browserElementMetadata(view, ref) {
-  if (!/^b\d{1,4}$/.test(String(ref || ''))) throw new Error('浏览器元素引用无效，请重新 observe。')
-  const metadata = await view.webContents.executeJavaScript(`(() => {
-    const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(ref))}]');
-    if(!element) return null;
+  const binding = assertBrowserReference(view, ref)
+  const metadata = await runBrowserRefScript(view, `(() => {
+    const element=globalThis.__HARNESS_BROWSER_REFS__?.get(${JSON.stringify(String(ref))});
+    if(!element?.isConnected || document.querySelector('[data-hd-model-ref=${JSON.stringify(String(ref))}]')!==element) return null;
     const label=element.labels?.[0]?.innerText||element.getAttribute('aria-label')||element.placeholder||'';
     const text=String(element.innerText||element.textContent||'').trim().slice(0,300);
     const rect=element.getBoundingClientRect();
@@ -1140,23 +1334,113 @@ async function browserElementMetadata(view, ref) {
     const formAction=submit&&form?String(element.formAction||form.action||''):'';
     return { tag:element.tagName.toLowerCase(),type:String(element.type||''),name:String(element.name||''),id:String(element.id||''),role:String(element.getAttribute('role')||''),autocomplete:String(element.autocomplete||''),ariaLabel:String(element.getAttribute('aria-label')||''),label:String(label),baseUrl:location.origin,text,href:String(element.href||''),formAction,download:Boolean(element.hasAttribute('download')),downloadName:String(element.getAttribute('download')||''),submit,disabled:Boolean(element.disabled||element.getAttribute('aria-disabled')==='true'),x:Math.round(rect.left+rect.width/2),y:Math.round(rect.top+rect.height/2) };
   })()`, false)
-  if (!metadata || !view.webContents.debugger.isAttached()) return metadata
-  try {
-    const documentNode = await view.webContents.debugger.sendCommand('DOM.getDocument', { depth: 0, pierce: true })
-    const selected = await view.webContents.debugger.sendCommand('DOM.querySelector', { nodeId: documentNode.root.nodeId, selector: `[data-hd-model-ref="${String(ref)}"]` })
-    if (!selected.nodeId) return null
-    const described = await view.webContents.debugger.sendCommand('DOM.describeNode', { nodeId: selected.nodeId })
-    return { ...metadata, backendNodeId: described.node.backendNodeId }
-  } catch {
-    return null
-  }
+  if (assertBrowserReference(view, ref) !== binding || !metadata) throw Object.assign(new Error('浏览器元素引用已失效，请重新 observe。'), { code: 'browser-reference-stale' })
+  // Confirmation identity only; this selector is never used to resolve a node.
+  // CDP attribute re-selection here could bind a replacement after an await.
+  // All ref effects, including upload, retain the isolated-world Element.
+  return { ...metadata, selector: `opaque-ref:${String(ref)}` }
 }
 
 function authorizeBrowserRead(origin, tabId, tag = 'document') {
   return browserSecurityPolicy.modelAction({ action: 'read', tabId, declaredOrigin: origin, field: { baseUrl: origin, tag }, payload: {} })
 }
 
-async function captureBrowserForModel(view, parameters) {
+function browserReadonlyAssertion(view, tabId, ticket) {
+  const tab = browserTabs.get(tabId)
+  const contents = view.webContents
+  const generation = tab?.navigationGeneration
+  const url = contents.getURL()
+  const policy = browserSecurityPolicy
+  return () => {
+    browserOperations.assert(ticket)
+    requireSharedComputerUseForBrowser({ requestAuthorization: false })
+    if (browserSecurityPolicy !== policy || policy?.isModelStopped) throw Object.assign(new Error('浏览器模型控制已停止。'), { code: 'stopped' })
+    if (browserTabs.get(tabId) !== tab || tab?.available === false || activeBrowserTabId !== tabId || browserView !== view || contents.isDestroyed()) throw Object.assign(new Error('读取期间活动标签已变化或失效，请重新观察。'), { code: 'tab-unavailable' })
+    if (tab.navigationGeneration !== generation || contents.getURL() !== url) throw Object.assign(new Error('读取期间页面已导航，本次结果已丢弃，请重新 observe。'), { code: 'browser-reference-stale' })
+  }
+}
+
+// Electron 43 CopyFromSurface rejects with UnknownVizError when the native
+// compositor has no usable surface. This is not a tool-card/Viz schema error.
+// One fixed CDP fallback captures the same viewport/crop without showing a view,
+// navigating, seeking again, or changing shared authorization.
+async function captureBrowserSurfaceForModel(view, rect, assertCurrent = () => {}) {
+  assertCurrent()
+  let nativeFailure = ''
+  const fail = () => Object.assign(new Error(`浏览器合成器未能取得画面（${nativeFailure}）；本次未返回图像。可继续 mediaInfo/observe 读取结构化信息；不要重复授权或循环重试截图。`), { code: 'browser-capture-unavailable', captureEngine: 'cdp-surface', nativeFailure })
+  // Inspect visible crop text/fields before and after EVERY capture await,
+  // including native success. Use existing Host value detectors, not keywords
+  // over ordinary prose; off-crop and unrendered text is not capture content.
+  // Capture a
+  // fixed viewport, then crop ONLY in Host memory using the actual PNG scale.
+  // No full-viewport bytes leave this function for a media crop. Avoid ambiguous
+  // document-vs-viewport CDP clip units; no emulation/visibility changes.
+  const inspectViewport = `(() => {
+    const crop=${JSON.stringify(rect || null)}||{x:0,y:0,width:innerWidth,height:innerHeight};
+    const sensitive=/(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc|account|username|账号|账户|支付|bank)/i;
+    const blocked=[...document.querySelectorAll('input,textarea,select,[contenteditable="true"]')].some(element=>{const r=element.getBoundingClientRect();const s=getComputedStyle(element);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'&&r.left<crop.x+crop.width&&r.right>crop.x&&r.top<crop.y+crop.height&&r.bottom>crop.y&&sensitive.test([element.type,element.name,element.id,element.autocomplete,element.getAttribute('aria-label'),element.placeholder].filter(Boolean).join(' '))});
+    const intersects=r=>r.width>0&&r.height>0&&r.left<crop.x+crop.width&&r.right>crop.x&&r.top<crop.y+crop.height&&r.bottom>crop.y;
+    const walker=document.createTreeWalker(document.body||document.documentElement,NodeFilter.SHOW_TEXT);
+    const range=document.createRange();let node,text='',visited=0,incomplete=false;
+    while((node=walker.nextNode())){
+      if(++visited>5000){incomplete=true;break}
+      const parent=node.parentElement;
+      if(!parent||!node.textContent.trim()||parent.closest('script,style,template,noscript')||!parent.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))continue;
+      range.selectNodeContents(node);
+      if(![...range.getClientRects()].some(intersects))continue;
+      if(text.length+node.textContent.length+1>12000){incomplete=true;break}
+      text+=node.textContent+'\\n';
+    }
+    return {blocked,text,incomplete,x:crop.x,y:crop.y,width:crop.width,height:crop.height,viewportWidth:innerWidth,viewportHeight:innerHeight,scrollX,scrollY};
+  })()`
+  const inspectSafety = async () => {
+    const sample = await view.webContents.executeJavaScript(inspectViewport, false)
+    assertCurrent()
+    if (sample?.blocked || isSensitiveText(sample?.text || '') || redactSensitiveText(sample?.text || '').types.length) throw Object.assign(new Error('截图区域出现敏感输入或敏感内容，本次画面已丢弃。'), { code: 'sensitive-screenshot-blocked' })
+    if (sample?.incomplete) throw Object.assign(new Error('当前可见内容超过有界截图检查范围，本次未返回画面；请使用结构化读取。'), { code: 'browser-capture-inspection-limit' })
+    return sample
+  }
+  const assertViewport = sample => {
+    if (!sample || ['viewportWidth','viewportHeight','scrollX','scrollY'].some(key => sample[key] !== viewport[key])) throw Object.assign(new Error('截图期间视口或滚动位置变化，本次画面已丢弃，请重新观察。'), { code: 'browser-reference-stale' })
+  }
+  const viewport = await inspectSafety()
+  if (!viewport || ![viewport.x,viewport.y,viewport.width,viewport.height,viewport.viewportWidth,viewport.viewportHeight].every(Number.isFinite) || viewport.width < 2 || viewport.height < 2 || viewport.x < 0 || viewport.y < 0 || viewport.x + viewport.width > viewport.viewportWidth || viewport.y + viewport.height > viewport.viewportHeight || viewport.viewportWidth * viewport.viewportHeight > 16_000_000) throw fail()
+  let nativeCapture
+  try {
+    nativeCapture = await runBrowserOperation(() => view.webContents.capturePage(rect, { stayHidden: true, stayAwake: true }), { timeoutMs: 2000, timeoutCode: 'browser-native-capture-timeout', timeoutMessage: 'Timeout' })
+  } catch (error) {
+    assertCurrent() // Stop/navigation always wins over compositor recovery.
+    if (!/^(?:UnknownVizError|VizSentEmptyBitmap|Current display surface not available for capture|Frame Gone|Timeout)$/i.test(String(error?.message))) throw error
+    nativeFailure = String(error.message).slice(0,100)
+  }
+  assertCurrent()
+  assertViewport(await inspectSafety())
+  if (nativeCapture && !nativeCapture.isEmpty()) return { image: nativeCapture, captureEngine: 'native-surface' }
+  nativeFailure ||= 'empty-native-image'
+  if (!view.webContents.debugger?.isAttached?.()) throw fail()
+  let capture
+  try {
+    capture = await runBrowserOperation(() => view.webContents.debugger.sendCommand('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }), { timeoutMs: 2000 })
+  } catch { assertCurrent(); throw fail() }
+  assertCurrent()
+  assertViewport(await inspectSafety())
+  if (typeof capture?.data !== 'string' || capture.data.length > 32_000_000 || !/^[A-Za-z0-9+/=]+$/.test(capture.data)) throw fail()
+  let image = nativeImage.createFromBuffer(Buffer.from(capture.data, 'base64'))
+  if (image.isEmpty()) throw fail()
+  if (rect) {
+    const size = image.getSize()
+    const sx = size.width / viewport.viewportWidth, sy = size.height / viewport.viewportHeight
+    const x = Math.round(viewport.x * sx), y = Math.round(viewport.y * sy)
+    const width = Math.round((viewport.x + viewport.width) * sx) - x
+    const height = Math.round((viewport.y + viewport.height) * sy) - y
+    if (width < 2 || height < 2) throw fail()
+    image = image.crop({ x, y, width, height })
+    if (image.isEmpty()) throw fail()
+  }
+  return { image, captureEngine: 'cdp-surface', nativeFailure }
+}
+
+async function captureBrowserForModel(view, parameters, assertCurrent = () => {}) {
   const preflight = await view.webContents.executeJavaScript(`(() => {
     const sensitive=/(?:pass(?:word|wd)?|pwd|secret|token|cookie|authorization|otp|captcha|verification|验证码|银行卡|card.?number|cvv|cvc)/i;
     const visible=element=>{const rect=element.getBoundingClientRect();const style=getComputedStyle(element);return rect.width>0&&rect.height>0&&style.display!=='none'&&style.visibility!=='hidden'};
@@ -1167,12 +1451,12 @@ async function captureBrowserForModel(view, parameters) {
   if (preflight?.sensitiveField || highRisk.length || isSensitiveText(preflight?.text || '')) {
     throw Object.assign(new Error('当前可见页面包含密码、验证码、令牌、支付或账号类敏感内容，模型截图已阻止，请由用户亲自查看。'), { code: 'sensitive-screenshot-blocked' })
   }
-  const image = await view.webContents.capturePage()
+  const { image, ...captureMetadata } = await captureBrowserSurfaceForModel(view, undefined, assertCurrent)
   const maxWidth = Math.max(320, Math.min(1600, Math.floor(Number(parameters.max_width) || 1200)))
   const sourceSize = image.getSize()
   const scaled = sourceSize.width > maxWidth ? image.resize({ width: maxWidth, quality: 'good' }) : image
   const size = scaled.getSize()
-  return { image: scaled.toDataURL(), mime: 'image/png', width: size.width, height: size.height }
+  return { ...captureMetadata, image: scaled.toDataURL(), mime: 'image/png', width: size.width, height: size.height }
 }
 
 async function inspectBrowserMediaForModel(view, parameters = {}) {
@@ -1183,19 +1467,26 @@ async function inspectBrowserMediaForModel(view, parameters = {}) {
     const requested=${requestedIndex};
     let selected=requested>=0&&requested<videos.length?requested:-1;
     if(selected<0&&videos.length)selected=videos.map((video,index)=>({index,area:(()=>{const rect=video.getBoundingClientRect();return rect.width*rect.height})()})).sort((a,b)=>b.area-a.area)[0].index;
-    const describe=(video,index)=>{const rect=video.getBoundingClientRect();const cues=[...video.textTracks].flatMap(track=>[...(track.activeCues||[])].map(cue=>String(cue.text||'').replace(/\\s+/g,' ').trim())).filter(Boolean).slice(0,20);return {index,selected:index===selected,currentTime:Number.isFinite(video.currentTime)?video.currentTime:null,duration:Number.isFinite(video.duration)?video.duration:null,paused:Boolean(video.paused),ended:Boolean(video.ended),muted:Boolean(video.muted),volume:Number(video.volume),playbackRate:Number(video.playbackRate),readyState:Number(video.readyState),networkState:Number(video.networkState),videoWidth:Number(video.videoWidth),videoHeight:Number(video.videoHeight),rect:{x:Math.round(rect.left),y:Math.round(rect.top),width:Math.round(rect.width),height:Math.round(rect.height)},source:String(video.currentSrc||video.src||''),poster:String(video.poster||''),tracks:[...video.textTracks].slice(0,20).map(track=>({kind:String(track.kind||''),label:String(track.label||'').slice(0,120),language:String(track.language||'').slice(0,40),mode:String(track.mode||'')})),activeCues:cues};};
+    let cueBudget=20000;
+    const cueText=cue=>{const text=String(cue.text||'').slice(0,Math.min(1000,cueBudget)).replace(/\\s+/g,' ').trim();cueBudget-=text.length;return text};
+    const describe=(video,index)=>{const rect=video.getBoundingClientRect();const tracks=Array.from(video.textTracks).slice(0,20);const cues=tracks.flatMap(track=>Array.from(track.activeCues||[]).slice(0,20).map(cueText)).filter(Boolean).slice(0,20);return {index,selected:index===selected,currentTime:Number.isFinite(video.currentTime)?video.currentTime:null,duration:Number.isFinite(video.duration)?video.duration:null,paused:Boolean(video.paused),ended:Boolean(video.ended),muted:Boolean(video.muted),volume:Number(video.volume),playbackRate:Number(video.playbackRate),readyState:Number(video.readyState),networkState:Number(video.networkState),videoWidth:Number(video.videoWidth),videoHeight:Number(video.videoHeight),rect:{x:Math.round(rect.left),y:Math.round(rect.top),width:Math.round(rect.width),height:Math.round(rect.height)},source:String(video.currentSrc||video.src||''),poster:String(video.poster||''),sources:Array.from(video.querySelectorAll(':scope > source')).slice(0,20).map(node=>({source:String(node.src||''),type:String(node.type||'').slice(0,120)})),tracks:tracks.map(track=>{const node=Array.from(video.querySelectorAll(':scope > track')).find(node=>node.track===track);return {kind:String(track.kind||''),label:String(track.label||'').slice(0,120),language:String(track.language||'').slice(0,40),mode:String(track.mode||''),source:String(node?.src||''),readyState:node?Number(node.readyState):null,cueCount:track.cues?track.cues.length:null,cuesUnavailable:track.cues==null,cuePreview:Array.from(track.cues||[]).slice(0,5).map(cue=>({startTime:Number(cue.startTime),endTime:Number(cue.endTime),text:cueText(cue)}))}}),activeCues:cues};};
     const overlays=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],dialog,.modal,.popup,.login-mask,.login-modal')].filter(visible).slice(0,12).map(node=>({role:String(node.getAttribute('role')||node.tagName.toLowerCase()),label:String(node.getAttribute('aria-label')||node.querySelector('h1,h2,h3')?.textContent||'').replace(/\\s+/g,' ').trim().slice(0,160),text:String(node.innerText||'').replace(/\\s+/g,' ').trim().slice(0,400)}));
     return {count:videos.length,selectedIndex:selected,videos:videos.map(describe),overlays};
   })()`, false)
   return {
     count: Number(result?.count) || 0,
     selectedIndex: Number.isInteger(result?.selectedIndex) ? result.selectedIndex : -1,
-    videos: Array.isArray(result?.videos) ? result.videos.map(video => ({ ...video, source: safeBrowserDiagnosticUrl(video.source), poster: safeBrowserDiagnosticUrl(video.poster) })) : [],
-    overlays: Array.isArray(result?.overlays) ? result.overlays : []
+    videos: Array.isArray(result?.videos) ? result.videos.map(video => ({
+      ...video, source: safeBrowserDiagnosticUrl(video.source), poster: safeBrowserDiagnosticUrl(video.poster),
+      sources: (video.sources || []).map(source => ({ source: safeBrowserDiagnosticUrl(source.source), type: safeBrowserText(source.type,120) })),
+      tracks: (video.tracks || []).map(track => ({ ...track, source: safeBrowserDiagnosticUrl(track.source), kind: safeBrowserText(track.kind,40), label: safeBrowserText(track.label,120), language: safeBrowserText(track.language,40), mode: safeBrowserText(track.mode,40), cuePreview: (track.cuePreview || []).map(cue => ({ ...cue, text: safeBrowserText(cue.text,1000) })) })),
+      activeCues: (video.activeCues || []).map(text => safeBrowserText(text,1000))
+    })) : [],
+    overlays: Array.isArray(result?.overlays) ? result.overlays.map(overlay => ({ role: safeBrowserText(overlay.role,40), label: safeBrowserText(overlay.label,160), text: safeBrowserText(overlay.text,400) })) : []
   }
 }
 
-async function captureBrowserMediaFrameForModel(view, parameters = {}) {
+async function captureBrowserMediaFrameForModel(view, parameters = {}, assertCurrent = () => {}) {
   const requestedIndex = Number.isSafeInteger(Number(parameters.media_index)) ? Math.max(0, Math.floor(Number(parameters.media_index))) : -1
   const requestedTime = Number(parameters.time_seconds)
   const hasRequestedTime = Number.isFinite(requestedTime) && requestedTime >= 0
@@ -1224,12 +1515,12 @@ async function captureBrowserMediaFrameForModel(view, parameters = {}) {
   if (preflight?.intersectsSensitive) throw Object.assign(new Error('视频画面被密码、验证码或账号类敏感输入区域覆盖；请先让用户或已识别的关闭按钮移除遮罩。'), { code: 'sensitive-screenshot-blocked' })
   const rect = preflight?.rect
   if (!rect || rect.width < 2 || rect.height < 2) throw Object.assign(new Error('视频播放器当前不可见或尺寸无效。'), { code: 'media-unavailable' })
-  const image = await view.webContents.capturePage(rect)
+  const { image, ...captureMetadata } = await captureBrowserSurfaceForModel(view, rect, assertCurrent)
   const maxWidth = Math.max(320, Math.min(1600, Math.floor(Number(parameters.max_width) || 1200)))
   const sourceSize = image.getSize()
   const scaled = sourceSize.width > maxWidth ? image.resize({ width: maxWidth, quality: 'good' }) : image
   const size = scaled.getSize()
-  return { ...preflight, image: scaled.toDataURL(), mime: 'image/png', width: size.width, height: size.height }
+  return { ...preflight, ...captureMetadata, activeCues: (preflight.activeCues || []).map(text => safeBrowserText(text,1000)), image: scaled.toDataURL(), mime: 'image/png', width: size.width, height: size.height }
 }
 
 async function browserDomDiagnostics(view) {
@@ -1246,13 +1537,13 @@ async function browserDomDiagnostics(view) {
 async function extractBrowserData(view, { mode = 'text', maxItems = 100, ref = '' } = {}) {
   const allowedModes = new Set(['text', 'links', 'tables'])
   if (!allowedModes.has(mode)) throw new Error('extract_mode 仅支持 text、links 或 tables。')
-  if (ref && !/^b\d{1,4}$/.test(ref)) throw new Error('抓取范围引用无效，请重新 observe。')
-  const raw = await view.webContents.executeJavaScript(`(() => {
+  if (ref) assertBrowserReference(view, ref)
+  const raw = await runBrowserRefScript(view, `(() => {
     const mode=${JSON.stringify(mode)};
     const maximum=${Math.max(1, Math.min(200, maxItems))};
     const requestedRef=${JSON.stringify(ref)};
-    const root=requestedRef?document.querySelector('[data-hd-model-ref="'+requestedRef+'"]'):document;
-    if(!root)return {missingRef:true,items:[],truncated:false};
+    const root=requestedRef?globalThis.__HARNESS_BROWSER_REFS__?.get(requestedRef):document;
+    if(!root || (requestedRef && !root.isConnected))return {missingRef:true,items:[],truncated:false};
     const visible=node=>{if(!(node instanceof Element))return false;const style=getComputedStyle(node);const rect=node.getBoundingClientRect();return style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity||1)>0&&rect.width>0&&rect.height>0};
     const text=node=>String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim();
     let candidates=[];
@@ -1267,12 +1558,14 @@ async function extractBrowserData(view, { mode = 'text', maxItems = 100, ref = '
     }
     return {missingRef:false,items:candidates.slice(0,maximum),truncated:candidates.length>maximum,totalCandidates:candidates.length};
   })()`, false)
-  if (raw?.missingRef) throw new Error('抓取范围已失效，请重新 observe。')
+  if (ref) assertBrowserReference(view, ref)
+  if (raw?.missingRef) throw Object.assign(new Error('抓取范围已失效，请重新 observe。'), { code: 'browser-reference-stale' })
+  const safeRef = value => { try { assertBrowserReference(view, value); return value } catch { return '' } }
   const safeItems = mode === 'links'
-    ? (raw.items || []).map(item => ({ text: safeBrowserText(item.text, 500), url: safeBrowserDiagnosticUrl(item.url), ref: /^b\d{1,4}$/.test(item.ref) ? item.ref : '', rel: safeBrowserText(item.rel, 120) }))
+    ? (raw.items || []).map(item => ({ text: safeBrowserText(item.text, 500), url: safeBrowserDiagnosticUrl(item.url), ref: safeRef(item.ref), rel: safeBrowserText(item.rel, 120) }))
     : mode === 'tables'
       ? (raw.items || []).map(item => ({ caption: safeBrowserText(item.caption, 300), headers: (item.headers || []).map(cell => safeBrowserText(cell, 500)), rows: (item.rows || []).map(row => row.map(cell => safeBrowserText(cell, 500))) }))
-      : (raw.items || []).map(item => ({ tag: safeBrowserText(item.tag, 20), text: safeBrowserText(item.text, 2000), ref: /^b\d{1,4}$/.test(item.ref) ? item.ref : '' }))
+      : (raw.items || []).map(item => ({ tag: safeBrowserText(item.tag, 20), text: safeBrowserText(item.text, 2000), ref: safeRef(item.ref) }))
   return { mode, items: safeItems, count: safeItems.length, totalCandidates: Math.max(safeItems.length, Number(raw?.totalCandidates) || 0), truncated: Boolean(raw?.truncated), bounded: true }
 }
 
@@ -1319,7 +1612,10 @@ function assertBrowserTransferBinding(view, binding, ticket, requiredAction) {
   try { currentOrigin = new URL(view.webContents.getURL()).origin } catch {}
   const authorized = browserSecurityPolicy?.effectiveAuthorizations?.().authorized(binding.origin, requiredAction) === true
   if (currentOrigin !== binding.origin || browserSecurityPolicy?.isModelStopped === true || !authorized) throw new Error('操作期间页面来源、模型控制状态或浏览器授权已变化，传输已取消。')
-  if (requiredAction === 'upload' && !view.webContents.debugger.isAttached()) throw new Error('文件选择期间固定浏览器控制通道已关闭，上传已取消。')
+  if (requiredAction === 'upload') {
+    if (!view.webContents.debugger.isAttached()) throw new Error('文件选择期间固定浏览器控制通道已关闭，上传已取消。')
+    assertBrowserReference(view, binding.ref)
+  }
 }
 
 async function downloadBrowserResource(view, targetUrl, destinationPath, maxBytes, binding, ticket) {
@@ -1432,26 +1728,26 @@ async function uploadBrowserFileInteractively(view, binding, ticket) {
   const extension = path.extname(selectedPath).toLowerCase()
   const mediaTypes = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.pdf': 'application/pdf', '.json': 'application/json', '.txt': 'text/plain', '.csv': 'text/csv', '.zip': 'application/zip' }
   const mediaType = mediaTypes[extension] || 'application/octet-stream'
-  const resolved = await view.webContents.debugger.sendCommand('DOM.resolveNode', { backendNodeId: binding.backendNodeId })
-  const objectId = resolved?.object?.objectId
-  if (!objectId) throw new Error('文件选择控件已失效，请重新 observe 后再试。')
   let uploaded = false
   await withBrowserTransferLock(async () => {
     assertBrowserTransferBinding(view, binding, ticket, 'upload')
-    try {
-      const called = await view.webContents.debugger.sendCommand('Runtime.callFunctionOn', {
-        objectId,
-        functionDeclaration: `function(base64,name,mediaType){if(!(this instanceof HTMLInputElement)||this.type!=='file'||!this.isConnected)return false;const binary=atob(base64);const bytes=new Uint8Array(binary.length);for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);const transfer=new DataTransfer();transfer.items.add(new File([bytes],name,{type:mediaType}));this.files=transfer.files;this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));return true}`,
-        arguments: [{ value: data.toString('base64') }, { value: path.basename(selectedPath) }, { value: mediaType }],
-        returnByValue: true,
-        awaitPromise: false
-      })
-      uploaded = called?.result?.value === true && !called?.exceptionDetails
-    } finally {
-      await view.webContents.debugger.sendCommand('Runtime.releaseObject', { objectId }).catch(() => {})
-    }
+    // Resolve the original Element and validate/assign synchronously in its
+    // isolated world. No selector->CDP await gap and no replacement-node fallback.
+    uploaded = await runBrowserRefScript(view, `(() => {
+      const element=globalThis.__HARNESS_BROWSER_REFS__?.get(${JSON.stringify(binding.ref)});
+      if(!(element instanceof HTMLInputElement)||element.type!=='file'||!element.isConnected||element.disabled)return false;
+      const binary=atob(${JSON.stringify(data.toString('base64'))});
+      const bytes=new Uint8Array(binary.length);
+      for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+      const transfer=new DataTransfer();
+      transfer.items.add(new File([bytes],${JSON.stringify(path.basename(selectedPath))},{type:${JSON.stringify(mediaType)}}));
+      element.files=transfer.files;
+      element.dispatchEvent(new Event('input',{bubbles:true}));
+      element.dispatchEvent(new Event('change',{bubbles:true}));
+      return true;
+    })()`)
   })
-  if (!uploaded) throw new Error('文件选择控件已失效，请重新 observe 后再试。')
+  if (uploaded !== true) throw Object.assign(new Error('文件选择控件已失效，请重新 observe 后再试。'), { code: 'browser-reference-stale' })
   return { uploaded: true, bytes: data.length, userSelected: true }
 }
 
@@ -1483,13 +1779,15 @@ async function modelBrowserAction(input = {}, context = {}) {
     const visible = browserSidebarVisible && browserContentVisible
     const activeTab = browserTabs.get(activeBrowserTabId)
     const contents = liveBrowserContents()
-    const ready = Boolean(contents && activeTab?.available !== false)
+    const ready = Boolean(contents && activeTab?.available !== false && /^https?:/i.test(contents.getURL()))
+    const recovery = browserRecoveryState()
     const pendingConfirmations = browserSecurityPolicy?.pendingConfirmations() || []
     return {
       available: Boolean(mainWindow && !mainWindow.isDestroyed()),
       ready,
       visible,
-      surface: ready ? visible ? 'visible' : 'background' : contents ? 'unavailable' : 'not-started',
+      recovery,
+      surface: contents && activeTab?.available !== false ? visible ? 'visible' : 'background' : activeBrowserTabId ? 'unavailable' : 'not-started',
       tabAvailable: activeTab?.available !== false && Boolean(contents),
       attentionRequired: pendingConfirmations.length > 0,
       pendingConfirmationCount: pendingConfirmations.length,
@@ -1502,7 +1800,7 @@ async function modelBrowserAction(input = {}, context = {}) {
       activationRequired: control.activationRequired,
       actions: effectiveActions,
       activeTabId: activeBrowserTabId,
-      tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId, available: tab.available !== false && !tab.view.webContents.isDestroyed() })),
+      tabs: browserTabSnapshots({ model: true }),
       downloads: browserDownloads.map(item => ({ id: item.id, receivedBytes: item.receivedBytes, totalBytes: item.totalBytes, state: item.state, modelInitiated: Boolean(item.modelInitiated) })),
       dialog: { available: browserTabs.get(activeBrowserTabId)?.dialogControl === true, pending: browserDialogs.has(activeBrowserTabId), type: browserDialogs.get(activeBrowserTabId)?.type || null },
       viewport: { width: bounds.width, height: bounds.height },
@@ -1526,9 +1824,32 @@ async function modelBrowserAction(input = {}, context = {}) {
     return { stopped: true, sharedControl: true, message: '浏览器控制与内置 Computer Use 的当前控制会话已停止；网页仍由用户直接控制。' }
   }
   requireSharedComputerUseForBrowser({ requestAuthorization: true })
+  if (browserSecurityPolicy?.isModelStopped) throw Object.assign(new Error('浏览器模型控制已停止。'), { code: 'stopped' })
+  if (action === 'tabList') {
+    browserOperations.modelTicket(context.signal)
+    return { activeTabId: activeBrowserTabId, tabs: browserTabSnapshots({ model: true }) }
+  }
+  // Tab recovery is independent of the broken source document. Validate the
+  // destination against stored private-origin policy BEFORE changing active tab.
+  if (action === 'tabSwitch') {
+    const ticket = browserOperations.modelTicket(context.signal)
+    const targetId = String(parameters.tab_id || '')
+    const target = browserTabs.get(targetId)
+    if (!target || target.available === false || target.view.webContents.isDestroyed()) throw Object.assign(new Error('目标标签不存在或已失效。'), { code: 'tab-unavailable' })
+    const targetUrl = target.view.webContents.getURL()
+    checkModelNavigation(targetUrl, { allowPublicOrigins: true, authorizedOrigins: browserSecurityPolicy.authz.origins(), authorizedPrivateOrigins: browserSecurityPolicy.authz.privateOrigins() })
+    browserOperations.assert(ticket)
+    markBrowserModelNavigation(targetId, 'tab-switch')
+    await switchBrowserTab(targetId)
+    browserOperations.assert(ticket)
+    return { switched: true, activeTabId: targetId, url: safeBrowserDiagnosticUrl(targetUrl) }
+  }
   if (action === 'observe') return observeBrowserForModel(context.signal)
   const allowBlankNavigation = action === 'navigate' || action === 'tabOpen'
   const { view, url, origin, tabId, ticket } = requireBrowserForModel(context.signal, { allowBlankNavigation })
+  const boundedReadonly = ['screenshot', 'mediaInfo', 'mediaFrame'].includes(action)
+    || (action === 'playwright' && ['domSnapshot', 'count', 'isVisible', 'isEnabled', 'innerText', 'textContent', 'getAttribute'].includes(parameters.operation))
+  const assertReadonly = boundedReadonly ? browserReadonlyAssertion(view, tabId, ticket) : () => browserOperations.assert(ticket)
   if (action === 'playwright') {
     return runBrowserPlaywrightOperation({
       webContents: view.webContents,
@@ -1537,7 +1858,7 @@ async function modelBrowserAction(input = {}, context = {}) {
       tabId,
       securityPolicy: browserSecurityPolicy,
       confirmationId: parameters.confirmation_id,
-      assertCurrent: () => browserOperations.assert(ticket),
+      assertCurrent: assertReadonly,
       markAction: operation => markBrowserModelNavigation(tabId, operation),
       beginInput: operation => browserNavigationLane(tabId)?.beginModelInput(operation) || (() => {}),
       surfaceConfirmation: surfacePendingBrowserConfirmation,
@@ -1547,20 +1868,20 @@ async function modelBrowserAction(input = {}, context = {}) {
   markBrowserModelNavigation(tabId, action || 'unknown-action')
   if (action === 'screenshot') {
     authorizeBrowserRead(origin, tabId)
-    const result = await captureBrowserForModel(view, parameters)
-    browserOperations.assert(ticket)
+    const result = await captureBrowserForModel(view, parameters, assertReadonly)
+    assertReadonly()
     return result
   }
   if (action === 'mediaInfo') {
     authorizeBrowserRead(origin, tabId, 'video')
     const result = await inspectBrowserMediaForModel(view, parameters)
-    browserOperations.assert(ticket)
+    assertReadonly()
     return result
   }
   if (action === 'mediaFrame') {
     authorizeBrowserRead(origin, tabId, 'video')
-    const result = await captureBrowserMediaFrameForModel(view, parameters)
-    browserOperations.assert(ticket)
+    const result = await captureBrowserMediaFrameForModel(view, parameters, assertReadonly)
+    assertReadonly()
     return result
   }
   if (action === 'inspect') {
@@ -1597,42 +1918,23 @@ async function modelBrowserAction(input = {}, context = {}) {
     browserOperations.assert(ticket)
     return { waited: true, timeoutMs, loading: view.webContents.isLoading() }
   }
-  if (action === 'tabList') {
-    authorizeBrowserRead(origin, tabId)
-    return { activeTabId, tabs: [...browserTabs.entries()].map(([id, tab]) => ({ id, title: safeBrowserText(tab.view.webContents.getTitle(), 160), url: safeBrowserDiagnosticUrl(tab.view.webContents.getURL()), active: id === activeBrowserTabId, available: tab.available !== false && !tab.view.webContents.isDestroyed() })) }
-  }
   if (action === 'tabOpen') {
     const target = String(parameters.url || '').trim()
     if (!target) throw new Error('模型新建标签页必须提供 HTTP(S) 地址。')
     if (!origin) {
-      const created = await createBrowserTab()
+      // requireBrowserForModel already created the cold-start blank tab. Reuse
+      // it rather than creating a second empty tab before validating the URL.
+      const nav = browserSecurityPolicy.modelBootstrapNavigate(target, { tabId, currentUrl: url, visible: browserSidebarVisible && browserContentVisible, available: true, trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins() })
+      markBrowserModelNavigation(tabId, 'tab-open')
+      await runBrowserOperation(() => view.webContents.loadURL(nav.normalized), { signal: context.signal, timeoutCode: 'browser-outcome-unknown' })
       browserOperations.assert(ticket)
-      const nextView = browserView
-      const nextTabId = created.activeTabId
-      const currentUrl = nextView.webContents.getURL()
-      const nav = browserSecurityPolicy.modelBootstrapNavigate(target, { tabId: nextTabId, currentUrl, visible: browserSidebarVisible && browserContentVisible, available: true, trustedPrivateOrigins: browserModelBootstrapTrustedPrivateOrigins() })
-      markBrowserModelNavigation(nextTabId, 'tab-open')
-      await nextView.webContents.loadURL(nav.normalized)
-      browserOperations.assert(ticket)
-      return { created: true, activeTabId: nextTabId, url: nav.normalized }
+      return { created: true, reusedBlank: true, activeTabId: tabId, url: nav.normalized }
     }
     const nav = browserSecurityPolicy.modelNavigate(target, { tabId, base: url })
     browserOperations.assert(ticket)
     const created = await createBrowserTab('', { modelNavigation: nav })
     browserOperations.assert(ticket)
     return { created: true, activeTabId: created.activeTabId, url: nav.normalized }
-  }
-  if (action === 'tabSwitch') {
-    const targetId = String(parameters.tab_id || '')
-    const target = browserTabs.get(targetId)
-    if (!target) throw new Error('浏览器标签页不存在。')
-    const targetUrl = target.view.webContents.getURL()
-    if (!/^https?:/i.test(targetUrl)) throw new Error('模型不能切换到没有 HTTP(S) 来源的标签页。')
-    browserSecurityPolicy.modelNavigate(targetUrl, { tabId, base: view.webContents.getURL() })
-    markBrowserModelNavigation(targetId, 'tab-switch')
-    await switchBrowserTab(targetId)
-    browserOperations.assert(ticket)
-    return { switched: true, activeTabId: targetId, url: targetUrl }
   }
   if (action === 'tabClose') {
     const targetId = String(parameters.tab_id || activeBrowserTabId)
@@ -1701,7 +2003,7 @@ async function modelBrowserAction(input = {}, context = {}) {
     const decision = browserSecurityPolicy.modelAction({ action: 'type', tabId, declaredOrigin: origin, field, payload: { text: value }, confirmationId: parameters.confirmation_id })
     if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
     markBrowserModelNavigation(tabId, 'select')
-    const changed = await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!(element instanceof HTMLSelectElement)) return false; const option=[...element.options].find(item=>item.value===${JSON.stringify(value)}||item.text===${JSON.stringify(value)}); if(!option) return false; element.value=option.value; element.dispatchEvent(new Event('input',{bubbles:true})); element.dispatchEvent(new Event('change',{bubbles:true})); return true; })()`, false)
+    const changed = await runBrowserRefScript(view, `(() => { const element=globalThis.__HARNESS_BROWSER_REFS__?.get(${JSON.stringify(String(parameters.ref))}); if(!element?.isConnected || !(element instanceof HTMLSelectElement) || element.disabled || element.matches?.(':disabled') || element.closest?.('[inert]')) return false; const options=[...element.options]; const wanted=${JSON.stringify(value)}; const option=options.find(item=>item.value===wanted)||options.find(item=>item.text===wanted); if(!option || option.disabled || option.closest?.('optgroup[disabled]')) return false; element.selectedIndex=options.indexOf(option); element.dispatchEvent(new Event('input',{bubbles:true})); element.dispatchEvent(new Event('change',{bubbles:true})); return true; })()`, false)
     browserOperations.assert(ticket)
     if (!changed) throw new Error('下拉选项不存在或元素已失效。')
     return { selected: true, ref: String(parameters.ref) }
@@ -1741,7 +2043,8 @@ async function modelBrowserAction(input = {}, context = {}) {
   if (action === 'upload') {
     const field = await browserElementMetadata(view, parameters.ref)
     browserOperations.assert(ticket)
-    if (!field || field.tag !== 'input' || field.type !== 'file' || !field.backendNodeId) throw new Error('upload 只能用于可验证身份的可见文件选择控件。')
+    if (!field || field.tag !== 'input' || field.type !== 'file' || field.disabled) throw new Error('upload 只能用于可验证身份的可见文件选择控件。')
+    assertBrowserReference(view, parameters.ref)
     const decision = browserSecurityPolicy.modelAction({ action: 'upload', tabId, declaredOrigin: origin, field, payload: { interactivePicker: true }, confirmationId: parameters.confirmation_id })
     if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
     const tab = browserTabs.get(tabId)
@@ -1751,7 +2054,7 @@ async function modelBrowserAction(input = {}, context = {}) {
       origin,
       url: view.webContents.getURL(),
       navigationGeneration: tab.navigationGeneration,
-      backendNodeId: field.backendNodeId
+      ref: String(parameters.ref)
     }, ticket)
   }
   if (action === 'dialog') {
@@ -1785,8 +2088,9 @@ async function modelBrowserAction(input = {}, context = {}) {
     }
     browserOperations.assert(ticket)
     markBrowserModelNavigation(tabId, 'type')
-    await view.webContents.executeJavaScript(`(() => { const element=document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]'); if(!element) return false; const setter=Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value')?.set; if(setter) setter.call(element,${JSON.stringify(String(parameters.text || ''))}); else if(element.isContentEditable) element.textContent=${JSON.stringify(String(parameters.text || ''))}; else return false; element.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'})); element.dispatchEvent(new Event('change',{bubbles:true})); element.focus(); return true; })()`, false)
+    const typed = await runBrowserRefScript(view, `(() => { const element=globalThis.__HARNESS_BROWSER_REFS__?.get(${JSON.stringify(String(parameters.ref))}); if(!element?.isConnected || element.disabled || element.readOnly || element.matches?.(':disabled') || element.closest?.('[inert]')) return false; const text=${JSON.stringify(String(parameters.text || ''))}; if(element.isContentEditable) element.textContent=text; else { const prototype=element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:element instanceof HTMLInputElement?HTMLInputElement.prototype:null; if(!prototype || (element instanceof HTMLInputElement && !['text','search','url','tel','email','password','number'].includes(element.type))) return false; const setter=Object.getOwnPropertyDescriptor(prototype,'value')?.set; if(!setter) return false; setter.call(element,text); } element.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text})); element.dispatchEvent(new Event('change',{bubbles:true})); element.focus(); return true; })()`, false)
     browserOperations.assert(ticket)
+    if (!typed) throw Object.assign(new Error('输入目标已失效；请重新 observe。'), { code: 'browser-reference-stale' })
     return { typed: true, ref: String(parameters.ref), origin }
   }
   if (field.tag === 'input' && field.type === 'file') {
@@ -1807,8 +2111,9 @@ async function modelBrowserAction(input = {}, context = {}) {
   if (!decision.allowed) return surfacePendingBrowserConfirmation(decision)
   browserOperations.assert(ticket)
   markBrowserModelNavigation(tabId, 'click')
-  await view.webContents.executeJavaScript(`document.querySelector('[data-hd-model-ref=${JSON.stringify(String(parameters.ref))}]')?.click()`, false)
+  const clicked = await runBrowserRefScript(view, `(() => { const element=globalThis.__HARNESS_BROWSER_REFS__?.get(${JSON.stringify(String(parameters.ref))}); if(!element?.isConnected) return false; element.click(); return true; })()`)
   browserOperations.assert(ticket)
+  if (!clicked) throw Object.assign(new Error('点击目标已失效；请重新 observe。'), { code: 'browser-reference-stale' })
   return { clicked: true, ref: String(parameters.ref), origin, confirmed: dangerous }
 }
 
@@ -2632,16 +2937,29 @@ async function modelComputerUseAction(input = {}) {
   }
 }
 
+let workspacePreviewBridge = null
+function ensureWorkspacePreviewBridge() {
+  if (!workspacePreviewBridge) workspacePreviewBridge = new WorkspacePreviewBridge({
+    getWindow: () => mainWindow,
+    isObscured: () => browserSidebarVisible && browserContentVisible,
+    loadFile: source => previewRightWorkspaceTarget({ target: source.path, sessionId: source.sourceSessionId, sourceKind: 'workspace-link' })
+  })
+  return workspacePreviewBridge
+}
+
 async function desktopModelToolAction(input = {}, context = {}) {
+  // File observation is not desktop input or arbitrary browser navigation.
+  if (input.scope === 'workspace') return ensureWorkspacePreviewBridge().preview(input, context)
   if (input.scope === 'computer') return modelComputerUseAction(input)
-  await syncComputerUseIndicator()
+  if (input.action !== 'status') await syncComputerUseIndicator()
+  if (context.signal?.aborted) throw Object.assign(new Error('桌面模型操作已取消。'), { code: 'browser-action-cancelled' })
   if (input.scope === 'desktop') {
     const ui = ensureWindowsDesktopUi()
     if (String(input.action || '') === 'screenshot') {
       const payload = input.payload && typeof input.payload === 'object' ? input.payload : input
       return desktopDeviceProvider.captureFrame({ force: payload.force === true, delivery: 'evidence-file' })
     }
-    return ui.action(input)
+    return ui.action(input, context)
   }
   if (input.scope === 'memory') return modelMemoryAction(input)
   return modelBrowserAction(input, context)
@@ -2653,9 +2971,35 @@ async function ensureBrowserControlServer() {
   return browserControlServer
 }
 
+function isOwnedPageSender(event, owner, page) {
+  if (!owner || owner.isDestroyed() || !event || event.sender !== owner.webContents) return false
+  const contents = owner.webContents
+  if (contents.isDestroyed() || !contents.mainFrame || event.senderFrame !== contents.mainFrame) return false
+  const expected = pathToFileURL(path.join(__dirname, '..', 'renderer', ...page)).href
+  const matchesPage = value => {
+    try { const url = new URL(value); url.search = ''; url.hash = ''; return url.href === expected } catch { return false }
+  }
+  // Revalidate both the actual page and the source frame on every call; object
+  // identity alone is not sufficient after navigation with a retained preload.
+  return matchesPage(contents.getURL()) && matchesPage(event.senderFrame.url)
+}
+
 function assertDesktopShellSender(event) {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+  if (!isOwnedPageSender(event, mainWindow, ['index.html'])) {
     throw new Error('只允许 Harness Desktop 桌面壳调用本地桌面能力。')
+  }
+}
+
+function isPetPageSender(event) {
+  return !petWindowController?.quitting && isOwnedPageSender(event, petWindowController?.window, ['pet', 'index.html'])
+}
+
+function petPageOnly(handler, allowShell = false) {
+  return (event, ...args) => {
+    if (!isPetPageSender(event) && !(allowShell && isOwnedPageSender(event, mainWindow, ['index.html']))) {
+      throw new Error('只允许桌宠或明确授权的桌面壳页面调用桌宠能力。')
+    }
+    return handler(...args)
   }
 }
 
@@ -5244,33 +5588,71 @@ function externalWebUrl(value) {
   }
 }
 
-function resolveGuestLocalTarget(value) {
-  try { return normalizeLocalTarget(value) } catch {}
-
-  let authored = String(value || '').trim()
-  if (!authored || authored.length > 4096 || /[\u0000\r\n]/u.test(authored)) return null
-  if (/^harness-desktop:/i.test(authored)) return null
-  const pairs = [['`', '`'], ['"', '"'], ["'", "'"], ['<', '>'], ['（', '）'], ['(', ')']]
-  for (const [left, right] of pairs) {
-    if (authored.startsWith(left) && authored.endsWith(right) && authored.length > left.length + right.length) {
-      authored = authored.slice(left.length, -right.length).trim()
-      break
-    }
+function rightWorkspaceFileSource(value, { allowLocal = false, allowLegacyFile = false } = {}) {
+  const bad = () => Object.assign(new Error('文件来源无效；请从来源会话重新打开，不能猜测当前项目或本机路径。'), { code: 'RIGHT_WORKSPACE_BAD_SOURCE' })
+  const object = value && typeof value === 'object' && !Array.isArray(value) ? value : null
+  const hasKind = object && Object.hasOwn(object, 'sourceKind')
+  const hasSession = object && Object.hasOwn(object, 'sessionId')
+  const hasPath = object && Object.hasOwn(object, 'path')
+  if (hasKind && object.sourceKind !== 'workspace-link') throw bad()
+  if (hasKind || hasSession || hasPath) {
+    if (!hasKind && !allowLegacyFile) throw bad()
+    const sessionId = object.sessionId
+    const target = hasKind ? object.target : object.path ?? object.target
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || sessionId.trim() !== sessionId || /[\u0000\r\n]/u.test(sessionId)) throw bad()
+    if (typeof target !== 'string' || !target || target.length > 4096 || target.trim() !== target || /[\u0000\r\n]/u.test(target)) throw bad()
+    if (Object.hasOwn(object, 'target') && Object.hasOwn(object, 'path') && object.target !== object.path) throw bad()
+    // Preserve literal percent/Unicode characters; the runtime owns exact source
+    // identity, workspace containment, existence and symlink validation.
+    return Object.freeze({ target, sessionId, ...(hasKind ? { sourceKind: 'workspace-link' } : {}), name: typeof object.name === 'string' && object.name ? object.name : path.basename(target.replace(/\\/g, '/')) })
   }
-  if (authored.startsWith('@')) authored = authored.slice(1)
-  if (!authored || /^(?:[a-z][a-z0-9+.-]*:|[?#])/i.test(authored)) return null
-  try { authored = decodeURIComponent(authored) } catch {}
-  if (/^(?:[a-z][a-z0-9+.-]*:|[?#])/i.test(authored)) return null
-  authored = authored.replace(/(?:#L\d+(?:C\d+)?|:\d+(?::\d+)?)$/i, '')
-  if (!authored || authored.includes(':')) return null
+  if (!allowLocal) throw bad()
+  const authored = object ? object.target : value
+  if (typeof authored !== 'string') throw bad()
+  const target = normalizeLocalTarget(path.isAbsolute(authored) ? pathToFileURL(authored).href : authored)
+  return Object.freeze({ target: target.path, local: true })
+}
 
-  // Relative targets are project links, never ambient process paths. Resolve
-  // them against the managed workspace and reject every traversal outside it.
-  const root = path.resolve(desktopRuntimePaths().workspace)
-  const resolved = path.resolve(root, authored)
-  const relative = path.relative(root, resolved)
-  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null
-  return { path: resolved, line: null, column: null }
+function resolveGuestLocalTarget(value) {
+  // A guest link is always source-bound, even when it spells an absolute path.
+  // Never resolve against desktopRuntimePaths().workspace or normalize it locally.
+  if (!value || value.sourceKind !== 'workspace-link') return null
+  try { return rightWorkspaceFileSource(value) } catch { return null }
+}
+
+async function previewRightWorkspaceTarget(value) {
+  const source = rightWorkspaceFileSource(value, { allowLocal: true })
+  if (source.local) return { file: await previewLocalDocument(source.target, { realpathImpl: realpath, statImpl: stat, openImpl: open }) }
+  return loadRightWorkspaceResource({
+    runtimeUrl: runtimeState.status === 'ready' ? runtimeState.url : null,
+    kind: 'filePreview', sessionId: source.sessionId, path: source.target, fetchImpl: runtimeApiFetch
+  })
+}
+
+async function openRightWorkspaceTarget(value, reveal = false) {
+  const source = rightWorkspaceFileSource(value, { allowLegacyFile: true })
+  const file = await materializeRightWorkspaceFile({
+    runtimeUrl: runtimeState.status === 'ready' ? runtimeState.url : null,
+    sessionId: source.sessionId, path: source.target, name: source.name,
+    tempBase: app.getPath('temp'), fetchImpl: runtimeApiFetch,
+    mkdirImpl: mkdir, mkdtempImpl: mkdtemp, openImpl: open,
+    realpathImpl: realpath, lstatImpl: lstat, rmImpl: rm
+  })
+  try {
+    // The materialized path is literal, not a Markdown URL. Encode it once so
+    // the existing native opener cannot decode percent sequences in its name.
+    const destinationUrl = pathToFileURL(file.destination).href
+    if (normalizeLocalTarget(destinationUrl).path !== file.destination) throw Object.assign(new Error('安全副本路径不能被重新解释。'), { code: 'RIGHT_WORKSPACE_BAD_LOCAL_PATH' })
+    const result = await openLocalTarget(destinationUrl, {
+      reveal, statImpl: stat, openPath: target => shell.openPath(target), showItemInFolder: target => shell.showItemInFolder(target)
+    })
+    const cleanup = setTimeout(() => rm(file.directory, { recursive: true, force: true }).catch(() => {}), RIGHT_WORKSPACE_OPEN_CLEANUP_MS)
+    cleanup.unref?.()
+    return { opened: result.ok && String(result.action || '').startsWith('open-'), revealed: String(result.action || '').startsWith('reveal'), action: result.action, name: file.name }
+  } catch (error) {
+    await rm(file.directory, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
 }
 
 function browserIntentForLink(value, fallback = 'navigation') {
@@ -5307,36 +5689,48 @@ async function openRoutedBrowserLink(value, context = {}) {
 }
 
 async function guestLocalTargetAtPoint(guest, params) {
-  for (const candidate of [params.linkURL, params.srcURL]) {
-    if (!candidate) continue
-    try {
-      normalizeLocalTarget(candidate)
-      return candidate
-    } catch {}
-  }
   const x = Number.isFinite(params.x) ? params.x : 0
   const y = Number.isFinite(params.y) ? params.y : 0
   return guest.executeJavaScript(`(() => {
     const element = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
     const pointed = element?.closest?.('[data-hd-local-target]')?.dataset?.hdLocalTarget || '';
-    if (pointed) return pointed;
     const recent = window.__HARNESS_DESKTOP_CONTEXT_LOCAL_TARGET__;
-    return recent && Date.now() - Number(recent.at || 0) < 5000 ? String(recent.value || '') : '';
-  })()`, true).catch(() => '')
+    const age = Date.now() - Number(recent?.at || 0);
+    if (!pointed || !recent || recent.sourceKind !== 'workspace-link' || recent.value !== pointed || !Number.isFinite(age) || age < 0 || age >= 5000) return null;
+    return { target: recent.value, sessionId: recent.sessionId, sourceKind: recent.sourceKind };
+  })()`, true).catch(() => null)
 }
 
-async function showGuestContextMenu(guest, params) {
+const contextMenuRequests = new WeakMap()
+async function showGuestContextMenu(guest, params, options = {}) {
+  if (!guest || guest.isDestroyed?.()) return
+  const ownerWindow = options.ownerWindow || BrowserWindow.fromWebContents(guest.hostWebContents || guest)
+  if (!ownerWindow || ownerWindow.isDestroyed()) return
+  const request = {}
+  contextMenuRequests.set(guest, request)
   const template = []
-  const localValue = await guestLocalTargetAtPoint(guest, params)
+  const localValue = options.allowLocal === false ? null : await guestLocalTargetAtPoint(guest, params)
+  // A slower hit-test must not reopen an old menu after another right-click,
+  // navigation teardown, or closure of the originating window.
+  if (guest.isDestroyed?.() || ownerWindow.isDestroyed() || contextMenuRequests.get(guest) !== request) return
   const local = localValue ? resolveGuestLocalTarget(localValue) : null
   const external = externalWebUrl(params.linkURL)
+  const runVisibleAction = (label, action) => {
+    Promise.resolve().then(action).catch(error => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      dialog.showMessageBox(mainWindow, {
+        type: 'error', title: '文件操作失败', message: `${label}失败`,
+        detail: error?.message || String(error), buttons: ['知道了'], defaultId: 0
+      }).catch(() => {})
+    })
+  }
 
   if (local) {
     template.push(
-      { label: '在右侧工作区预览', click: () => send('rightWorkspace:previewLocal', local.path) },
-      { label: '打开此项目', click: () => openDesktopLocalTarget(local.path).catch(() => {}) },
-      { label: '在文件夹中显示', click: () => openDesktopLocalTarget(local.path, true).catch(() => {}) },
-      { label: '复制本机路径', click: () => clipboard.writeText(local.path) },
+      { label: '在右侧工作区预览', click: () => send('rightWorkspace:previewLocal', { target: local.target, sessionId: local.sessionId, sourceKind: local.sourceKind }) },
+      { label: '使用系统应用打开', click: () => runVisibleAction('使用系统应用打开', () => openRightWorkspaceTarget(local)) },
+      { label: '在文件夹中显示安全副本', click: () => runVisibleAction('在文件夹中显示安全副本', () => openRightWorkspaceTarget(local, true)) },
+      { label: '复制文件引用', click: () => clipboard.writeText(local.target) },
       { type: 'separator' }
     )
   } else if (external) {
@@ -5348,28 +5742,47 @@ async function showGuestContextMenu(guest, params) {
     )
   }
 
+  // Electron menu roles target the BrowserWindow's renderer. The conversation is
+  // hosted by a separate guest WebContents, so dispatch every editing command to
+  // that exact guest instead of relying on whichever outer view owns the popup.
+  const guestCommand = command => () => {
+    if (guest.isDestroyed?.()) return
+    const action = guest[command]
+    if (typeof action === 'function') action.call(guest)
+  }
   if (params.isEditable) {
     template.push(
-      { label: '撤销', role: 'undo', enabled: Boolean(params.editFlags?.canUndo) },
-      { label: '重做', role: 'redo', enabled: Boolean(params.editFlags?.canRedo) },
+      { label: '撤销', click: guestCommand('undo'), enabled: Boolean(params.editFlags?.canUndo) },
+      { label: '重做', click: guestCommand('redo'), enabled: Boolean(params.editFlags?.canRedo) },
       { type: 'separator' },
-      { label: '剪切', role: 'cut', enabled: Boolean(params.editFlags?.canCut) },
-      { label: '复制', role: 'copy', enabled: Boolean(params.editFlags?.canCopy) },
-      { label: '粘贴', role: 'paste', enabled: Boolean(params.editFlags?.canPaste) },
-      { label: '全选', role: 'selectAll', enabled: Boolean(params.editFlags?.canSelectAll) }
+      { label: '剪切', click: guestCommand('cut'), enabled: Boolean(params.editFlags?.canCut) },
+      { label: '复制', click: guestCommand('copy'), enabled: Boolean(params.editFlags?.canCopy) },
+      { label: '粘贴', click: guestCommand('paste'), enabled: Boolean(params.editFlags?.canPaste) },
+      { label: '粘贴为纯文本', click: guestCommand('pasteAndMatchStyle'), enabled: Boolean(params.editFlags?.canPaste) },
+      { label: '全选', click: guestCommand('selectAll'), enabled: Boolean(params.editFlags?.canSelectAll) }
     )
   } else {
     template.push(
-      { label: '复制', role: 'copy', enabled: Boolean(params.selectionText) },
+      { label: '复制', click: guestCommand('copy'), enabled: Boolean(params.selectionText) },
       { label: '取消选择', enabled: Boolean(params.selectionText), click: () => guest.executeJavaScript('window.getSelection?.()?.removeAllRanges()', true).catch(() => {}) },
-      { label: '全选', role: 'selectAll' }
+      { label: '全选', click: guestCommand('selectAll') }
     )
   }
 
+  if (params.mediaType === 'image' && Number.isFinite(params.x) && Number.isFinite(params.y)) {
+    template.push({ type: 'separator' }, {
+      label: '复制图片', enabled: params.hasImageContents === true,
+      click: () => {
+        if (!guest.isDestroyed?.()) guest.copyImageAt(Math.round(params.x), Math.round(params.y))
+      }
+    })
+    const imageUrl = externalWebUrl(params.srcURL)
+    if (imageUrl) template.push({ label: '复制图片地址', click: () => clipboard.writeText(imageUrl) })
+  }
   while (template[0]?.type === 'separator') template.shift()
   while (template.at(-1)?.type === 'separator') template.pop()
-  if (template.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
-    Menu.buildFromTemplate(template).popup({ window: mainWindow })
+  if (template.length > 0 && !ownerWindow.isDestroyed()) {
+    Menu.buildFromTemplate(template).popup({ window: ownerWindow })
   }
 }
 
@@ -5395,7 +5808,7 @@ async function chooseWorkspaceDirectory() {
 
 function bindIntegratedTerminalShortcut(contents) {
   contents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown' || input.isAutoRepeat || input.control !== true || input.alt || input.meta) return
+    if (input.type !== 'keyDown' || input.isComposing || input.isAutoRepeat || input.control !== true || input.alt || input.meta || input.shift) return
     if (input.code !== 'Backquote' && input.key !== '`') return
     event.preventDefault()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('terminal:toggle')
@@ -5442,6 +5855,9 @@ function openDetachedSessionWindow(sessionId) {
     }
   })
   detachedSessionWindows.add(detached)
+  detached.webContents.on('context-menu', (_event, params) => {
+    showGuestContextMenu(detached.webContents, params).catch(() => {})
+  })
   ensureComputerUseIndicator().track(detached.webContents, { mode: 'cursor' })
   detached.webContents.setWindowOpenHandler(details => {
     openRoutedBrowserLink(details.url, { source: 'app', intent: browserIntentForLink(details.url), userChoice: 'default' }).catch(() => {})
@@ -5549,6 +5965,9 @@ function createWindow() {
   })
   ensureComputerUseIndicator().track(mainWindow.webContents, { mode: 'cursor' })
   bindIntegratedTerminalShortcut(mainWindow.webContents)
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    showGuestContextMenu(mainWindow.webContents, params).catch(() => {})
+  })
   syncTitleBarOverlay()
 
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
@@ -5589,7 +6008,7 @@ function createWindow() {
     event.preventDefault()
     mainWindow.hide()
   })
-  mainWindow.on('resize', layoutBrowserView)
+  bindBrowserLayoutEvents(mainWindow)
   mainWindow.on('hide', () => {
     endActiveWindowDrag()
     syncWallpaperLifecycle('window-hidden')
@@ -5676,21 +6095,27 @@ ipcMain.handle('appearance:applyWallpaper', desktopShellOnly(value => applyWallp
 ipcMain.handle('appearance:deleteWallpaper', desktopShellOnly(value => deleteWallpaperLibraryItem(value)))
 ipcMain.handle('appearance:syncWallpaperEngine', desktopShellOnly(() => syncWallpaperEngineBackground()))
 ipcMain.handle('appearance:clearBackground', desktopShellOnly(() => clearCustomThemeBackground()))
-ipcMain.handle('pet:getState', () => petPayload())
-ipcMain.handle('pet:setPreferences', (_event, patch) => updatePetPreferences(patch || {}))
-ipcMain.handle('pet:feed', (_event, kind) => {
+ipcMain.handle('pet:getState', petPageOnly(() => petPayload(), true))
+ipcMain.handle('pet:setPreferences', petPageOnly(patch => updatePetPreferences(patch || {}), true))
+ipcMain.handle('pet:feed', petPageOnly(kind => {
   petDomain?.feed(kind)
   return petPayload()
-})
-ipcMain.handle('pet:interact', (_event, kind) => petDomain?.interact(kind) || petPayload())
-ipcMain.handle('pet:focusMain', (_event, sessionId) => {
+}, true))
+ipcMain.handle('pet:interact', petPageOnly(kind => petDomain?.interact(kind) || petPayload()))
+ipcMain.handle('pet:focusMain', petPageOnly(sessionId => {
   petWindowController?.focusMain(sessionId || null)
   return true
+}, true))
+ipcMain.handle('pet:getEnvironment', petPageOnly(() => petWindowController?.environment()))
+ipcMain.handle('pet:moveTo', petPageOnly((point = {}) => petWindowController?.moveTo(point?.x, point?.y)))
+// Send-only IPC cannot return a rejection: ignore unowned frames rather than
+// throwing an uncaught main-process exception. Validation never creates a pet.
+ipcMain.on('pet:setInteractive', (event, value) => {
+  if (isPetPageSender(event)) petWindowController?.setInteractive(value)
 })
-ipcMain.handle('pet:getEnvironment', () => petWindowController?.environment())
-ipcMain.handle('pet:moveTo', (_event, point = {}) => petWindowController?.moveTo(point.x, point.y))
-ipcMain.on('pet:setInteractive', (_event, value) => petWindowController?.setInteractive(value))
-ipcMain.on('pet:setHitProfile', (_event, profile) => petWindowController?.setHitProfile(profile || {}))
+ipcMain.on('pet:setHitProfile', (event, profile) => {
+  if (isPetPageSender(event)) petWindowController?.setHitProfile(profile || {})
+})
 ipcMain.handle('settings:openDocument', desktopShellOnly(() => openHarnessSettingsDocument()))
 ipcMain.handle('models:routing:get', desktopShellOnly(() => getModelRouting(modelRoutingOptions())))
 ipcMain.handle('models:routing:save', desktopShellOnly(routing => saveModelRouting(modelRoutingOptions(), routing || {})))
@@ -5787,41 +6212,17 @@ ipcMain.handle('rightWorkspace:resource', (event, kind, payload) => {
     fetchImpl: runtimeApiFetch
   })
 })
-ipcMain.handle('rightWorkspace:openFile', async (event, payload) => {
+ipcMain.handle('rightWorkspace:openFile', (event, payload) => {
   assertDesktopShellSender(event)
-  const runtimeUrl = runtimeState.status === 'ready' ? runtimeState.url : null
-  const file = await materializeRightWorkspaceFile({
-    runtimeUrl,
-    sessionId: payload?.sessionId,
-    path: payload?.path,
-    name: payload?.name,
-    tempBase: app.getPath('temp'),
-    fetchImpl: runtimeApiFetch,
-    mkdirImpl: mkdir,
-    mkdtempImpl: mkdtemp,
-    openImpl: open,
-    realpathImpl: realpath,
-    lstatImpl: lstat,
-    rmImpl: rm
-  })
-  try {
-    const result = await openLocalTarget(file.destination, {
-      statImpl: stat,
-      openPath: target => shell.openPath(target),
-      showItemInFolder: target => shell.showItemInFolder(target)
-    })
-    const cleanup = setTimeout(() => rm(file.directory, { recursive: true, force: true }).catch(() => {}), RIGHT_WORKSPACE_OPEN_CLEANUP_MS)
-    cleanup.unref?.()
-    return { opened: result.ok && String(result.action || '').startsWith('open-'), revealed: String(result.action || '').startsWith('reveal'), action: result.action, name: file.name }
-  } catch (error) {
-    await rm(file.directory, { recursive: true, force: true }).catch(() => {})
-    throw error
-  }
+  return openRightWorkspaceTarget(payload)
 })
 ipcMain.handle('rightWorkspace:previewLocal', (event, value) => {
   assertDesktopShellSender(event)
-  const target = normalizeLocalTarget(value)
-  return previewLocalDocument(target.path, { realpathImpl: realpath, statImpl: stat, openImpl: open })
+  return previewRightWorkspaceTarget(value)
+})
+ipcMain.handle('rightWorkspace:modelPreviewReceipt', (event, value) => {
+  assertDesktopShellSender(event)
+  return workspacePreviewBridge?.acceptReceipt(event, value) || false
 })
 ipcMain.handle('browser:state', event => {
   assertDesktopShellSender(event)
@@ -6041,17 +6442,28 @@ ipcMain.handle('desktopDevice:action', async (event, input = {}) => {
   const fallbackReason = String(payload.fallbackReason || '')
   const legacyFilePoll = DESKTOP_DEVICE_LEGACY_FILE_POLL || fallbackReason === 'transfer-unavailable'
   const sessionGeneration = computerUseSessionGeneration
+  const sender = event.sender
+  const senderFrame = event.senderFrame
+  const senderUrl = sender.getURL()
+  const assertCurrentCapture = () => {
+    if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) {
+      // Stop owns cache cleanup. A late old capture must not clear a frame
+      // belonging to a newly authorized session.
+      throw Object.assign(new Error('Computer Use 会话已停止。'), { code: 'computer-use-disabled' })
+    }
+    if (sender.isDestroyed() || sender.getURL() !== senderUrl || sender.mainFrame !== senderFrame) {
+      throw Object.assign(new Error('桌面预览页面已关闭或切换。'), { code: 'desktop-frame-stale' })
+    }
+  }
+  assertCurrentCapture()
   const result = await desktopDeviceProvider.captureFrame({
     force: payload.force === true,
     delivery: legacyFilePoll ? 'preview-file' : 'buffer'
   })
-  if (!computerUseEnabled || sessionGeneration !== computerUseSessionGeneration) {
-    desktopDeviceProvider.clearFrame()
-    if (legacyFilePoll) await ensureComputerUsePreviewScreenshotStore().clear()
-    throw Object.assign(new Error('Computer Use 会话已停止。'), { code: 'computer-use-disabled' })
-  }
+  assertCurrentCapture()
   if (legacyFilePoll) {
     const png = await readFile(result.file)
+    assertCurrentCapture()
     if (!png.length || png.length > 12 * 1024 * 1024) throw Object.assign(new Error('桌面设备预览帧超过安全上限。'), { code: 'desktop-frame-too-large' })
     return { ...result, data: `data:image/png;base64,${png.toString('base64')}`, transport: 'legacy-file-poll', fallbackReason: DESKTOP_DEVICE_LEGACY_FILE_POLL ? 'feature-flag' : fallbackReason }
   }
@@ -6225,6 +6637,7 @@ app.on('before-quit', event => {
   storageManagementService?.stop()
   memoryService?.close()
   browserSecurityPolicy?.stop()
+  workspacePreviewBridge?.dispose()
   browserControlServer?.stop().catch(() => {})
   agentTeamsAuthorizationService?.close().catch(() => {})
   agentTeamsAuthorizationService = null

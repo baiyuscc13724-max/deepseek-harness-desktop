@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "bounded-independent-fix-regression-sidecar",
+  "reviewCorrection": {"revision":2,"reason":"v1 mislabeled master summary semantics and duplicated wrong labels in its own validator; root rejected","priorFreeze":".artifacts/deep-audit-round2-fixes-acceptance/final-freeze.json","priorFreezeSha256":"0a177daaa181f7c7829279113cc1a46d4614ccea507ff474dc55258903918208","originalByteMapping":".artifacts/deep-audit-round2-fixes-acceptance/review-rejected-v1/mapping.json","newFreeze":".artifacts/deep-audit-round2-fixes-acceptance/final-freeze-v2.json","productAndElectronReceiptsUnchanged":true,"electronRerun":false},
+  "status": "conditional-evidence-with-retained-preview-timing-red-and-two-contract-reviews",
+  "globalCoveragePromotion": false,
+  "masterPreserved": {"path":"docs/deep-audit/coverage-master.json","sha256":"8d5cad11503953cb9044a96902ab92d718cb21ae17107313549c5e45fb527794","summary":{"userOperations":115,"independentlyAccepted":104,"domainFindingRows":598}},
+  "sources": {
+    "electron/main.cjs":"74ea22e9b158dd34fb244d8dac6f0b91dd5a9e873e1017c8d26e597cbb8d24f9",
+    "renderer/right-workspace-integration.js":"bf81102462e8802fbc9520826271886a6822077bd23e4a5bb67665a66a1e2eb8",
+    "renderer/app.js":"560354dc1ce1f365473da3068c75f0dec8ff08b46c03fe0a5b9fd1c03d7bdb65"
+  },
+  "receiptBindings": {
+    "previewBefore":{"path":".artifacts/deep-audit-round2-fixes-acceptance/preview-before-v1/receipt.json","sha256":"60685afb36d28c5849da20f34ef4f8dbf184e73c2a7a1bc837450c90ff41044c"},
+    "previewAfter1":{"path":".artifacts/deep-audit-round2-fixes-acceptance/preview-after-v1/receipt.json","sha256":"aaa510a167e2f4c7b13781379abfd96ace6d8f8193d8bb2b3640aebfb4c585ca"},
+    "previewAfter2":{"path":".artifacts/deep-audit-round2-fixes-acceptance/preview-after-v2/receipt.json","sha256":"2ea9bdc4c4fe0f195e325ac85d58136a7bdcb4fc5cc5be1849d5ee31ac486bec"},
+    "previewObserved":{"path":".artifacts/deep-audit-round2-fixes-acceptance/preview-probe-after-v1/receipt.json","sha256":"ad72786ec0da0a9affddf58c2c54dd595a191d472fa3334e6729600dc7d97311"},
+    "layoutBefore":{"path":".artifacts/deep-audit-round2-fixes-acceptance/layout-before-v2/receipt.json","sha256":"05ae10d49ac931eaec58f0d41926a97c08e4581c9ad240121549a0d760766ef7"},
+    "layoutAfter":{"path":".artifacts/deep-audit-round2-fixes-acceptance/layout-after-v2/receipt.json","sha256":"cbf796f604b7764fd91f535f6737900d00b6abf1a4a5ce3890f5f85b74c75312"},
+    "layoutCombined":{"path":".artifacts/deep-audit-round2-fixes-acceptance/layout-after-combined/receipt.json","sha256":"daf90fd5f86cb5cf4ffa12bb24aed6bb54d04ba49b17b8a0b23806d2a2da2ae0"},
+    "settingsBefore":{"path":".artifacts/deep-audit-round2-fixes-acceptance/settings-after-v2/before/receipt.json","sha256":"4f6db6d99f53518a581cb7ffab729311659f21dc08d68ede7f9cb3aa2ce12454"},
+    "settingsAfter":{"path":".artifacts/deep-audit-round2-fixes-acceptance/settings-after-v2/after/receipt.json","sha256":"ff5e8bc403bbac083d91a13eaf34c9774e26b245ade47c8f29791227df09d0b1"}
+  },
+  "geometry":{"original":{"total":23,"beforePassed":18,"afterPassed":23},"before":{"total":66,"passed":43},"after":{"total":91,"passed":91},"sameExtendedDenominator":false,"persistentWhiteColumnResolved":false,"automaticZoomObservationMs":1300,"lateOldOwnerResolveAndReject":"real tuples retained; new B visible native bounds and write count unchanged; reject branch transport-injected"},
+  "preview":{"before":{"total":48,"passed":41,"originalPassed":33,"originalTotal":35},"repeatedRawAfter":{"runs":2,"total":48,"passed":47,"originalPassed":34,"originalTotal":35},"observedProbe":{"total":48,"passed":48,"originalPassed":35,"originalTotal":35},"unconditional48Pass":false,"rawAfterFailure":"LIFECYCLE-02 controller destroy detaches sidebar and stops iframe","review":"Source-specific observation adds an await boundary and is not a byte-identical timing replay. No post-detach heartbeat in observed run; untouched destroy aggregate-counter repeatability remains limited. Do not erase two red runs or infer a continuing execution defect solely from them.","closeLifecycle":"All new13 close/reopen/source/nonce assertions pass on final source. Exact old WindowProxy, grace interval and unfettered message observation retained."},
+  "settings":{"before":{"original":{"total":47,"passed":39},"fix":{"total":15,"passed":4}},"after":{"original":{"total":47,"passed":45,"contractReview":2},"fix":{"total":15,"passed":15}},"freshRealStoreMerge":true,"syntheticSnapshotOrder":true,"realIPCReorderingProven":false},
+  "contractReview":["cancel preview restores persisted settings rather than silently retaining draft","old theme receipt after close reopen does not mutate reopened appearance"],
+  "combined":{"total":6,"passed":6,"layoutRegression":{"total":91,"passed":91},"evidence":".artifacts/deep-audit-round2-fixes-acceptance/layout-after-combined/combined-receipt.json","scope":"Final three production byte versions jointly loaded: exact main function slices, complete integration and complete app with reversible bootstrap/seed seam; guest publication getURL blank only during settings probe; synthetic settings transport; real isolated native views."},
+  "dimensions":[
+    {"id":"normal","evidence":["layoutAfter","previewObserved","settingsAfter","combined"],"verified":"responsive CSS/DIP bounds; sandbox preview; settings success; coexistence","limits":["not current GUI","no official conversation AppFrame"]},
+    {"id":"recovery","evidence":["layoutAfter","previewObserved","settingsAfter","combined"],"verified":"real reload/rebind after observer rejection; preview close/reopen; save rejection then retry","limits":["destroy aggregate-counter timing red retained","two close/cancel contracts pending"]},
+    {"id":"concurrency","evidence":["layoutAfter","previewObserved","settingsAfter"],"verified":"late old owner resolve/reject isolated; rapid viewport events; nonce/context/request races; repeated save/snapshot reversal","limits":["snapshot delay and rejection controlled at test transport","not evidence of native IPC or disk commit reversal"]},
+    {"id":"isolation","evidence":["layoutAfter","previewObserved","settingsAfter","combined"],"verified":"trusted shell/owner/frame/document fences; exact opaque WindowProxy; CSP and nonce/source; empty real capability attempts","limits":["fresh synthetic profiles only","no production account/device/clipboard/network"]},
+    {"id":"accessibility","evidence":["layoutAfter","previewObserved","settingsAfter","combined"],"verified":"programmatic zoom; DOM focus and Enter/Escape; disabled/aria-busy and live error status; scrollable dialog","limits":["no screen reader","no real keyboard/IME/native input; browser-trusted checkbox subevents do not establish physical input"]}
+  ],
+  "limits":{"currentGUI":false,"fullMainStartup":false,"officialAppFrame":false,"realSettingsIPC":false,"screenReader":false,"nativeInput":false,"globalCoveragePromotion":false,"persistentWhiteColumnResolved":false},
+  "historicalPreservation":{"frozenPaths":638,"currentInputs":15,"beforeSourcePinsBoundToOriginalBytes":true,"masterTotalsUnchanged":true,"oldMasterTests":{"total":2929,"passed":2889,"failed":7,"skipped":33}}
+}

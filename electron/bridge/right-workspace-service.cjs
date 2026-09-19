@@ -146,9 +146,14 @@ async function previewLocalDocument(value, options = {}) {
   let bytes
   try {
     const buffer = Buffer.alloc(limit + 1)
-    const read = await handle.read(buffer, 0, buffer.length, 0)
-    if (read.bytesRead > limit) return { ...base, size: read.bytesRead, previewable: false, reason: 'too-large', maxPreviewBytes: limit }
-    bytes = buffer.subarray(0, read.bytesRead)
+    let size = 0
+    while (size < buffer.length) {
+      const read = await handle.read(buffer, size, buffer.length - size, size)
+      if (!read.bytesRead) break
+      size += read.bytesRead
+    }
+    if (size > limit) return { ...base, size, previewable: false, reason: 'too-large', maxPreviewBytes: limit }
+    bytes = buffer.subarray(0, size)
   } finally { await handle.close() }
   if (imageMimeType) return { ...base, previewable: true, previewKind: 'image', mimeType: imageMimeType, dataUrl: `data:${imageMimeType};base64,${bytes.toString('base64')}` }
   if (bytes.includes(0)) return { ...base, previewable: false, reason: 'binary' }
@@ -175,6 +180,9 @@ function scheduleTransport(response, body, fallbackEtag) {
 
 async function loadRightWorkspaceResource(options = {}) {
   if (typeof options.fetchImpl !== 'function') throw new TypeError('fetchImpl is required')
+  // Snapshot provenance before any await. The same source/path must authorize
+  // preview JSON, its media content URL, and later system-open requests.
+  options = { ...options }
   const target = resourceUrl(options.runtimeUrl, options.kind, options)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -199,12 +207,26 @@ async function loadRightWorkspaceResource(options = {}) {
     let body
     try { body = JSON.parse(bytes.toString('utf8')) } catch { throw Object.assign(new Error('Right workspace returned invalid JSON'), { code: 'RIGHT_WORKSPACE_INVALID_RESPONSE' }) }
     if (!response.ok) {
-      throw Object.assign(new Error(body?.error || `Harness runtime returned HTTP ${response.status}`), {
+      const fileErrors = {
+        FILES_NOT_FOUND: '来源会话的工作区中找不到此文件，或文件链接已失效。请确认成果路径后重试。',
+        FILES_PATH_ESCAPE: '此文件不在来源会话的工作区内，已拒绝读取。',
+        FILES_SESSION_NOT_LIVE: '来源会话尚未运行或已关闭。请打开或继续来源会话后重试。',
+        FILES_NO_WORKSPACE: '来源会话没有已验证的工作区。请在来源会话确认工作区后重试。'
+      }
+      const fileResource = options.kind === 'files' || options.kind === 'filePreview'
+      const message = fileResource
+        ? (fileErrors[body?.code] || '无法读取来源会话的文件。请确认文件可用后重试。')
+        : (body?.error || `Harness runtime returned HTTP ${response.status}`)
+      throw Object.assign(new Error(message), {
         code: body?.code || 'RIGHT_WORKSPACE_RUNTIME_ERROR', status: response.status
       })
     }
+    if ((options.kind === 'files' || options.kind === 'filePreview') && body?.sessionId !== undefined && body.sessionId !== options.sessionId) {
+      throw Object.assign(new Error('文件来源会话不匹配，请重新打开成果链接。'), { code: 'RIGHT_WORKSPACE_SOURCE_MISMATCH' })
+    }
     if (options.kind === 'filePreview' && body?.file && typeof body.file === 'object') {
       body.file.contentUrl = fileContentUrl(options.runtimeUrl, options).toString()
+      body.file.sourceSessionId = options.sessionId
     }
     if (options.kind === 'schedules') return scheduleTransport(response, body, options.etag)
     return body

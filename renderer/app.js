@@ -520,7 +520,7 @@ function renderWallpaperLibrary() {
       if (!event.target.closest('button') && card.dataset.unavailable !== 'true') applySavedWallpaper(card.dataset.wallpaperId)
     })
     card.addEventListener('keydown', event => {
-      if (event.target.closest('button') || (event.key !== 'Enter' && event.key !== ' ')) return
+      if (event.isComposing || event.keyCode === 229 || event.repeat || event.target.closest('button') || (event.key !== 'Enter' && event.key !== ' ')) return
       event.preventDefault()
       selectWallpaperCard(card.dataset.wallpaperId)
     })
@@ -552,6 +552,105 @@ function renderUiModePicker() {
   }))
 }
 
+// The host persists each patch synchronously, then builds an asynchronous full
+// appearance payload. A late payload is not a later commit. Keep full accepted
+// snapshots (including unrelated fields), but never let an older one replace a
+// newer successful save. Closing the picker does not cancel submitted writes.
+let appearanceSaveSequence = 0
+let appearanceAppliedSequence = 0
+let appearanceSavedSnapshot = null
+let appearancePreviewSequence = 0
+let skinPickerViewSequence = 0
+const appearancePendingSaves = new Map()
+const appearancePreviewEdits = new Map()
+const appearanceBusyControls = new WeakMap()
+
+function appearanceSaveMessage(message = '', failed = false) {
+  let status = skinPickerOverlay.querySelector('[data-appearance-save-status]')
+  if (!status) {
+    status = document.createElement('p')
+    status.dataset.appearanceSaveStatus = 'true'
+    status.className = 'skin-wallpaper-library-message'
+    status.setAttribute('role', 'status')
+    status.setAttribute('aria-live', 'polite')
+    skinPickerOverlay.querySelector('.skin-picker-header').after(status)
+  }
+  status.textContent = message
+  status.dataset.error = String(failed)
+}
+
+function setAppearanceControlBusy(control, busy) {
+  if (!control) return
+  let state = appearanceBusyControls.get(control)
+  if (busy) {
+    if (!state) state = { count: 0, disabled: control.disabled, label: control.textContent }
+    state.count += 1
+    appearanceBusyControls.set(control, state)
+    control.setAttribute('aria-busy', 'true')
+    if ('disabled' in control) control.disabled = true
+  } else if (state && --state.count === 0) {
+    control.removeAttribute('aria-busy')
+    if ('disabled' in control) control.disabled = state.disabled
+    appearanceBusyControls.delete(control)
+  }
+}
+
+async function applyLatestAppearanceSnapshot() {
+  const saved = appearanceSavedSnapshot
+  if (!saved || saved.id <= appearanceAppliedSequence || [...appearancePendingSaves.values()].some(entry => entry.id > saved.id)) return false
+  appearanceAppliedSequence = saved.id
+  appearanceState = saved.state
+  // Do not replace a newer in-progress range preview while its change event has
+  // not yet submitted a save. Persisting still uses the actual complete form.
+  for (const [name, edit] of appearancePreviewEdits) {
+    if (edit.sequence > saved.previewSequence) {
+      appearanceState = { ...appearanceState, themeId: 'custom', customTheme: { ...appearanceState.customTheme, [name]: edit.value } }
+    } else appearancePreviewEdits.delete(name)
+  }
+  await publishAppearanceState()
+  if (appearanceAppliedSequence !== saved.id) return false
+  if (saved.render) renderSkinPicker()
+  return true
+}
+
+function saveShellAppearance({ key, operation, control, close = false, render = false, message = '', errorPrefix = '保存外观失败' }) {
+  // Publish the entry before invoking any Promise-producing bridge port.
+  const existing = [...appearancePendingSaves.values()].find(entry => entry.key === key && entry.id === appearanceSaveSequence)
+  if (existing) return existing.promise
+  // A → B → A is a new intent, not a duplicate of the first pending A.
+  const entry = { key, id: ++appearanceSaveSequence, previewSequence: appearancePreviewSequence, render }
+  const view = skinPickerViewSequence
+  appearancePendingSaves.set(entry.id, entry)
+  setAppearanceControlBusy(control, true)
+  appearanceSaveMessage('正在保存外观…')
+  const run = async () => {
+    try {
+      const state = await operation()
+      appearancePendingSaves.delete(entry.id)
+      if (!appearanceSavedSnapshot || entry.id > appearanceSavedSnapshot.id) appearanceSavedSnapshot = { ...entry, state }
+      await applyLatestAppearanceSnapshot()
+      const current = entry.id === appearanceSaveSequence
+      if (current && view === skinPickerViewSequence) appearanceSaveMessage(message)
+      return current
+    } catch (error) {
+      appearancePendingSaves.delete(entry.id)
+      // If the newest write failed, a preceding successful full snapshot remains
+      // authoritative; do not fabricate success or lose its normalized fields.
+      await applyLatestAppearanceSnapshot()
+      if (entry.id === appearanceSaveSequence && view === skinPickerViewSequence) {
+        const text = `${errorPrefix}：${error.message || String(error)}`
+        appearanceSaveMessage(text, true)
+        if (render) wallpaperLibraryMessage(text, true)
+      }
+      return false
+    } finally {
+      setAppearanceControlBusy(control, false)
+    }
+  }
+  entry.promise = close ? skinPickerHost.apply(run, value => value === true) : run()
+  return entry.promise
+}
+
 function renderSkinPicker() {
   skinPickerGrid.innerHTML = themeCatalog.map(theme => `
     <article class="skin-picker-card" data-skin-id="${escapeHtml(theme.id)}" data-selected="${theme.id === appearanceState.themeId}" tabindex="0">
@@ -563,16 +662,15 @@ function renderSkinPicker() {
       </div>
     </article>`).join('')
   skinPickerGrid.querySelectorAll('[data-skin-id]').forEach(card => {
-    const apply = async () => {
-      await skinPickerHost.apply(async () => {
-        appearanceState = await api.setTheme(card.dataset.skinId || 'official')
-        await publishAppearanceState()
-      })
+    const apply = () => {
+      const themeId = card.dataset.skinId || 'official'
+      return saveShellAppearance({ key: `theme:${themeId}`, operation: () => api.setTheme(themeId), control: card, close: true, errorPrefix: '保存主题失败' })
     }
     card.addEventListener('dblclick', event => {
       if (!event.target.closest('[data-source]')) apply().catch(() => {})
     })
     card.addEventListener('keydown', event => {
+      if (event.isComposing || event.repeat || event.target.closest('[data-source]')) return
       if (event.key !== 'Enter' && event.key !== ' ') return
       event.preventDefault()
       apply().catch(() => {})
@@ -673,6 +771,8 @@ function closePetPanel() {
 }
 
 function openSkinPicker({ fromSettings = false } = {}) {
+  skinPickerViewSequence += 1
+  appearanceSaveMessage('')
   closePetPanel()
   applyShellTheme()
   applyShellUiMode()
@@ -684,6 +784,7 @@ function openSkinPicker({ fromSettings = false } = {}) {
 }
 
 function closeSkinPicker() {
+  skinPickerViewSequence += 1
   disposeWallpaperCardPreviews()
   disposeWallpaperEnginePreviews()
   skinPickerHost.close()
@@ -1320,6 +1421,7 @@ function openIntegratedTerminal({ focus = true } = {}) {
 }
 
 function closeIntegratedTerminal() {
+  terminalResizeCleanup?.()
   document.body.classList.remove('terminal-panel-open')
   terminalPanel.setAttribute('aria-hidden', 'true')
   runtimeView.focus()
@@ -1426,7 +1528,9 @@ async function hydrateIntegratedTerminal() {
   }
 }
 
+let terminalResizeCleanup = null
 function beginTerminalResize(event) {
+  if (event.isComposing || event.keyCode === 229 || event.isPrimary === false) return
   if (event.button !== 0 && event.type !== 'keydown') return
   if (event.type === 'keydown') {
     if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return
@@ -1437,20 +1541,30 @@ function beginTerminalResize(event) {
     fitIntegratedTerminal()
     return
   }
+  if (!Number.isFinite(event.clientY) || !Number.isFinite(event.pointerId)) return
   event.preventDefault()
+  terminalResizeCleanup?.()
   const startY = event.clientY
   const startHeight = terminalPanel.getBoundingClientRect().height
   const onMove = moveEvent => {
+    if (moveEvent.pointerId !== event.pointerId || !Number.isFinite(moveEvent.clientY)) return
     const next = Math.max(160, Math.min(window.innerHeight * .72, startHeight - (moveEvent.clientY - startY)))
     document.documentElement.style.setProperty('--terminal-panel-height', `${Math.round(next)}px`)
     fitIntegratedTerminal()
   }
-  const onUp = () => {
+  const onUp = endEvent => {
+    if (endEvent?.pointerId != null && endEvent.pointerId !== event.pointerId) return
     document.removeEventListener('pointermove', onMove)
     document.removeEventListener('pointerup', onUp)
+    document.removeEventListener('pointercancel', onUp)
+    window.removeEventListener('blur', onUp)
+    terminalResizeCleanup = null
   }
+  terminalResizeCleanup = onUp
   document.addEventListener('pointermove', onMove)
-  document.addEventListener('pointerup', onUp, { once: true })
+  document.addEventListener('pointerup', onUp)
+  document.addEventListener('pointercancel', onUp)
+  window.addEventListener('blur', onUp)
 }
 
 function officialSettingsBootstrap() {
@@ -3012,8 +3126,12 @@ runtimeView.addEventListener('will-navigate', event => {
     if (sessionId) api.openSessionWindow(sessionId).catch(() => {})
   } else if (target.hostname === 'preview-local') {
     const localPath = target.searchParams.get('path')
-    if (localPath && window.harnessDesktopRightWorkspace?.openLocalDocument) window.harnessDesktopRightWorkspace.openLocalDocument(localPath)
-    else if (localPath) api.openLocal(localPath).catch(() => {})
+    const sessionId = target.searchParams.get('sessionId') || ''
+    // Chat-origin routes are always workspace-confined, including legacy links
+    // with no source. Never turn a missing preview bridge into shell.openLocal.
+    if (localPath && window.harnessDesktopRightWorkspace?.openLocalDocument) {
+      window.harnessDesktopRightWorkspace.openLocalDocument(localPath, { sessionId, sourceKind: 'workspace-link' })
+    }
   } else if (target.hostname === 'open-local') {
     const localPath = target.searchParams.get('path')
     const reveal = target.searchParams.get('reveal') === '1'
@@ -3362,21 +3480,25 @@ updateNowButton.addEventListener('click', async () => {
     updateLaunchError.textContent = error.message
   }
 })
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && !petPanel.classList.contains('hidden')) closePetPanel()
-  if (event.key === 'Escape' && !skinPickerOverlay.classList.contains('hidden')) closeSkinPicker()
-  if (event.key === 'Escape' && !modelRoutingOverlay.classList.contains('hidden')) closeModelRouting()
-  if (event.key === 'Escape' && !mobileSyncOverlay.classList.contains('hidden')) closeMobileSync()
-  if (event.key === 'Escape' && !updateReadyOverlay.classList.contains('hidden')) closeUpdateReady()
-  if (event.key === 'Escape' && !updateNoticeOverlay.classList.contains('hidden')) closeUpdateNotice()
-})
-restoreOfficialThemeButton.addEventListener('click', async () => {
-  await skinPickerHost.apply(async () => {
-    appearanceState = await api.setTheme('official')
-    appearanceState = await api.setUiPreferences({ uiMode: 'official', reducedMotion: false, lowPerformance: false })
-    await publishAppearanceState()
-  })
-})
+function handleShellEscape(event) {
+  if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || event.defaultPrevented || event.repeat) return
+  const top = [...document.querySelectorAll('[aria-modal="true"]')].filter(element => element.getClientRects().length && !element.closest('.hidden, [hidden], [aria-hidden="true"]')).at(-1)
+  if (top) {
+    const entries = [[skinPickerOverlay, closeSkinPicker], [modelRoutingOverlay, closeModelRouting], [mobileSyncOverlay, closeMobileSync], [updateReadyOverlay, closeUpdateReady], [updateNoticeOverlay, closeUpdateNotice]]
+    const current = entries.find(([overlay]) => overlay.contains(top))
+    if (current) { event.preventDefault(); current[1]() }
+    return
+  }
+  if (!petPanel.classList.contains('hidden')) { event.preventDefault(); closePetPanel(); petQuickButton.focus() }
+}
+document.addEventListener('keydown', handleShellEscape)
+restoreOfficialThemeButton.addEventListener('click', () => saveShellAppearance({
+  key: 'restore-official', control: restoreOfficialThemeButton, close: true,
+  // The existing preferences endpoint passes a full appearance patch through
+  // the same synchronous store, so restore is one commit rather than two races.
+  operation: () => api.setUiPreferences({ themeId: 'official', uiMode: 'official', reducedMotion: false, lowPerformance: false }),
+  errorPrefix: '恢复官方外观失败'
+}))
 skinChooseBackgroundButton.addEventListener('click', async () => {
   const before = JSON.stringify(appearanceState.wallpaperLibrary || {})
   wallpaperLibraryMessage('请选择要复制到 Harness 壁纸库的图片或视频…')
@@ -3451,6 +3573,7 @@ skinClearBackgroundButton.addEventListener('click', async () => {
 })
 let wallpaperAppearancePreviewFrame = 0
 function previewWallpaperAppearance(name, value) {
+  appearancePreviewEdits.set(name, { sequence: ++appearancePreviewSequence, value })
   appearanceState = {
     ...appearanceState,
     themeId: 'custom',
@@ -3463,15 +3586,15 @@ function previewWallpaperAppearance(name, value) {
   })
 }
 
-async function persistWallpaperAppearance() {
+async function persistWallpaperAppearance({ close = false, control = skinApplyWallpaperAppearance } = {}) {
   if (wallpaperAppearancePreviewFrame) {
     cancelAnimationFrame(wallpaperAppearancePreviewFrame)
     wallpaperAppearancePreviewFrame = 0
   }
-  appearanceState = await api.saveCustomTheme(readShellCustomTheme())
-  await publishAppearanceState()
-  renderSkinPicker()
-  wallpaperLibraryMessage('壁纸显示参数已保存。')
+  const custom = readShellCustomTheme()
+  const saved = await saveShellAppearance({ key: `custom:${JSON.stringify(custom)}`, operation: () => api.saveCustomTheme(custom), control, close, render: true, message: '壁纸显示参数已保存。', errorPrefix: '保存显示参数失败' })
+  if (saved) wallpaperLibraryMessage('壁纸显示参数已保存。')
+  return saved
 }
 
 for (const [name, field] of Object.entries(customThemeRangeFields)) {
@@ -3482,17 +3605,11 @@ for (const [name, field] of Object.entries(customThemeRangeFields)) {
   })
   input.addEventListener('change', () => persistWallpaperAppearance().catch(error => wallpaperLibraryMessage(`保存显示参数失败：${error.message}`, true)))
 }
-skinApplyCustomButton.addEventListener('click', async () => {
-  await skinPickerHost.apply(async () => {
-    appearanceState = await api.saveCustomTheme(readShellCustomTheme())
-    await publishAppearanceState()
-  })
+skinApplyCustomButton.addEventListener('click', () => {
+  const custom = readShellCustomTheme()
+  return saveShellAppearance({ key: `custom:${JSON.stringify(custom)}`, operation: () => api.saveCustomTheme(custom), control: skinApplyCustomButton, close: true, errorPrefix: '保存主题失败' })
 })
-skinApplyWallpaperAppearance.addEventListener('click', async () => {
-  await skinPickerHost.apply(async () => {
-    await persistWallpaperAppearance()
-  })
-})
+skinApplyWallpaperAppearance.addEventListener('click', () => persistWallpaperAppearance({ close: true }))
 skinResetWallpaperAppearance.addEventListener('click', async () => {
   skinResetWallpaperAppearance.disabled = true
   try {
@@ -3509,8 +3626,9 @@ skinResetWallpaperAppearance.addEventListener('click', async () => {
       customTheme: { ...(appearanceState.customTheme || {}), ...recommended }
     }
     await publishAppearanceState()
-    await persistWallpaperAppearance()
-    wallpaperLibraryMessage('已恢复推荐显示参数并保存；当前壁纸和主题配色保持不变。')
+    if (await persistWallpaperAppearance({ control: skinResetWallpaperAppearance })) {
+      wallpaperLibraryMessage('已恢复推荐显示参数并保存；当前壁纸和主题配色保持不变。')
+    }
   } catch (error) {
     wallpaperLibraryMessage(`恢复推荐参数失败：${error.message}`, true)
   } finally {
@@ -3590,7 +3708,7 @@ terminalResizeHandle.addEventListener('pointerdown', beginTerminalResize)
 terminalResizeHandle.addEventListener('keydown', beginTerminalResize)
 window.addEventListener('resize', fitIntegratedTerminal)
 document.addEventListener('keydown', event => {
-  if (event.ctrlKey && !event.altKey && !event.metaKey && event.key === '`') {
+  if (!event.isComposing && event.keyCode !== 229 && !event.repeat && event.ctrlKey && !event.altKey && !event.metaKey && event.key === '`') {
     event.preventDefault()
     toggleIntegratedTerminal()
   }

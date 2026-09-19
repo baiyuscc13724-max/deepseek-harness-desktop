@@ -174,28 +174,40 @@ class ProviderMeterRegistry {
   async refreshProvider(provider, context, force) {
     const adapter = this.adapterFor(provider)
     if (!adapter) return unavailableSnapshot(provider, 'unsupported', '该服务商尚未提供额度查询能力。')
-    const cached = this.cache.get(provider.id)
+    // A provider id alone is not an account identity. Bind both caches to the
+    // caller's home, route/profile and resolved credential snapshot. Keep only
+    // a digest as the key; never retain raw credentials in public cache keys.
+    const cacheKey = require('node:crypto').createHash('sha256').update(JSON.stringify([
+      context.home || '', adapter.id, provider, context.credential || null
+    ])).digest('hex')
+    const cached = this.cache.get(cacheKey)
     const now = this.now()
-    if (!force && cached && now - cached.time < this.cacheMs) return cached.snapshot
-    if (this.inFlight.has(provider.id)) return this.inFlight.get(provider.id)
+    for (const [key, entry] of this.cache) {
+      if (now < entry.time || now - entry.time >= this.staleMs) this.cache.delete(key)
+    }
+    if (!force && cached && now >= cached.time && now - cached.time < this.cacheMs) return cached.snapshot
+    if (this.inFlight.has(cacheKey)) return this.inFlight.get(cacheKey)
 
-    const request = (async () => {
+    // Defer execution until after registration, including synchronous throws.
+    const request = Promise.resolve().then(async () => {
       try {
         const result = await adapter.refresh({ ...context, provider })
         const snapshot = normalizedSnapshot(provider, adapter, result, this.now())
-        this.cache.set(provider.id, { time: this.now(), snapshot })
+        this.cache.set(cacheKey, { time: this.now(), snapshot })
+        while (this.cache.size > 256) this.cache.delete(this.cache.keys().next().value)
         return snapshot
       } catch (error) {
         const failure = publicFailure(error)
-        if (cached && now - cached.time < this.staleMs && cached.snapshot.status === 'ready') {
+        const failedAt = this.now()
+        if (failure.status !== 'auth-required' && cached && failedAt >= cached.time && failedAt - cached.time < this.staleMs && cached.snapshot.status === 'ready') {
           return { ...cached.snapshot, stale: true, message: `${failure.message} 当前显示上次成功结果。` }
         }
         return unavailableSnapshot(provider, failure.status, failure.message, adapter.id)
       } finally {
-        this.inFlight.delete(provider.id)
+        this.inFlight.delete(cacheKey)
       }
-    })()
-    this.inFlight.set(provider.id, request)
+    })
+    this.inFlight.set(cacheKey, request)
     return request
   }
 
@@ -207,6 +219,7 @@ class ProviderMeterRegistry {
     ])
     const providers = configuredProviders(settings)
     const snapshots = await Promise.all(providers.map(provider => this.refreshProvider(provider, {
+      home,
       credential: meterCredentialFor(provider, credentials, this.environment),
       secret: name => {
         const refs = credentialDocument(credentials).refs

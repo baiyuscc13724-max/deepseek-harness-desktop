@@ -1,5 +1,5 @@
-import { access, readFile, writeFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { access, readFile, writeFile, rename, unlink } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchAssistantCopySource } from './assistant-copy-patch.mjs'
@@ -14,10 +14,19 @@ import { patchConversationWorkTreeSource } from './conversation-work-tree-patch.
 import { patchSessionPersistenceListingSource } from './session-persistence-performance-patch.mjs'
 import { patchHostSessionListingSource } from './session-list-metadata-performance-patch.mjs'
 import { patchTimelineReferenceActionSource } from './timeline-reference-patch.mjs'
-import { patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
+import { patchModelSettingsAlpha5CredentialIsolationSource, patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
 import { patchModelSettingsCredentialValidationSource } from './model-settings-credential-validation-patch.mjs'
+import { patchProviderAuthIsolationSource } from './provider-auth-isolation-patch.mjs'
+import { writePatchedRuntimeFile } from './deep-audit-runtime-patch.mjs'
+import { patchMarketplace155Source, MARKETPLACE_155_OUTPUT_SHA256 } from './deep-audit-marketplace-patch.mjs'
+import { transformSessionCoreClientSource, restoreSessionCoreClientSource, SESSION_CORE_PACKAGE, SESSION_CORE_VERSION } from './deep-audit-session-core-patch.mjs'
+import { patchQuestionCardRuntime, QUESTION_PACKAGE, QUESTION_VERSION, QUESTION_BASE_SHA256, QUESTION_PATCHED_SHA256 } from './deep-audit-question-card-patch.mjs'
+export { patchQuestionCardRuntime }
+import { prepareQuestionDelivery, publishQuestionDelivery, QUESTION_DELIVERY_SHA256 } from './deep-audit-question-delivery-patch.mjs'
 import { patchDeepSeekModelDiscoverySource } from './deepseek-model-discovery-patch.mjs'
 import { patchGoalToolRecoverySource } from './goal-tool-recovery-patch.mjs'
+import { patchImagePreviewConversationSource, patchImagePreviewSessionSource, patchImagePreviewAttachmentSource } from './image-preview-performance-patch.mjs'
+import { patchComposerQueueConversationSource, patchComposerQueueSessionSource } from './composer-queue-performance-patch.mjs'
 
 export { patchAssistantCopySource } from './assistant-copy-patch.mjs'
 export { patchAttachmentInputConversationSource, patchAttachmentInputSource } from './attachment-input-patch.mjs'
@@ -29,8 +38,9 @@ export { patchToolResultImageSource, patchToolResultOwnerSource } from './tool-r
 export { patchRecoverableToolErrorSource } from './tool-recoverable-error-patch.mjs'
 export { createChatStopFollowState, reduceChatStopFollowState } from './chat-stop-follow.mjs'
 export { patchReasoningEffortSliderSource } from './reasoning-effort-slider-patch.mjs'
-export { patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
+export { patchModelSettingsAlpha5CredentialIsolationSource, patchModelSettingsKeyOverrideSource } from './model-settings-key-override-patch.mjs'
 export { patchModelSettingsCredentialValidationSource } from './model-settings-credential-validation-patch.mjs'
+export { patchProviderAuthIsolationSource } from './provider-auth-isolation-patch.mjs'
 export { patchDeepSeekModelDiscoverySource } from './deepseek-model-discovery-patch.mjs'
 export { patchGoalToolRecoverySource } from './goal-tool-recovery-patch.mjs'
 
@@ -51,6 +61,7 @@ const bashSandboxRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-
 const windowsAclRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-sandbox-windows-acl', 'lib', 'types-CNjZgO4h.js')
 const modelSelectionRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-model-selection', 'lib', 'client.js')
 const modelSettingsRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-models', 'lib', 'client.js')
+const piAiLlmRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm-pi-ai', 'lib', 'index.js')
 const deepSeekLlmRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-llm-deepseek', 'lib', 'index.js')
 const workspaceUiRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-client-ui-workspace', 'lib', 'client.js')
 const sessionControllerClientRuntime = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-api-session-controller', 'lib', 'client.js')
@@ -1873,7 +1884,7 @@ export function restoreAlpha5ChatScrollSource(source) {
   return output
 }
 
-function restoreModernConversationComposerVisibilitySource(source) {
+export function restoreModernConversationComposerVisibilitySource(source) {
   let output = source
   if (output.includes(CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_PATCHED)) {
     output = output.replace(CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_PATCHED, CONVERSATION_ACTIVE_VIEW_ATTRIBUTE_ORIGINAL)
@@ -2684,6 +2695,20 @@ const OFFICIAL_ALPHA5_CHAT_SCROLL_HASHES = Object.freeze({
   ])
 })
 
+const OFFICIAL_ALPHA5_MODEL_AUTH_HASHES = Object.freeze({
+  modelSettings: Object.freeze({
+    official: '7ACF9736EDEEA519C63791E946A135F5CC854C95C299FD9864E82074FCE587E5',
+    patched: '766CFC372B94665000B60836D845767AEF3417852D6F97ED1CD035AFC039EA52'
+  }),
+  piAi: Object.freeze({
+    official: '69C387A2F1DE52D7798748737E3CF1B669E2B6A3D4820CDA384F1CF9BE9C23B0',
+    legacyV1Patched: '6331889639B8F11197B0C12C8E2DCDCBE9965086B6642E9BC27423FB24494B61',
+    legacyV2Patched: '2E1267A86F4BE4FE311AE5C2EC62B5F1094B7294A420F2440B72736DADE057C4',
+    legacyV3Patched: '2171F31250C0970D1CC9A9733A241364306D99146E5BAEC8D0775066D7AE3388',
+    patched: '28A7850E44BC24CDD0E5E7222EB0FE655877D1433DB59F8FF435934528BA0207'
+  })
+})
+
 const OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES = Object.freeze({
   official: 'B1C5D6F2F26FD7BA5A8764D75D1043BCAC0C79CC950DC22044BAE23D6BEC8C2B',
   liveV1Patched: 'BBE21207F5987054A874047926044FD09BD38C0D3ACCD4C24D546BFD11720F2E',
@@ -2731,7 +2756,7 @@ export async function patchInstalledMcpClient(file = mcpClientRuntime) {
   if (sourceSha256(patched.source) !== hashes.patched) {
     throw new Error(`Pinned DSH ${manifest.version} MCP client startup-timeout patch output hash changed; refusing an unsafe patch.`)
   }
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -2758,7 +2783,7 @@ export async function patchInstalledGoalTool(file = goalToolRuntime) {
   if (sourceSha256(patched.source) !== hashes.patched) {
     throw new Error(`Pinned DSH ${manifest.version} goal tool recovery-guidance patch output hash changed; refusing an unsafe patch.`)
   }
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -2808,21 +2833,21 @@ function assertOfficialAlpha2Artifact(source, packageName, anchors) {
 export async function patchInstalledRuntime(file = runtimeClient) {
   const source = await readFile(file, 'utf8')
   const patched = patchRuntimeSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledAttachmentProfile(file = attachmentProfileRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchAttachmentProfileSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledDirectoryPicker(file = directoryPickerRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchDirectoryPickerSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -2839,7 +2864,7 @@ export function patchConversationSource(source) {
 export async function patchInstalledModernConversationComposerVisibility(file = conversationRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchModernConversationComposerVisibilitySource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -2887,14 +2912,14 @@ export async function patchInstalledConversation(file = conversationRuntime) {
   }
   const source = await readFile(file, 'utf8')
   const patched = patchConversationSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledAttachmentInput(file = attachmentUiRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchAttachmentInputSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -2924,7 +2949,7 @@ export async function patchInstalledTokenMeter(file = tokenMeterRuntime) {
     assertOfficialAlpha2Artifact(source, '@deepseek-ai/dsh-token-meter', ['stateVersion: 2', 'cacheReadTokens', 'llm/retry-started', TOKEN_USAGE_REGISTER_ALPHA2_ORIGINAL])
   }
   const patched = patchTokenMeterSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -2945,14 +2970,14 @@ export async function patchInstalledSubagent(file = subagentRuntime) {
   if (alpha5 && sourceSha256(patched.source) !== OFFICIAL_ALPHA5_SUBAGENT_UI_HASHES.patched) {
     throw new Error('Pinned DSH alpha.5 subagent UI disclosure patch output hash changed; refusing an unsafe patch.')
   }
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledAgentLoop(file = agentLoopRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchAgentLoopCancellationSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -2962,7 +2987,7 @@ export async function patchInstalledSubagentContinuation(file = subagentContinua
   const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
   if (manifest.version !== OFFICIAL_ALPHA5_VERSION) {
     const patched = patchSubagentContinuationSource(source)
-    if (patched.changed) await writeFile(file, patched.source, 'utf8')
+    if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
     return patched.changed
   }
   if (manifest.name !== '@deepseek-ai/dsh-subagent') {
@@ -2977,35 +3002,35 @@ export async function patchInstalledSubagentContinuation(file = subagentContinua
   if (sourceSha256(patched.source) !== OFFICIAL_ALPHA5_SUBAGENT_HASHES.patched) {
     throw new Error('Pinned DSH alpha.5 subagent lifecycle patch output hash changed; refusing an unsafe patch.')
   }
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledSandbox(file = sandboxRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchSandboxEscalationSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledPwshLocal(file = pwshLocalRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchPwshLocalSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledToolPwsh(file = toolPwshRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchToolPwshSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledSandboxExecutor(file) {
   const source = await readFile(file, 'utf8')
   const patched = patchSandboxExecutorSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -3020,7 +3045,7 @@ export async function patchInstalledBashSandbox(file = bashSandboxRuntime) {
 export async function patchInstalledWindowsAcl(file = windowsAclRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchWindowsAclSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -3031,7 +3056,49 @@ export async function patchInstalledModelSelection(file = modelSelectionRuntime)
     return false
   }
   const patched = patchReasoningEffortSliderSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
+  return patched.changed
+}
+
+export async function patchInstalledAlpha5ModelSettings(file = modelSettingsRuntime) {
+  const packageRoot = path.resolve(path.dirname(file), '..')
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+  if (manifest.version !== OFFICIAL_ALPHA5_VERSION) return false
+  if (manifest.name !== '@deepseek-ai/dsh-client-ui-settings-models') {
+    throw new Error(`Pinned DSH model settings identity changed (${manifest.name || '<missing>'}@${manifest.version || '<missing>'}); refusing an unsafe credential isolation patch.`)
+  }
+  const source = await readFile(file, 'utf8')
+  const sourceHash = sourceSha256(source)
+  const hashes = OFFICIAL_ALPHA5_MODEL_AUTH_HASHES.modelSettings
+  if (![hashes.official, hashes.patched].includes(sourceHash)) {
+    throw new Error('Pinned DSH alpha.5 model settings source is neither exact official nor exact credential-isolated artifact; refusing an unsafe patch.')
+  }
+  const patched = patchModelSettingsAlpha5CredentialIsolationSource(source)
+  if (sourceSha256(patched.source) !== hashes.patched) {
+    throw new Error('Pinned DSH alpha.5 model settings credential-isolation output hash changed; refusing an unsafe patch.')
+  }
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
+  return patched.changed
+}
+
+export async function patchInstalledProviderAuthIsolation(file = piAiLlmRuntime) {
+  const packageRoot = path.resolve(path.dirname(file), '..')
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+  if (manifest.version !== OFFICIAL_ALPHA5_VERSION) return false
+  if (manifest.name !== '@deepseek-ai/dsh-llm-pi-ai') {
+    throw new Error(`Pinned DSH pi-ai identity changed (${manifest.name || '<missing>'}@${manifest.version || '<missing>'}); refusing an unsafe provider-auth isolation patch.`)
+  }
+  const source = await readFile(file, 'utf8')
+  const sourceHash = sourceSha256(source)
+  const hashes = OFFICIAL_ALPHA5_MODEL_AUTH_HASHES.piAi
+  if (![hashes.official, hashes.legacyV1Patched, hashes.legacyV2Patched, hashes.legacyV3Patched, hashes.patched].includes(sourceHash)) {
+    throw new Error('Pinned DSH alpha.5 pi-ai source is neither exact official nor an exact complete provider-auth-isolated artifact; refusing an unsafe patch.')
+  }
+  const patched = patchProviderAuthIsolationSource(source)
+  if (sourceSha256(patched.source) !== hashes.patched) {
+    throw new Error('Pinned DSH alpha.5 pi-ai provider-auth-isolation output hash changed; refusing an unsafe patch.')
+  }
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -3050,7 +3117,7 @@ export async function patchInstalledModelSettings(file = modelSettingsRuntime) {
 export async function patchInstalledDeepSeekModelDiscovery(file = deepSeekLlmRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchDeepSeekModelDiscoverySource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -3066,11 +3133,11 @@ export async function patchInstalledWorkspaceUi(file = workspaceUiRuntime) {
     }
     const patched = patchAlpha2WorkspaceStartSessionSource(source)
     if (sourceSha256(patched.source) !== OFFICIAL_ALPHA2_WORKSPACE_PATCHED_HASH) throw new Error('Pinned DSH alpha.2 workspace patch output hash changed; refusing an unsafe patch.')
-    if (patched.changed) await writeFile(file, patched.source, 'utf8')
+    if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
     return patched.changed
   }
   const patched = patchWorkspaceSessionMenuSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -3085,7 +3152,7 @@ export async function patchInstalledAlpha2SessionController(file = sessionContro
   }
   const patched = patchAlpha2SessionControllerSource(source)
   if (sourceSha256(patched.source) !== OFFICIAL_ALPHA2_SESSION_CONTROLLER_PATCHED_HASH) throw new Error('Pinned DSH alpha.2 Session Controller patch output hash changed; refusing an unsafe patch.')
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -3126,28 +3193,41 @@ const OFFICIAL_ALPHA4_CAPABILITY_ARTIFACTS = Object.freeze([
   ['@deepseek-ai/dsh-session', sessionRuntime, 'BE25B05FFD1403908796935EF11A61D4C002F7FF3D12F83EF82A8C9976984342', ['function SessionSeq(value) {', 'inheritedEventCount;', 'ownEvents() {', 'return this.snapshotEvents(this.inheritedEventCount);']]
 ])
 
+// Generated only from alpha.5 registry archives whose SHA-512 matched package-lock.
+// These are exact COMPLETE file outputs, not marker-based or partial-patch waivers.
+// Conversation hashes are normalized through the existing composer-visibility restore.
+const ALPHA5_IMAGE_QUEUE_SOURCE_PROOFS = Object.freeze({
+  '@deepseek-ai/dsh-api-session-controller': Object.freeze({ official: 'F2EC317D1C1F020662B2BD004E6770C721A7BF7BFD90020B3F06BFB2557C70D6', patched: 'AA6B518813EBA20A061C044EA7C63A3DDB5F71D085BB34840D144ED8202906D9' }),
+  '@deepseek-ai/dsh-client-ui-conversation': Object.freeze({ official: '7EE5792B3F15AC1B691EEE7D373869101F8C7D336FC22B3F66D082612E4B1BAE', patched: 'F74FE0B737247960AFD92416768A6EADC030259700AE91C0E83966C45BC27DC1' }),
+  '@deepseek-ai/dsh-client-ui-attachment': Object.freeze({ official: '4E166AB570F88D2A76E1E60737D2AA83EEE088198D4AF0C153E5EBE668A9A9AA', patched: 'DD68F6C0BC0DA69E17B7CA555E88FC1C55B0B9523C72D36D01CF55AC4665E26D' })
+})
+
 const OFFICIAL_ALPHA5_CAPABILITY_ARTIFACTS = Object.freeze([
   ...OFFICIAL_ALPHA4_CAPABILITY_ARTIFACTS,
+  ['@deepseek-ai/dsh-client-ui-attachment', attachmentUiRuntime, ALPHA5_IMAGE_QUEUE_SOURCE_PROOFS['@deepseek-ai/dsh-client-ui-attachment'].official, ['function MessageImage(', 'function ImageGallery(', 'conversation.trajectory.images']],
   ['@deepseek-ai/dsh-session-projection-cache', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-projection-cache', 'lib', 'index.js'), '95BC052F468A99F101A2EE81B41FCFF1D845145329A37C830CB2EC7DC025966B', ['compatibleVersions: [3, 4]', 'invalidRecords: "backup-and-skip"', 'isSeeded: z$1.boolean().optional()']],
   ['@deepseek-ai/dsh-storage-domain', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-storage-domain', 'lib', 'index.js'), 'E536BA09B7CCC0F10BB54818DFE44454374E5CBF7AEBA140B216BA1CA2E87517', ['spec.compatibleVersions ?? []', 'spec.invalidRecords !== "backup-and-skip" || unit.backupRecord === void 0', 'const moved = await unit.backupRecord(table, key);']],
   ['@deepseek-ai/dsh-storage-json', path.join(root, 'node_modules', '@deepseek-ai', 'dsh-storage-json', 'lib', 'index.js'), 'DE4CF45C829EDD70C71C4EF4682A467B888F0A187D91923111930B00FBA22D85', ['function acceptedStamps(descriptor) {', 'async backupRecord(table, key) {', 'await this.tracked(rename(path, moved));']]
 ])
 
-async function assertInstalledNativeCapabilities(version, artifacts) {
+async function assertInstalledNativeCapabilities(version, artifacts, nodeModulesRoot = path.join(root, 'node_modules')) {
   for (const [packageName, file, expectedHash, anchors] of artifacts) {
     const packageRoot = path.resolve(path.dirname(file), '..')
     const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
     if (manifest.name !== packageName || manifest.version !== version) throw new Error(`Pinned DSH ${version} capability package changed: ${packageName}`)
     const source = await readFile(file, 'utf8')
     const officialSource = packageName === '@deepseek-ai/dsh-client-ui-conversation'
-      ? restoreModernConversationComposerVisibilitySource(source)
+      ? restoreModernConversationComposerVisibilitySource(version === OFFICIAL_ALPHA5_VERSION ? restoreSessionCoreClientSource(source) : source)
       : version === OFFICIAL_ALPHA5_VERSION && packageName === '@deepseek-ai/dsh-client-ui-chat'
         ? restoreAlpha5ChatSentTimeSnapshotSource(restoreAlpha5ChatScrollSource(source))
         : source
-    if (sourceSha256(officialSource) !== expectedHash) throw new Error(`Pinned DSH ${packageName}@${version} source hash changed; refusing an unsafe official-first decision.`)
+    const actualHash = sourceSha256(officialSource)
+    const imageQueueProof = version === OFFICIAL_ALPHA5_VERSION ? ALPHA5_IMAGE_QUEUE_SOURCE_PROOFS[packageName] : undefined
+    const exactImageQueueOutput = imageQueueProof?.official === expectedHash && actualHash === imageQueueProof?.patched
+    if (actualHash !== expectedHash && !exactImageQueueOutput) throw new Error(`Pinned DSH ${packageName}@${version} source hash changed; refusing an unsafe official-first decision.`)
     for (const anchor of anchors) if (!officialSource.includes(anchor)) throw new Error(`Pinned DSH ${packageName}@${version} capability anchor changed (${anchor}); refusing an unsafe official-first decision.`)
   }
-  for (const removed of [runtimeClient, hostApiProxyRuntime, path.join(root, 'node_modules', '@deepseek-ai', 'dsh-session-persistence-sqlite', 'package.json')]) {
+  for (const removed of [path.join(nodeModulesRoot, '@deepseek-ai', 'dsh-client-runtime', 'lib', 'client.js'), path.join(nodeModulesRoot, '@deepseek-ai', 'dsh-host-apiproxy', 'lib', 'index.js'), path.join(nodeModulesRoot, '@deepseek-ai', 'dsh-session-persistence-sqlite', 'package.json')]) {
     try {
       await access(removed)
       throw new Error(`Retired ${version} compatibility artifact is unexpectedly installed: ${removed}`)
@@ -3166,49 +3246,137 @@ export async function assertInstalledAlpha4NativeCapabilities() {
   return assertInstalledNativeCapabilities(OFFICIAL_ALPHA4_VERSION, OFFICIAL_ALPHA4_CAPABILITY_ARTIFACTS)
 }
 
-export async function assertInstalledAlpha5NativeCapabilities() {
-  return assertInstalledNativeCapabilities(OFFICIAL_ALPHA5_VERSION, OFFICIAL_ALPHA5_CAPABILITY_ARTIFACTS)
+export async function assertInstalledAlpha5NativeCapabilities(nodeModulesRoot = path.join(root, 'node_modules')) {
+  const artifacts = OFFICIAL_ALPHA5_CAPABILITY_ARTIFACTS.map(([name, file, hash, anchors]) =>
+    [name, path.join(nodeModulesRoot, name, 'lib', path.basename(file)), hash, anchors])
+  return assertInstalledNativeCapabilities(OFFICIAL_ALPHA5_VERSION, artifacts, nodeModulesRoot)
+}
+
+// Separate mandatory alpha.5 preflight: the earlier native capability list and
+// its legacy compatibility contracts remain unchanged. No marker normalization.
+export async function assertInstalledQuestionCardNativeCapability(runtimeRoot) {
+  const packageRoot = path.join(runtimeRoot, 'node_modules', QUESTION_PACKAGE)
+  const manifest = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'))
+  if (manifest.name !== QUESTION_PACKAGE || manifest.version !== QUESTION_VERSION) throw new Error('Unsupported question package identity')
+  const source = await readFile(path.join(packageRoot, 'lib', 'client.js'), 'utf8')
+  const hash = sourceSha256(source)
+  if (![QUESTION_BASE_SHA256, QUESTION_PATCHED_SHA256, QUESTION_DELIVERY_SHA256].some(proof => hash === proof.toUpperCase())) {
+    throw new Error('Unsupported question bundle SHA-256; refusing native preflight.')
+  }
+  return false
+}
+
+// This complete, mandatory gate is shared by normal CLI and isolated installs.
+// The older 13-package capability API alone is not the complete alpha.5 gate.
+export async function assertInstalledAlpha5RuntimePreflight(runtimeRoot) {
+  await assertInstalledQuestionCardNativeCapability(runtimeRoot)
+  return assertInstalledAlpha5NativeCapabilities(path.join(runtimeRoot, 'node_modules'))
+}
+
+// The delivery pair additionally binds Gateway client (not part of the 13-native list).
+// Legacy question-card API stays available only for exact v1 historical fixtures.
+export async function assertInstalledQuestionDeliveryPreflight(runtimeRoot) {
+  await assertInstalledAlpha5RuntimePreflight(runtimeRoot)
+  await prepareQuestionDelivery(runtimeRoot)
+  return false
+}
+export async function patchQuestionDeliveryRuntime(runtimeRoot) {
+  await assertInstalledAlpha5RuntimePreflight(runtimeRoot)
+  const prepared = await prepareQuestionDelivery(runtimeRoot)
+  return publishQuestionDelivery(prepared)
+}
+
+export async function patchInstalledSessionCoreClient(file = conversationRuntime, io) {
+  const manifest = JSON.parse(await readFile(path.join(path.dirname(file), '..', 'package.json'), 'utf8'))
+  if (manifest.name !== SESSION_CORE_PACKAGE || manifest.version !== SESSION_CORE_VERSION) {
+    throw new Error('Pinned session-core package identity/version changed; refusing unsafe patch.')
+  }
+  const source = await readFile(file, 'utf8')
+  const patched = transformSessionCoreClientSource(source)
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source, io)
+  return patched.changed
+}
+
+/** Compose each complete alpha.5 file before writing; a cross-file interruption is replayable. */
+export async function patchInstalledAlpha5ImageQueuePerformance(files = {}) {
+  const targets = [
+    ['@deepseek-ai/dsh-api-session-controller', files.session ?? sessionControllerClientRuntime, [patchImagePreviewSessionSource, patchComposerQueueSessionSource]],
+    ['@deepseek-ai/dsh-client-ui-conversation', files.conversation ?? conversationRuntime, [patchImagePreviewConversationSource, patchComposerQueueConversationSource]],
+    ['@deepseek-ai/dsh-client-ui-attachment', files.attachment ?? attachmentUiRuntime, [patchImagePreviewAttachmentSource]]
+  ]
+  const manifests = await Promise.all(targets.map(async ([name, file]) => {
+    const manifest = JSON.parse(await readFile(path.join(path.dirname(file), '..', 'package.json'), 'utf8'))
+    if (manifest.name !== name) throw new Error(`Pinned DSH image/queue companion name changed: ${name}`)
+    return manifest
+  }))
+  const versions = new Set(manifests.map(manifest => manifest.version))
+  if (versions.size !== 1) throw new Error('Pinned DSH image/queue companions have mixed versions; refusing an unsafe patch.')
+  const version = manifests[0].version
+  if ([OFFICIAL_RC2_VERSION, OFFICIAL_ALPHA2_VERSION, OFFICIAL_ALPHA3_VERSION, OFFICIAL_ALPHA4_VERSION].includes(version)) return false
+  if (version !== OFFICIAL_ALPHA5_VERSION) throw new Error('Pinned DSH image/queue version changed; refusing an unsafe patch.')
+  const prepared = []
+  for (const [name, file, transforms] of targets) {
+    const source = await readFile(file, 'utf8')
+    const normalize = value => name === '@deepseek-ai/dsh-client-ui-conversation' ? restoreModernConversationComposerVisibilitySource(restoreSessionCoreClientSource(value)) : value
+    const proof = ALPHA5_IMAGE_QUEUE_SOURCE_PROOFS[name]
+    const hash = sourceSha256(normalize(source))
+    if (hash === proof.patched) continue
+    if (hash !== proof.official) throw new Error(`Pinned DSH ${name} image/queue source hash changed; refusing an unsafe patch.`)
+    let output = source
+    for (const transform of transforms) output = transform(output).source
+    // Function#toString preserves checkout CRLF in injected helper bodies. The
+    // already-proven npm input is LF; canonicalize generated output, never input.
+    output = output.replace(/\r\n?/g, '\n')
+    if (sourceSha256(normalize(output)) !== proof.patched) throw new Error(`Pinned DSH ${name} image/queue composed output hash changed; refusing an unsafe patch.`)
+    prepared.push({ file, source, output })
+  }
+  // Every package, input, transform and output is proven before the first write.
+  // Only official/complete per-file states are admitted on the next CLI preflight.
+  for (const { file, source, output } of prepared) {
+    await writePatchedRuntimeFile(file, source, output)
+  }
+  return prepared.length > 0
 }
 
 export async function patchInstalledSessionPersistence(file = sessionPersistenceRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchSessionPersistenceListingSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledHostApiProxy(file = hostApiProxyRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchHostSessionListingSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledFsSearch(file = fsSearchRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchFsSearchSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledToolFs(file = toolFsRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchFsEditSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledSubprocess(file = subprocessRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchSubprocessSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
 export async function patchInstalledWebApp(file = webAppRuntime) {
   const source = await readFile(file, 'utf8')
   const patched = patchWebAppSource(source)
-  if (patched.changed) await writeFile(file, patched.source, 'utf8')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
   return patched.changed
 }
 
@@ -3321,6 +3489,16 @@ export function classifyOfficialRuntimeGraph(manifest, lock, installedCoreManife
   return { mode, version, directRootCount: manifestRoot.count, selectedPackageCount: selectedDigest.count }
 }
 
+export async function patchInstalledMarketplace155(file = path.join(root, 'node_modules', 'dsh-plugin-marketplace', 'lib', 'index.js')) {
+  const manifest = JSON.parse(await readFile(path.join(path.dirname(file), '..', 'package.json'), 'utf8'))
+  if (manifest.name !== 'dsh-plugin-marketplace' || manifest.version !== '1.5.5') throw new Error('Pinned marketplace identity/version changed; refusing unsafe patch.')
+  const source = await readFile(file, 'utf8')
+  const patched = patchMarketplace155Source(source)
+  if (sourceSha256(patched.source) !== MARKETPLACE_155_OUTPUT_SHA256) throw new Error('Pinned marketplace output hash changed; refusing unsafe patch.')
+  if (patched.changed) await writePatchedRuntimeFile(file, source, patched.source)
+  return patched.changed
+}
+
 async function cliOfficialRuntimeGraph() {
   const [manifest, lock, installedCoreManifest] = await Promise.all([
     readFile(path.join(root, 'package.json'), 'utf8').then(JSON.parse),
@@ -3368,6 +3546,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (targetsAlpha3) await assertInstalledAlpha3NativeCapabilities()
   if (targetsAlpha4) await assertInstalledAlpha4NativeCapabilities()
   if (targetsAlpha5) await assertInstalledAlpha5NativeCapabilities()
+  if (targetsAlpha5) await assertInstalledAlpha5RuntimePreflight(root)
+  if (targetsAlpha5) await assertInstalledQuestionDeliveryPreflight(root)
   const sessionChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : targetsAlpha2 ? await patchInstalledAlpha2SessionController() : await patchInstalledRuntime()
   const alpha5ChatScrollChanged = targetsAlpha5 ? await patchInstalledAlpha5ChatScroll() : false
   const attachmentProfileChanged = await patchInstalledAttachmentProfile()
@@ -3387,7 +3567,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const bashSandboxChanged = await patchInstalledBashSandbox()
   const windowsAclChanged = await patchInstalledWindowsAcl(await resolveInstalledWindowsAclRuntime())
   const modelSelectionChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledModelSelection()
-  const modelSettingsChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledModelSettings()
+  const modelSettingsChanged = targetsAlpha5 ? await patchInstalledAlpha5ModelSettings() : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledModelSettings()
+  const providerAuthChanged = targetsAlpha5 ? await patchInstalledProviderAuthIsolation() : false
+  const marketplaceChanged = await patchInstalledMarketplace155()
   const deepSeekDiscoveryChanged = await patchInstalledDeepSeekModelDiscovery()
   const workspaceUiChanged = targetsAlpha5 ? false : targetsAlpha3 ? false : targetsAlpha4 ? false : await patchInstalledWorkspaceUi()
   const sessionPersistenceChanged = await patchInstalledSessionPersistence()
@@ -3399,13 +3581,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const goalToolChanged = targetsModernAlpha ? await patchInstalledGoalTool() : false
   const webAppChanged = await patchInstalledWebApp()
   const codexParityChanged = await patchCodexParityRuntime(path.join(root, 'node_modules'))
+  const imageQueuePerformanceChanged = targetsAlpha5 ? await patchInstalledAlpha5ImageQueuePerformance() : false
+  const sessionCoreChanged = targetsAlpha5 ? await patchInstalledSessionCoreClient() : false
+  const questionDeliveryChanged = targetsAlpha5 ? (await patchQuestionDeliveryRuntime(root)).changed : false
+  if (targetsAlpha5) process.stdout.write(questionDeliveryChanged ? 'Patched exact alpha.5 question/Gateway client delivery pair.\n' : 'Alpha.5 question/Gateway delivery pair already hash-verified.\n')
+  if (targetsAlpha5) process.stdout.write(sessionCoreChanged ? 'Patched exact alpha.5 session queue subscription disposal.\n' : 'Alpha.5 session queue disposal already patched and hash-verified.\n')
   process.stdout.write(targetsCurrentAlpha ? `Verified official ${currentAlphaLabel} SessionSeq lineage, inherited-event ownership, session jump loading, and connection-generation recovery.\n` : targetsAlpha3 ? 'Verified official alpha.3 session jump loading and connection-generation recovery.\n' : targetsAlpha2 ? (sessionChanged ? 'Patched alpha.2 SessionManager rendering performance.\n' : 'Alpha.2 SessionManager rendering performance patch already applied.\n') : (sessionChanged ? 'Patched desktop New Session behavior and SessionManager rendering performance.\n' : 'Desktop New Session and SessionManager rendering performance patches already applied.\n'))
   process.stdout.write(attachmentProfileChanged ? 'Removed fixed image-side and normalization dimension caps.\n' : 'Image-side and normalization dimension caps already removed.\n')
   process.stdout.write(pickerChanged ? 'Patched stable Windows directory picker.\n' : 'Stable Windows directory picker patch already applied.\n')
   process.stdout.write(targetsCurrentAlpha ? `Adopted official ${currentAlphaLabel} conversation split and whole-session Turn rail without Desktop overlay patches.\n` : targetsAlpha3 ? 'Adopted official alpha.3 conversation split and whole-session Turn rail without Desktop overlay patches.\n' : conversationChanged ? 'Patched conversation telemetry, view navigation, labels, and sticky response copy.\n' : 'Conversation telemetry, view navigation, labels, and sticky response copy already patched.\n')
   if (targetsAlpha5) process.stdout.write(alpha5ChatScrollChanged ? 'Patched alpha.5 bounded conversation scroll-intent restoration.\n' : 'Alpha.5 bounded conversation scroll-intent restoration already patched.\n')
   if (targetsModernAlpha) process.stdout.write(modernConversationComposerChanged ? 'Restricted the official composer to the chat view.\n' : 'Official composer visibility is already restricted to the chat view.\n')
-  process.stdout.write(targetsCurrentAlpha ? `Adopted official ${currentAlphaLabel} queued-image and pending-submission UI without Desktop attachment overrides.\n` : targetsAlpha3 ? 'Adopted official alpha.3 queued-image and pending-submission UI without Desktop attachment overrides.\n' : attachmentInputChanged ? 'Patched recoverable image dragging and draft image transfer.\n' : 'Recoverable image dragging and draft image transfer already patched.\n')
+  process.stdout.write(targetsAlpha5 ? (imageQueuePerformanceChanged ? 'Patched alpha.5 bounded image loading and observed composer submission settlement.\n' : 'Alpha.5 image/queue performance composition already patched and hash-verified.\n') : targetsCurrentAlpha ? `Adopted official ${currentAlphaLabel} queued-image and pending-submission UI without Desktop attachment overrides.\n` : targetsAlpha3 ? 'Adopted official alpha.3 queued-image and pending-submission UI without Desktop attachment overrides.\n' : attachmentInputChanged ? 'Patched recoverable image dragging and draft image transfer.\n' : 'Recoverable image dragging and draft image transfer already patched.\n')
   process.stdout.write(toolResultImagesChanged ? 'Patched durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation.\n' : 'Durable tool-result image delivery, file delivery, and recoverable edit-conflict presentation already patched.\n')
   process.stdout.write(tokenMeterChanged ? 'Patched cache telemetry detail projection.\n' : 'Cache telemetry detail projection already applied.\n')
   process.stdout.write(subagentChanged ? 'Patched subagent lifecycle and history views.\n' : 'Subagent lifecycle and history views already applied.\n')
@@ -3417,7 +3604,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   process.stdout.write(pwshSandboxChanged || bashSandboxChanged ? 'Patched confined nested-pipe denial classification.\n' : 'Confined nested-pipe denial classification already applied.\n')
   process.stdout.write(windowsAclChanged ? 'Patched Windows ACL token-default DACL intersection.\n' : 'Windows ACL token-default DACL intersection already applied.\n')
   process.stdout.write(targetsCurrentAlpha ? `Verified official ${currentAlphaLabel} model-selection behavior.\n` : targetsAlpha3 ? 'Verified official alpha.3 model-selection behavior.\n' : modelSelectionChanged ? 'Patched reasoning effort slider.\n' : 'Reasoning effort slider already applied.\n')
-  process.stdout.write(targetsCurrentAlpha ? `Verified official ${currentAlphaLabel} model credential settings.\n` : targetsAlpha3 ? 'Verified official alpha.3 model credential settings.\n' : modelSettingsChanged ? 'Patched safe model API-key overrides and provider validation.\n' : 'Safe model API-key overrides and provider validation already applied.\n')
+  process.stdout.write(targetsAlpha5 ? (modelSettingsChanged ? 'Patched alpha.5 namespace/provider-owned credential isolation.\n' : 'Alpha.5 namespace/provider-owned credential isolation already applied and hash-verified.\n') : targetsCurrentAlpha ? `Verified official ${currentAlphaLabel} model credential settings.\n` : targetsAlpha3 ? 'Verified official alpha.3 model credential settings.\n' : modelSettingsChanged ? 'Patched safe model API-key overrides and provider validation.\n' : 'Safe model API-key overrides and provider validation already applied.\n')
+  if (targetsAlpha5) process.stdout.write(providerAuthChanged ? 'Patched alpha.5 provider authentication contracts and request credential snapshots.\n' : 'Alpha.5 provider authentication contracts and request credential snapshots already applied and hash-verified.\n')
+  process.stdout.write(marketplaceChanged ? 'Patched pinned marketplace queue, env transaction and replacement safety.\n' : 'Pinned marketplace maintenance patch already applied and hash-verified.\n')
   process.stdout.write(deepSeekDiscoveryChanged ? 'Patched DeepSeek credential validation discovery.\n' : 'DeepSeek credential validation discovery already applied.\n')
   process.stdout.write(targetsCurrentAlpha ? `Adopted official ${currentAlphaLabel} workspace and conversation-view selection behavior.\n` : targetsAlpha3 ? 'Adopted official alpha.3 workspace and conversation-view selection behavior.\n' : targetsAlpha2 ? (workspaceUiChanged ? 'Patched alpha.2 force-new workspace session behavior; native session menus retained.\n' : 'Alpha.2 force-new workspace session patch already applied; native session menus retained.\n') : (workspaceUiChanged ? 'Patched Codex-style session menus.\n' : 'Codex-style session menus already applied.\n'))
   process.stdout.write(sessionPersistenceChanged ? 'Patched bounded concurrent JSONL session metadata listing.\n' : 'Bounded concurrent JSONL session metadata listing already applied.\n')

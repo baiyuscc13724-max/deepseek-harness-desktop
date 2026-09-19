@@ -1,6 +1,10 @@
 (function exposePetInteraction(globalObject) {
   'use strict'
 
+  function validPoint(point) {
+    return Boolean(point && Number.isFinite(point.pointerId) && Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.at))
+  }
+
   class PetInteractionEngine {
     constructor({ dragDistance = 8, petHoldMs = 280, petGraceDistance = 38, onEvent = () => {} } = {}) {
       this.dragDistance = dragDistance
@@ -11,7 +15,7 @@
     }
 
     begin(point) {
-      if (!point || point.pointerId == null) return false
+      if (this.gesture || !validPoint(point)) return false
       this.gesture = {
         pointerId: point.pointerId,
         originX: point.x,
@@ -28,7 +32,7 @@
 
     hold(point) {
       const gesture = this.gesture
-      if (!gesture || gesture.mode !== 'pending') return false
+      if (!gesture || !validPoint(point) || point.pointerId !== gesture.pointerId || point.at < gesture.startedAt || gesture.mode !== 'pending') return false
       const elapsed = point.at - gesture.startedAt
       const distance = Math.hypot(point.x - gesture.originX, point.y - gesture.originY)
       if (gesture.hotspot !== 'head' || elapsed < this.petHoldMs || distance > this.petGraceDistance) return false
@@ -41,7 +45,7 @@
 
     move(point) {
       const gesture = this.gesture
-      if (!gesture || point.pointerId !== gesture.pointerId) return null
+      if (!gesture || !validPoint(point) || point.pointerId !== gesture.pointerId || point.at < gesture.startedAt) return null
       const elapsed = point.at - gesture.startedAt
       const distance = Math.hypot(point.x - gesture.originX, point.y - gesture.originY)
       const previousX = gesture.lastX
@@ -73,7 +77,7 @@
 
     end(point) {
       const gesture = this.gesture
-      if (!gesture || point.pointerId !== gesture.pointerId) return null
+      if (!gesture || !validPoint(point) || point.pointerId !== gesture.pointerId || point.at < gesture.startedAt) return null
       gesture.lastX = point.x
       gesture.lastY = point.y
       const elapsed = point.at - gesture.startedAt

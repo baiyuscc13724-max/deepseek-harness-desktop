@@ -62,6 +62,8 @@ function createAgentTeamsSecretService({ protector, endpoint = defaultEndpoint()
   const capabilityToken = Buffer.from(token)
   let server
   let closed = false
+  let closePromise
+  const sockets = new Set()
 
   const authorize = value => {
     let supplied
@@ -72,7 +74,7 @@ function createAgentTeamsSecretService({ protector, endpoint = defaultEndpoint()
   }
 
   const handleRequest = async request => {
-    if (!request || typeof request !== 'object' || Array.isArray(request) || !authorize(request.token)) throw serviceError('Host secret capability is unavailable')
+    if (closed || !request || typeof request !== 'object' || Array.isArray(request) || !authorize(request.token)) throw serviceError('Host secret capability is unavailable')
     const purpose = boundedString(request.purpose, 'purpose', 128)
     const binding = boundedString(request.binding, 'binding', 512)
     if (request.action === 'protect') {
@@ -120,6 +122,10 @@ function createAgentTeamsSecretService({ protector, endpoint = defaultEndpoint()
     if (server) return
     if (process.platform !== 'win32') await rm(endpoint, { force: true }).catch(() => undefined)
     server = net.createServer(socket => {
+      if (closed) return socket.destroy()
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      socket.setTimeout(30_000, () => socket.destroy())
       let bytes = 0
       let text = ''
       socket.setEncoding('utf8')
@@ -149,14 +155,19 @@ function createAgentTeamsSecretService({ protector, endpoint = defaultEndpoint()
     return { ...env, [ENDPOINT_ENV]: endpoint, [TOKEN_ENV]: capabilityToken.toString('base64url') }
   }
 
-  const close = async () => {
-    if (closed) return
+  const close = () => {
+    if (closePromise) return closePromise
     closed = true
     capabilityToken.fill(0)
     const active = server
     server = undefined
-    if (active) await new Promise(resolve => active.close(() => resolve()))
-    if (process.platform !== 'win32') await rm(endpoint, { force: true }).catch(() => undefined)
+    const serverClosed = active ? new Promise(resolve => active.close(() => resolve())) : Promise.resolve()
+    for (const socket of sockets) socket.destroy()
+    closePromise = (async () => {
+      await serverClosed
+      if (process.platform !== 'win32') await rm(endpoint, { force: true }).catch(() => undefined)
+    })()
+    return closePromise
   }
 
   return Object.freeze({ start, runtimeEnvironment, close, endpoint })

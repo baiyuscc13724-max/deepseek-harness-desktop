@@ -81,6 +81,8 @@ class DesktopDeviceProvider {
     this.targetCache = new Map()
     this.lastFrame = null
     this.sequence = 0
+    this.contextRevision = 0
+    this.captureRevision = 0
     this.stopped = false
   }
 
@@ -141,8 +143,17 @@ class DesktopDeviceProvider {
     return this.#assertControl()
   }
 
+  #assertCurrent(state, revision) {
+    const current = this.controlState()
+    if (!current.ready || !current.enabled || current.authorization.scope === 'none') throw authorizationError(current)
+    if (current.generation !== state.generation || revision !== this.contextRevision || this.stopped) {
+      throw Object.assign(new Error('桌面设备目标或授权代次已变化，旧操作已失效。'), { code: 'desktop-context-stale' })
+    }
+  }
+
   async targets() {
     const state = this.#assertControl()
+    const revision = this.contextRevision
     const targets = []
     let bounds = null
     try {
@@ -169,13 +180,18 @@ class DesktopDeviceProvider {
         })
       }
     }
+    this.#assertCurrent(state, revision)
     this.targetCache = new Map(targets.map(target => [target.id, target]))
     if (!this.targetCache.has(this.selectedTargetId)) this.selectedTargetId = DESKTOP_TARGET_ID
     return targets.map(target => publicTarget({ ...target, selected: target.id === this.selectedTargetId }))
   }
 
   async selectTarget(targetId) {
+    const state = this.#assertControl()
+    this.clearFrame()
+    const revision = this.contextRevision
     await this.targets()
+    this.#assertCurrent(state, revision)
     const target = this.targetCache.get(String(targetId || ''))
     if (!target) throw Object.assign(new Error('桌面设备目标不存在或已经失效。'), { code: 'desktop-target-not-found' })
     this.selectedTargetId = target.id
@@ -191,6 +207,7 @@ class DesktopDeviceProvider {
   }
 
   async #deliverFrame(entry, options, reused) {
+    this.#assertCurrent({ generation: entry.controlGeneration }, entry.contextRevision)
     const delivery = FRAME_DELIVERIES.has(options.delivery) ? options.delivery : 'metadata'
     const result = { ...entry.public, reused }
     if (delivery === 'buffer') return { ...result, bytes: entry.png }
@@ -201,6 +218,7 @@ class DesktopDeviceProvider {
       entry.files[namespace] ||= Promise.resolve(store.save(entry.png, { now: entry.capturedAtMs }))
       let file
       try { file = await entry.files[namespace] } catch (error) { entry.files[namespace] = null; throw error }
+      this.#assertCurrent({ generation: entry.controlGeneration }, entry.contextRevision)
       return { ...result, file, namespace }
     }
     return result
@@ -208,7 +226,10 @@ class DesktopDeviceProvider {
 
   async captureFrame(options = {}) {
     const state = this.#assertControl()
+    const revision = this.contextRevision
+    const capture = ++this.captureRevision
     const target = await this.#selectedTarget()
+    this.#assertCurrent(state, revision)
     const now = this.now()
     if (options.force !== true && this.lastFrame && this.lastFrame.target.id === target.id && this.lastFrame.controlGeneration === state.generation && now - this.lastFrame.capturedAtMs < this.minimumFrameIntervalMs) {
       return this.#deliverFrame(this.lastFrame, options, true)
@@ -227,10 +248,8 @@ class DesktopDeviceProvider {
     if (!png?.length || png.length > this.maxFrameBytes) {
       throw Object.assign(new Error('桌面设备预览帧为空或超过安全上限。'), { code: 'desktop-frame-too-large' })
     }
-    const currentState = this.controlState()
-    if (!currentState.ready || !currentState.enabled || currentState.authorization.scope === 'none' || currentState.generation !== state.generation) {
-      throw authorizationError(currentState)
-    }
+    this.#assertCurrent(state, revision)
+    if (capture !== this.captureRevision) throw Object.assign(new Error('桌面设备捕获请求已失效。'), { code: 'desktop-frame-stale' })
     const publicFrame = {
       sequence: ++this.sequence,
       capturedAt: new Date(now).toISOString(),
@@ -244,13 +263,13 @@ class DesktopDeviceProvider {
       coordinateSpace: COORDINATE_SPACE,
       inputBounds: { xMin: 0, yMin: 0, xMaxExclusive: width, yMaxExclusive: height }
     }
-    this.lastFrame = { public: publicFrame, png, files: { preview: null, evidence: null }, target, capturedAtMs: now, controlGeneration: state.generation }
+    this.lastFrame = { public: publicFrame, png, files: { preview: null, evidence: null }, target, capturedAtMs: now, controlGeneration: state.generation, contextRevision: revision }
     return this.#deliverFrame(this.lastFrame, options, false)
   }
 
   #mapPoint(parameters, target) {
     const frame = this.lastFrame?.public
-    if (!frame || frame.target.id !== target.id) throw Object.assign(new Error('指针操作前必须先获取当前目标的视觉帧。'), { code: 'desktop-frame-required' })
+    if (!frame || frame.target.id !== target.id || this.lastFrame.controlGeneration !== this.controlState().generation) throw Object.assign(new Error('指针操作前必须先获取当前目标的视觉帧。'), { code: 'desktop-frame-required' })
     const x = Math.round(Number(parameters?.x))
     const y = Math.round(Number(parameters?.y))
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= frame.width || y >= frame.height) {
@@ -262,8 +281,10 @@ class DesktopDeviceProvider {
   }
 
   async pointer(action, parameters = {}) {
-    this.#assertControl()
+    const state = this.#assertControl()
+    const revision = this.contextRevision
     const target = await this.#selectedTarget()
+    this.#assertCurrent(state, revision)
     const point = this.#mapPoint(parameters, target)
     if (action === 'click') {
       if (target.kind === 'desktop') await this.computerUse.globalClick({ x: this.lastFrame.public.originX + point.sourceX, y: this.lastFrame.public.originY + point.sourceY, button: parameters.button || 'left' })
@@ -279,8 +300,10 @@ class DesktopDeviceProvider {
   }
 
   async keyboard(text) {
-    this.#assertControl()
+    const state = this.#assertControl()
+    const revision = this.contextRevision
     const target = await this.#selectedTarget()
+    this.#assertCurrent(state, revision)
     const value = String(text || '').slice(0, 500)
     if (target.kind === 'desktop') await this.computerUse.globalType({ text: value })
     else await this.computerUse.type(target.hwnd, { text: value }, null, target.window)
@@ -288,6 +311,8 @@ class DesktopDeviceProvider {
   }
 
   clearFrame() {
+    this.contextRevision++
+    this.captureRevision++
     this.lastFrame = null
   }
 

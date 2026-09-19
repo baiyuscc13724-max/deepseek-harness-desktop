@@ -14,12 +14,13 @@ async function moduleUnderTest() {
 }
 
 test('read-only environment input creates isolated overrides without reading environment secret values', async () => {
-  const { transitionModelCredentialOverride, planModelCredentialOverride } = await moduleUnderTest()
+  const { transitionModelCredentialOverride, planModelCredentialOverride, providerCredentialOverrideRef } = await moduleUnderTest()
   const typedSecret = ['typed', 'override', 'sentinel'].join('-')
   const environmentSecret = ['environment', 'secret', 'must-not-be-read'].join('-')
   for (const provider of ['deepseek-official', 'openai', 'codex', 'custom-gateway']) {
     const envRef = `ENV_${provider.toUpperCase().replaceAll('-', '_')}_API_KEY`
-    const overrideRef = `HARNESS_DESKTOP_${provider.toUpperCase().replaceAll('-', '_')}_API_KEY`
+    const namespace = provider === 'deepseek-official' ? 'llm-deepseek' : 'llm-pi-ai'
+    const overrideRef = providerCredentialOverrideRef(namespace, provider)
     let state = { gate: 'loading', writable: undefined, mode: 'configured', usingOverride: false, draft: '' }
     state = transitionModelCredentialOverride(state, { type: 'input', value: typedSecret })
     assert.equal(state.draft, '', `${provider} must fail closed before credential metadata resolves`)
@@ -44,9 +45,9 @@ test('read-only environment input creates isolated overrides without reading env
 })
 
 test('an override can be modified and successfully restored without an orphan', async () => {
-  const { transitionModelCredentialOverride, planModelCredentialOverride } = await moduleUnderTest()
+  const { transitionModelCredentialOverride, planModelCredentialOverride, providerCredentialOverrideRef } = await moduleUnderTest()
   const envRef = 'ENV_OPENAI_API_KEY'
-  const overrideRef = 'HARNESS_DESKTOP_OPENAI_API_KEY'
+  const overrideRef = providerCredentialOverrideRef('llm-pi-ai', 'openai')
   const firstSecret = ['first', 'secret', 'sentinel'].join('-')
   const secondSecret = ['second', 'secret', 'sentinel'].join('-')
   const harness = createCredentialHarness({ user: { apiKeyEnv: overrideRef }, base: { apiKeyEnv: envRef } })
@@ -69,8 +70,8 @@ test('an override can be modified and successfully restored without an orphan', 
 })
 
 test('failed override unset is compensated by rebinding the provider to the still-present override', async () => {
-  const { planModelCredentialOverride } = await moduleUnderTest()
-  const overrideRef = 'HARNESS_DESKTOP_OPENAI_API_KEY'
+  const { planModelCredentialOverride, providerCredentialOverrideRef } = await moduleUnderTest()
+  const overrideRef = providerCredentialOverrideRef('llm-pi-ai', 'openai')
   const harness = createCredentialHarness({ user: { apiKeyEnv: overrideRef }, base: { apiKeyEnv: 'ENV_OPENAI_API_KEY' }, failUnset: true })
   harness.secrets.set(overrideRef, 'opaque-test-secret')
   const plan = planModelCredentialOverride({ mode: 'restore', keyValue: '', configuredKeyRef: overrideRef, overrideKeyRef: overrideRef, layout: 'pi-ai', hasDraftRef: true, hasFallbackRef: true })
@@ -82,8 +83,8 @@ test('failed override unset is compensated by rebinding the provider to the stil
 })
 
 test('unset plus compensation failure is surfaced and records the extreme residual orphan risk', async () => {
-  const { planModelCredentialOverride } = await moduleUnderTest()
-  const overrideRef = 'HARNESS_DESKTOP_OPENAI_API_KEY'
+  const { planModelCredentialOverride, providerCredentialOverrideRef } = await moduleUnderTest()
+  const overrideRef = providerCredentialOverrideRef('llm-pi-ai', 'openai')
   const harness = createCredentialHarness({ user: { apiKeyEnv: overrideRef }, base: { apiKeyEnv: 'ENV_OPENAI_API_KEY' }, failUnset: true, failMutateAt: [2] })
   harness.secrets.set(overrideRef, 'opaque-test-secret')
   const result = await harness.apply(planModelCredentialOverride({ mode: 'restore', keyValue: '', configuredKeyRef: overrideRef, overrideKeyRef: overrideRef, layout: 'pi-ai', hasDraftRef: true, hasFallbackRef: true }))
@@ -94,13 +95,15 @@ test('unset plus compensation failure is surfaced and records the extreme residu
   assert.equal(result.audit.filter((entry) => entry.operation === 'settings.mutate').length, 2)
 })
 
-test('native alpha.5 provider deletion selects only its writable managed ref and removes it before settings', async () => {
-  const { managedProviderCredentialRef } = await moduleUnderTest()
-  const overrideRef = 'HARNESS_DESKTOP_CUSTOM_GATEWAY_API_KEY'
-  assert.equal(managedProviderCredentialRef('custom-gateway', overrideRef, { configured: true, writable: true }), overrideRef)
-  assert.equal(managedProviderCredentialRef('custom-gateway', 'ENV_CUSTOM_GATEWAY_API_KEY', { configured: true, writable: false }), undefined)
+test('native alpha.5 provider deletion selects only its namespace-owned writable ref and removes it before settings', async () => {
+  const { managedProviderCredentialRef, providerCredentialOverrideRef } = await moduleUnderTest()
+  const overrideRef = providerCredentialOverrideRef('llm-pi-ai', 'custom-gateway')
+  assert.equal(managedProviderCredentialRef('llm-pi-ai', 'custom-gateway', overrideRef, { configured: true, writable: true }), overrideRef)
+  assert.equal(managedProviderCredentialRef('llm-deepseek', 'custom-gateway', overrideRef, { configured: true, writable: true }), undefined)
+  assert.equal(managedProviderCredentialRef('llm-pi-ai', 'custom-gateway', 'ENV_CUSTOM_GATEWAY_API_KEY', { configured: true, writable: false }), undefined)
 
   const runtime = readFileSync(runtimeFile, 'utf8')
+  assert.match(runtime, /const managedRef = deriveOverrideKeyRef\(row\.entry\.settingsNs, row\.entry\.provider\);/u)
   assert.match(runtime, /const credentialRef = row\.apiKeyEnv === managedRef && row\.credential\?\.configured === true && row\.credential\.writable \? managedRef : void 0;/u)
   const removeAt = runtime.indexOf('const credential = await operations.removeCredential(target.credentialRef);')
   const settingsAt = runtime.indexOf('const written = await operations.writeSettings(target.settingsNs, [{', removeAt)
@@ -108,8 +111,8 @@ test('native alpha.5 provider deletion selects only its writable managed ref and
   assert.ok(settingsAt > removeAt, 'credential removal must land before the provider settings unset')
 })
 
-test('writable custom pi-ai credentials retain the normal ref and unavailable gates have no write path', async () => {
-  const { transitionModelCredentialOverride, planModelCredentialOverride } = await moduleUnderTest()
+test('writable foreign pi-ai refs switch to a page-owned ref and unavailable gates have no write path', async () => {
+  const { transitionModelCredentialOverride, planModelCredentialOverride, providerCredentialOverrideRef } = await moduleUnderTest()
   const sentinel = ['custom', 'credential', 'sentinel'].join('-')
   let unavailable = transitionModelCredentialOverride({ gate: 'loading', writable: undefined, mode: 'configured', usingOverride: false, draft: '' }, { type: 'describe', writable: undefined })
   unavailable = transitionModelCredentialOverride(unavailable, { type: 'input', value: sentinel })
@@ -118,21 +121,22 @@ test('writable custom pi-ai credentials retain the normal ref and unavailable ga
 
   let writable = transitionModelCredentialOverride({ gate: 'loading', writable: undefined, mode: 'configured', usingOverride: false, draft: '' }, { type: 'describe', writable: true })
   writable = transitionModelCredentialOverride(writable, { type: 'input', value: sentinel })
-  const plan = planModelCredentialOverride({ mode: writable.mode, keyValue: writable.draft, configuredKeyRef: 'CUSTOM_GATEWAY_API_KEY', overrideKeyRef: 'HARNESS_DESKTOP_CUSTOM_GATEWAY_API_KEY', layout: 'pi-ai', hasDraftRef: false, hasFallbackRef: false })
-  assert.deepEqual(plan.profile, { op: 'set', ref: 'CUSTOM_GATEWAY_API_KEY' })
-  assert.equal(plan.credential.ref, 'CUSTOM_GATEWAY_API_KEY')
+  const overrideRef = providerCredentialOverrideRef('llm-pi-ai', 'custom-gateway')
+  const plan = planModelCredentialOverride({ mode: writable.mode, keyValue: writable.draft, configuredKeyRef: 'CUSTOM_GATEWAY_API_KEY', overrideKeyRef: overrideRef, layout: 'pi-ai', hasDraftRef: false, hasFallbackRef: false })
+  assert.deepEqual(plan.profile, { op: 'set', ref: overrideRef })
+  assert.equal(plan.credential.ref, overrideRef)
 })
 
 test('native alpha.5 runtime is exact, executable, write-only, masked and accessible', () => {
   const manifest = JSON.parse(readFileSync(runtimePackageFile, 'utf8'))
   assert.deepEqual({ name: manifest.name, version: manifest.version }, { name: '@deepseek-ai/dsh-client-ui-settings-models', version: '0.1.2-alpha.5' })
   const runtime = readFileSync(runtimeFile, 'utf8')
-  assert.equal(createHash('sha256').update(runtime).digest('hex').toUpperCase(), '7ACF9736EDEEA519C63791E946A135F5CC854C95C299FD9864E82074FCE587E5')
+  assert.equal(createHash('sha256').update(runtime).digest('hex').toUpperCase(), '766CFC372B94665000B60836D845767AEF3417852D6F97ED1CD035AFC039EA52')
   assert.doesNotThrow(() => new Function(runtime))
   assert.match(runtime, /type: "password"/u)
   assert.match(runtime, /autoComplete: "off"/u)
   assert.match(runtime, /"aria-label": t\("keyInput"\)/u)
-  assert.match(runtime, /disabled: disabled \|\| keyLocked/u)
+  assert.match(runtime, /\n\s+disabled,\n/u)
   assert.match(runtime, /ctx\.remote\.credentials\.describe\(\[ref\]\)/u)
   assert.match(runtime, /ctx\.remote\.credentials\.set\(ref, value\)/u)
   assert.match(runtime, /ctx\.remote\.credentials\.unset\(ref\)/u)
