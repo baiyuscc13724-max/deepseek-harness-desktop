@@ -1,6 +1,6 @@
 {
   "kind": "deep-audit-round4-deliverable-manifest",
-  "capturedAt": "2026-09-19T11:41:01.101Z",
+  "capturedAt": "2026-09-19T11:45:53.153Z",
   "purpose": "Byte identity of every file this round created or updated, so an independent reviewer can verify exactly what changed without trusting this session's narration.",
   "scopeNote": "This manifest is an audit record, not production output. It lists files under tests/, docs/deep-audit/ and the two round-4 artifact roots. It does not list the isolated upstream fetch at D:\\DeepSeek-Harness-Desktop\\core-compat-upstream (deliberately outside the checkout).",
   "verifiedByRootOnly": true,
@@ -164,7 +164,7 @@
     },
     {
       "file": "docs/deep-audit/round4-handoff.md",
-      "sha256": "1932326592837c03d3f9c42faa8402538988e870edea4582ddeca1d1a09c63f9",
+      "sha256": "91cbf7471a144e9d838211caa2d545fef314ec23cc1bddc1675ea5c69ceecb6f",
       "role": "final handoff entry point; now carries the measured upgrade readiness ledger"
     },
     {
