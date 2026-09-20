@@ -5684,6 +5684,15 @@ function routingDecisionComparable(receipt) {
   const { id, createdAt, finalizedAt, outcome, teamId, ...decision } = receipt;
   return decision;
 }
+// Name only the model-declared field keys that diverged, so a rejected root turn can be
+// corrected instead of guessed at. Keys are never values.
+function routingDecisionDifferences(existing, material) {
+  const recorded = routingDecisionComparable(existing);
+  const attempted = routingDecisionComparable(material);
+  return Object.keys(recorded)
+    .filter((key) => JSON.stringify(recorded[key]) !== JSON.stringify(attempted[key]))
+    .sort();
+}
 function routingReceiptIsPending(receipt) {
   return receipt.level === "level3" && receipt.outcome === "recorded";
 }
@@ -5694,18 +5703,26 @@ function archiveRoutingReceipt(document, receipt) {
   archive.lastReceiptId = receipt.id;
   archive.lastArchivedAt = now();
 }
+// A creation that failed before binding a team leaves this turn's immutable decision
+// retryable: the failure stays recorded for audit, yet the same decision may be
+// re-attempted, or bound to its first team, until the turn ends. A receipt that already
+// bound a team remains terminal and immutable.
+function unboundFailedRoutingReceipt(receipt) {
+  return receipt.outcome === "failed" && receipt.teamId === undefined;
+}
+function bindRoutingReceipt(receipt, outcome, teamId) {
+  receipt.outcome = outcome;
+  receipt.teamId = teamId;
+  receipt.finalizedAt = now();
+  validateRoutingReceipt(receipt, 0);
+  return receipt;
+}
 function finalizeRoutingReceiptForTeam(document, receiptId, team, outcome) {
   assertEnum(outcome, ["created", "reused"], "routing outcome");
   const receipt = document.routingReceipts.find((candidate) => candidate.id === receiptId);
   if (receipt === undefined || receipt.level !== "level3" || receipt.rootSessionId !== team.rootLeadSessionId
     || receipt.projectKey !== team.projectKey) reject("team creation routing receipt is missing or out of scope", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
-  if (routingReceiptIsPending(receipt)) {
-    receipt.outcome = outcome;
-    receipt.teamId = team.id;
-    receipt.finalizedAt = now();
-    validateRoutingReceipt(receipt, 0);
-    return receipt;
-  }
+  if (routingReceiptIsPending(receipt) || unboundFailedRoutingReceipt(receipt)) return bindRoutingReceipt(receipt, outcome, team.id);
   if (receipt.outcome !== outcome || receipt.teamId !== team.id) rejectWithNextAction("terminal routing receipt replay must match its exact outcome and team binding", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT", "reuse the exact original terminal outcome and team binding, or wait for a new authorized root turn; never mutate this receipt");
   return receipt;
 }
@@ -5715,15 +5732,22 @@ async function recordRoutingReceipt(store, execution, input) {
     assertEnabled(document);
     const existing = document.routingReceipts.find((receipt) => receipt.rootSessionId === material.rootSessionId && receipt.turnKey === material.turnKey);
     if (existing !== undefined) {
-      if (JSON.stringify(routingDecisionComparable(existing)) !== JSON.stringify(routingDecisionComparable(material))) rejectWithNextAction("current root turn already has a different routing decision", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT", "keep this turn's immutable decision; start team creation only from a new direct-human or exact admitted Goal turn");
+      const differences = routingDecisionDifferences(existing, material);
+      if (differences.length > 0) rejectWithNextAction(`current root turn already has a different routing decision (${differences.join(", ")})`, "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT", "keep this turn's immutable decision; start team creation only from a new direct-human or exact admitted Goal turn");
       if (routingReceiptIsPending(existing)) {
         if (material.outcome === "recorded") return { receipt: clone(existing), reused: true };
         if (!["created", "reused", "failed"].includes(material.outcome)) reject("pending routing decision has an invalid terminal outcome", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT");
-        existing.outcome = material.outcome;
-        existing.teamId = material.teamId;
-        existing.finalizedAt = now();
-        validateRoutingReceipt(existing, 0);
+        bindRoutingReceipt(existing, material.outcome, material.teamId);
         return { receipt: clone(existing), reused: false, finalized: true, capabilityBoundary: "routing receipt decisions are model-declared; only root, turn, project, and team scope are Host-derived, and the receipt does not force model routing" };
+      }
+      // A failure that bound no team must not end this turn's ability to retry the same
+      // immutable decision; the recorded failure itself stays in the audit ledger.
+      if (unboundFailedRoutingReceipt(existing)) {
+        if (material.outcome === "recorded") return { receipt: clone(existing), reused: true };
+        if (["created", "reused"].includes(material.outcome)) {
+          bindRoutingReceipt(existing, material.outcome, material.teamId);
+          return { receipt: clone(existing), reused: false, finalized: true, capabilityBoundary: "routing receipt decisions are model-declared; only root, turn, project, and team scope are Host-derived, and the receipt does not force model routing" };
+        }
       }
       if (material.outcome === "recorded" && ["created", "reused"].includes(existing.outcome)) return { receipt: clone(existing), reused: true };
       if (existing.outcome !== material.outcome || existing.teamId !== material.teamId) rejectWithNextAction("terminal routing receipt replay must match its exact outcome and team binding", "AGENT_TEAMS_ROUTING_RECEIPT_CONFLICT", "reuse the exact original terminal outcome and team binding, or wait for a new authorized root turn; never mutate this receipt");
