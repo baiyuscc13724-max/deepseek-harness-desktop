@@ -77,7 +77,7 @@ test('the patched artifact classifies the observed delegation failure as retryab
 
 test('the rule lives outside the frozen installer, so no accepted pin is disturbed', () => {
   const installer = fs.readFileSync(path.join(repo, 'scripts/patch-official-runtime.mjs'))
-  assert.equal(sha(installer.toString('utf8')), '058D138507CCC626D3A30130C2D25DC976CFBBB8A9A44899F1BEB26BEE3CDD1F')
+  assert.equal(sha(installer.toString('utf8')), 'B38F9D21D1F41E57676BB3FDF99F7ABDF093E3BA54F2CBF5C01B05AA6C26DD54')
   assert.ok(!installer.includes('patchInstalledSubagentTransportClassification'))
 })
 

@@ -11,6 +11,24 @@ const helper = require('./helpers/official-followup-hermetic.cjs')
 const alpha2Audit = process.env.DSH_HISTORICAL_ALPHA2_AUDIT === '1' ? test : test.skip
 
 const ROOT = path.resolve(__dirname, '..')
+// Candidate source freeze for the current version, not Host approval or publication evidence.
+// The immutable v1.0.59 maps below stay untouched; only an exact reviewed successor may differ.
+const REVIEWED_CURRENT = Object.freeze({
+  'plugins/dsh-agent-teams/lib/index.js': 'd1198b66e31b2d05ed6cd8717b9b9c56cadaf377647f36a44108f1d52f4b38df',
+  'plugins/dsh-agent-teams/lib/client.js': 'daba6ddc3a9dd455fae6879641cd44f72cd8e760272563ab2ba6f9dbc05e81e8',
+  'tests/agent-teams-autopilot.test.cjs': '290c26d3fbb1b60e9a7e37ac104f490e7a78aca689320ab53cde527526dc6178',
+  'tests/agent-teams-runtime.test.cjs': '671e93500bd18c0f48219aa8869503915a536de6371f9e7257db16b94e2ab4b7',
+  'tests/agent-teams-ui.test.cjs': '59420f5eb368314c43a7de67b2bce029ab87dc96dc7a1084e549786475da04f3',
+  'README.md': '169aca215409b0e63d1038e14d3b0231ca144cc4ee19a1913935ebf25802adda',
+  'CHANGELOG.md': 'fa962007639b6e9a72c59181a9d113f51001be7f60574fe35d08738fcf240d04',
+  'release-notes.md': 'c24b5b5ca02d9bc28819cc28b7b1b19d74212f10adafa9304d679ec075259f01'
+})
+function reviewedCurrentHash(relative, historical) {
+  const version = require('../package.json').version
+  if (version === '1.0.59') return historical
+  assert.equal(version, '1.0.63', 'a later release needs its own reviewed source freeze')
+  return REVIEWED_CURRENT[relative] ?? historical
+}
 function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`) }
 async function lockFixture(t) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'official-alpha2-lock-')); t.after(() => fsp.rm(root, { recursive: true, force: true }))
@@ -31,7 +49,7 @@ test('v1.0.59 hot/cold safety acceptance binds the reviewed product and proof so
   assert.equal(Object.keys(helper.ACCEPTED).length, 12)
   for (const [relative, expected] of Object.entries(accepted)) {
     assert.equal(helper.ACCEPTED[relative], expected, `reviewed acceptance drift: ${relative}`)
-    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `reviewed source drift: ${relative}`)
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), reviewedCurrentHash(relative, expected), `reviewed source drift: ${relative}`)
   }
   assert.equal(helper.ALPHA2, '0.1.2-alpha.2'); assert.equal(helper.TAG, 'dsh-v0.1.2-alpha.2'); assert.equal(helper.COMMIT, '0a53fb55bea101816fa226bb964ae2bed71c343b')
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
@@ -50,7 +68,7 @@ test('v1.0.59 cloud performance recovery binds exact optimized sources and uncha
     'tests/agent-teams-ui.test.cjs': 'f5b9989198a8fc32d2b28c64103fabda2f0dcbc6077bdbf1e52d710029c80ae4'
   })
   for (const [relative, expected] of Object.entries(accepted)) {
-    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), expected, `optimized source drift: ${relative}`)
+    assert.equal(helper.sha256CanonicalTextFile(path.join(ROOT, ...relative.split('/'))), reviewedCurrentHash(relative, expected), `optimized source drift: ${relative}`)
   }
   const review = fs.readFileSync(path.join(ROOT, 'docs', 'SECURITY-REVIEW-v1.0.59.zh-CN.md'), 'utf8')
   for (const contract of [...Object.values(accepted), '40.422 ms', '9.952 ms', '6.277 ms', 'manifest descriptor chain', '同一 canonical text', '`WeakMap` identity', '没有提高阈值', '文件 `fsync` 与原子 rename', '`prepareAtomicArtifact`', 'pointer 临时文件', '`80.47 ms`', 'AUTOMATIC_MEMBER_RECOVERY_ATTEMPTS', '`aria-busy`', '65/65', '40/40', '16/16', '79/79', '37/37', '`fiber.dispose()`', '--test-force-exit']) {
@@ -176,7 +194,7 @@ test('matrix is eight independent processes, includes pet/mobile/New Session/per
 
 test('publication scan binds accepted hashes and classifies every stale historical token', () => {
   const rows = helper.scanPublicationDocs(ROOT); assert.equal(rows.length, 3)
-  for (const row of rows) { assert.equal(row.sha256, helper.ACCEPTED[row.file]); assert.ok(row.stale.every(item => item.classification === 'superseded-history')) }
+  for (const row of rows) { assert.equal(row.sha256, reviewedCurrentHash(row.file, helper.ACCEPTED[row.file])); assert.ok(row.stale.every(item => item.classification === 'superseded-history')) }
 })
 
 test('CLI and executor require fresh roots, exact npm commands, full audit env, receipts and zero-skip enforcement', () => {

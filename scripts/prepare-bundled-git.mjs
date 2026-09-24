@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import {
-  access, cp, lstat, mkdir, mkdtemp, open, readdir, rename, rm, writeFile
+  access, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile
 } from 'node:fs/promises'
 import { finished } from 'node:stream/promises'
 import path from 'node:path'
@@ -375,7 +375,37 @@ export async function prepareBundledGit({
   }
 }
 
+/**
+ * Whether an already installed bundled Git tree was produced from the pinned archives.
+ * Existence alone is not enough: the recorded metadata must still name every pinned asset,
+ * so a tampered or stale tree falls back to a fresh verified download.
+ * @param root - repository root holding `third_party/mingit`.
+ * @param assets - pinned asset descriptors to compare against.
+ * @returns true only when the installed tree records every pinned asset exactly.
+ */
+async function bundledGitTreeMatchesPins(root, assets) {
+  try {
+    const metadata = JSON.parse(await readFile(path.join(path.resolve(root), 'third_party', 'mingit', METADATA_FILE), 'utf8'))
+    const rows = Array.isArray(metadata?.assets) ? metadata.assets : []
+    return [assets.mingit, assets.gcm, assets.lfs].every(asset => rows.some(row => row?.id === asset.id
+      && row?.version === asset.version && row?.size === asset.size && row?.sha256 === asset.sha256))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Prepare bundled Git only when the installed tree is not already the pinned one, so a
+ * local build does not re-download ~58 MB of archives that are already verified on disk.
+ * @returns the preparation outcome, including whether a download actually ran.
+ */
+export async function prepareBundledGitIfNeeded({ root = repositoryRoot, assets = ASSETS, ...options } = {}) {
+  if (await bundledGitTreeMatchesPins(root, assets)) return Object.freeze({ state: 'ready', prepared: false })
+  const result = await prepareBundledGit({ root, assets, ...options })
+  return Object.freeze({ state: 'ready', prepared: true, destination: result.destination })
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await prepareBundledGit()
-  console.log('Verified bundled Git assets are ready.')
+  const outcome = await prepareBundledGitIfNeeded()
+  console.log(outcome.prepared ? 'Verified bundled Git assets are ready.' : 'Verified bundled Git assets are already present.')
 }

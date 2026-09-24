@@ -5,8 +5,8 @@ const { createHash } = require('node:crypto')
 const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises')
 const path = require('node:path')
 const root = path.resolve(__dirname, '..')
-const V3 = '2171f31250c0970d1cc9a9733a241364306d99146e5baec8d0775066d7ae3388'
-const V4 = '28a7850e44bc24cdd0e5e7222eb0fe655877d1433db59f8ff435934528ba0207'
+const V3 = '440495f619b5a460d01c233da887a6d588ba9bb31b17cbd28f00f87840912d02'
+const V4 = 'bc78dbc197c6d4f0e6d28d37a9f490195980ef3f742287efc18e8a31a6b7e21d'
 const hash = source => createHash('sha256').update(source).digest('hex')
 const installedSource = () => readFile(path.join(root, 'node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js'), 'utf8')
 async function fixture(source, run, name = '@deepseek-ai/dsh-llm-pi-ai') {

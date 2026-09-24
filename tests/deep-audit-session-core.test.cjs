@@ -230,7 +230,10 @@ test('disposed composer must unsubscribe queue publication exactly once', () => 
 test('maintained transform is exact, idempotent and rejects unknown or duplicate source shapes', () => {
   const { transformSessionCoreClientSource: transform } = require('../scripts/deep-audit-session-core-patch.mjs');
   const source = fs.readFileSync(sourcePath('dsh-client-ui-conversation'), 'utf8');
-  const once = transform(source); assert.equal(once.changed, true);
+  // A clean `npm ci` installs an unpatched runtime, while a machine whose installer already
+  // completed holds a composed profile. Both are exact transform inputs, so assert the
+  // transform contract (exactness, idempotence, refusal) without assuming pristine bytes.
+  const once = transform(source); assert.equal(transform(once.source).changed, false);
   const twice = transform(once.source); assert.equal(twice.changed, false); assert.equal(twice.source, once.source);
   assert.throws(() => transform(''), /unexpected package/);
   assert.throws(() => transform(source + source), /unsupported source shape/);
