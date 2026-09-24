@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
 
 export const MARKETPLACE_155_INPUT_SHA256 = 'F9352630E7FBB6D38647FF2FCF988CEF071648F78166A9C09D65BA42E8AE7699'
-export const MARKETPLACE_155_OUTPUT_SHA256 = 'BBA2417FC236501BADF532C76A85673410C5579A5E54D420565C02E963836BDE'
+// The reviewed output of this transform. It is recomputed from the pristine input by
+// tests/deep-audit-marketplace-install.test.cjs, so a transform edit without a re-pin fails closed.
+export const MARKETPLACE_155_OUTPUT_SHA256 = 'D16F56E48B988DAD88532993DF2D476A8C64538E1858CEAD7FEC2FE3EF3AB408'
 const digest = source => createHash('sha256').update(source).digest('hex').toUpperCase()
 
 // These functions are embedded verbatim in the pinned production module; imports

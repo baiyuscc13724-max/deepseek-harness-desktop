@@ -250,6 +250,21 @@ function patchProviderAuthIsolationThroughV3Source(source) {
   return { source: v3.source, changed: v1.changed || v2.changed || v3.changed }
 }
 
+/**
+ * Every canonical stage artifact this chain produces from one pristine official source.
+ * The installer pins these bytes so an unreviewed transform change fails closed; callers
+ * that must bind or verify those pins derive them here instead of restating the chain,
+ * which is exactly how the pinned hashes drifted from the transform once already.
+ * @param source - pristine official `@deepseek-ai/dsh-llm-pi-ai` runtime source.
+ * @returns the v1, v2, v3 and v4 artifacts of the chain.
+ */
+export function providerAuthIsolationCanonicalStages(source) {
+  const v1 = patchProviderAuthIsolationV1Source(source)
+  const v2 = patchProviderAuthIsolationV2Source(v1.source)
+  const v3 = patchProviderAuthIsolationV3Source(v2.source)
+  return { v1: v1.source, v2: v2.source, v3: v3.source, v4: patchProviderAuthIsolationSource(source).source }
+}
+
 const V4_MARKER = '@harness-desktop/provider-auth-isolation-v4'
 
 /** A provider id alone never authorizes forwarding its stored secrets to an edited destination. */

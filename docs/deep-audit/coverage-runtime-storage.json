@@ -64,15 +64,17 @@
     "historicalBaselineSha256": "F5E1E62A30C7FB2BA05C3F42EEACFA2074101F4DA0568E7D46EC63CBCE38C54C",
     "historical102Pointer": "/scriptInventory102",
     "historical102Sha256": "81B601B4983DB7975C534F56A6F41E34487DEC2C590197ACAFC2E34932074347",
-    "totalFiles": 103,
-    "qualification": "Exact historical100 groups plus preserved historical102 additions plus one new question-card helper; not a claim that all scripts were executed.",
+    "totalFiles": 106,
+    "qualification": "Exact historical100 groups plus preserved historical102 additions plus four later helpers (question-card patch, question-delivery patch, subagent transport patch, read-only visual diagnostic); not a claim that all scripts were executed.",
     "additionalGroups": [
-      {"scope":"runtime-transform", "status":"temporary-installed-artifact-and-isolated-Chromium-behavior", "files":["deep-audit-question-card-patch.mjs"]}
+      {"scope":"runtime-transform", "status":"temporary-installed-artifact-and-isolated-Chromium-behavior", "files":["deep-audit-question-card-patch.mjs"]},
+      {"scope":"runtime-transform", "status":"temporary-installed-artifact-and-isolated-Chromium-behavior", "files":["deep-audit-question-delivery-patch.mjs","deep-audit-subagent-transport-patch.mjs"]},
+      {"scope":"desktop-visual-diagnostic", "status":"read-only-pixel-scan-over-real-captures", "files":["deep-audit-white-column-scan.mjs"]}
     ],
     "evidence": ["docs/deep-audit/question-card-install.md","tests/deep-audit-question-card-install.test.cjs"],
     "runtimePatch": {
       "priorAcceptedSha256": "034CFD41CC9E78C46ED6ABA1D1971236F496EDF3D587F2342FF039450BB239DF",
-      "currentSha256": "CECD16CC8DDD9627BE92170C038A7A0C6AD4B904C30A9B71CC5A86CBBF5034B4",
+      "currentSha256": "B38F9D21D1F41E57676BB3FDF99F7ABDF093E3BA54F2CBF5C01B05AA6C26DD54",
       "verification": "fixture-verified-pending-independent-acceptance",
       "verificationRun": ".artifacts/deep-audit-20260912/acceptance-question-install-v2/result.json",
       "verificationCounts": {"tests":122,"pass":119,"fail":0,"skipped":3,"installedQuestionBrowserChecks":44,"eventParseErrors":0,"sourceDrift":0,"testDrift":0,"auditDrift":0}

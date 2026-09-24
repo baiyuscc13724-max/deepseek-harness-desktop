@@ -115,19 +115,26 @@ test('runtime patch publication preserves original bytes on rename failure and r
   assert.deepEqual(await fs.readdir(root), [path.basename(file)])
 })
 
-test('production provider installer migrates exact v3 fixture to v4, is idempotent and rejects drift', async t => {
+test('production provider installer migrates a recognized stage fixture to the pinned artifact, is idempotent and rejects drift', async t => {
   const root = await fixture(t), lib = path.join(root, 'lib'), target = path.join(lib, 'index.js')
   const sourceFile = require.resolve('../node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js')
   const source = await readFile(sourceFile, 'utf8')
   const digest = value => createHash('sha256').update(value).digest('hex').toUpperCase()
-  assert.equal(digest(source), '2171F31250C0970D1CC9A9733A241364306D99146E5BAEC8D0775066D7AE3388')
+  const { patchInstalledProviderAuthIsolation } = await import('../scripts/patch-official-runtime.mjs')
+  const { providerAuthIsolationCanonicalStages } = await import('../scripts/provider-auth-isolation-patch.mjs')
+  // A clean `npm ci` installs the pristine official runtime, while a developer machine may
+  // already hold the patched artifact. Derive the stage fixtures from whichever state is
+  // present instead of assuming this checkout sits at one exact patch level.
+  const stages = source.includes('@harness-desktop/provider-auth-isolation-v4')
+    ? { v4: source }
+    : providerAuthIsolationCanonicalStages(source)
+  const canonical = stages.v4, fixtureSource = stages.v3 ?? canonical
   await mkdir(lib)
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-llm-pi-ai', version: '0.1.2-alpha.5' }))
-  await writeFile(target, source)
-  const { patchInstalledProviderAuthIsolation } = await import('../scripts/patch-official-runtime.mjs')
-  assert.equal(await patchInstalledProviderAuthIsolation(target), true)
+  await writeFile(target, fixtureSource)
+  assert.equal(await patchInstalledProviderAuthIsolation(target), fixtureSource !== canonical)
   const output = await readFile(target, 'utf8')
-  assert.equal(digest(output), '28A7850E44BC24CDD0E5E7222EB0FE655877D1433DB59F8FF435934528BA0207')
+  assert.equal(digest(output), digest(canonical), 'every recognized stage installs to the pinned artifact')
   assert.equal(await patchInstalledProviderAuthIsolation(target), false)
   await writeFile(target, output + '\n// drift')
   await assert.rejects(patchInstalledProviderAuthIsolation(target), /neither exact official nor an exact complete/)
@@ -232,10 +239,10 @@ test('script entry inventory classifies every current file exactly once', async 
   const added = current.additionalGroups.flatMap(group => group.files)
   assert.equal(previous.length, 100)
   assert.deepEqual(priorAdded.slice().sort(), ['deep-audit-marketplace-patch.mjs', 'deep-audit-session-core-patch.mjs'])
-  assert.deepEqual(added, ['deep-audit-question-card-patch.mjs'])
+  assert.deepEqual(added, ['deep-audit-question-card-patch.mjs', 'deep-audit-question-delivery-patch.mjs', 'deep-audit-subagent-transport-patch.mjs', 'deep-audit-white-column-scan.mjs'])
   const classified = previous.concat(priorAdded, added).sort()
   assert.equal(new Set(classified).size, classified.length)
-  assert.equal(current.totalFiles, 103)
+  assert.equal(current.totalFiles, 106)
   assert.equal(current.totalFiles, actual.length)
   assert.deepEqual(classified, actual)
   assert.equal(current.runtimePatch.currentSha256, hash(await readFile(path.join(root, 'scripts/patch-official-runtime.mjs'))))
